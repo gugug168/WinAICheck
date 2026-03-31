@@ -7,8 +7,8 @@ const patterns: { regex: RegExp; replacement: string; label: string }[] = [
   // API Keys
   { regex: /(?:sk-|api[_-]?key[_-]?)([a-zA-Z0-9_-]{20,})/gi, replacement: '<API_KEY>', label: 'API Key' },
   { regex: /Bearer\s+[a-zA-Z0-9._-]+/gi, replacement: 'Bearer <TOKEN>', label: 'Bearer Token' },
-  // Windows 用户名路径
-  { regex: /C:\\Users\\([^\\]+)/gi, replacement: 'C:\\Users\\<USER>', label: '用户名路径' },
+  // Windows 用户名路径（只匹配用户名部分，不含空格/路径分隔符）
+  { regex: /C:\\Users\\([^\\\/\s]+)/gi, replacement: 'C:\\Users\\<USER>', label: '用户名路径' },
   // IP 地址
   { regex: /\b(\d{1,3}\.){3}\d{1,3}\b/g, replacement: '<IP>', label: 'IP 地址' },
   // 邮箱
