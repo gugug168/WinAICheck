@@ -1,0 +1,11 @@
+node_modules/
+dist/
+build-test/
+*.exe
+.DS_Store
+Thumbs.db
+.env
+.env.local
+reports/
+.claude/
+.gstack/
