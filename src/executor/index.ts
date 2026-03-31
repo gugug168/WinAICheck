@@ -3,6 +3,11 @@ import { Buffer } from 'buffer';
 
 const DEFAULT_TIMEOUT = 15_000;
 
+/** 测试钩子：注入 mock 函数，避免 mock.module 的跨文件冲突 */
+export const _test = {
+  mockExecSync: null as ((cmd: string, opts: any) => Buffer) | null,
+};
+
 /**
  * 尝试将 Buffer 解码为 UTF-8 文本
  * 某些 Windows 命令（如 wsl）输出 UTF-16LE
@@ -27,6 +32,19 @@ export function runCommand(
   cmd: string,
   timeout = DEFAULT_TIMEOUT,
 ): { stdout: string; stderr: string; exitCode: number } {
+  // 测试钩子：mock 注入优先
+  if (_test.mockExecSync) {
+    try {
+      const buf = _test.mockExecSync(cmd, { timeout });
+      return { stdout: decodeOutput(buf).trim(), stderr: '', exitCode: 0 };
+    } catch (err: any) {
+      return {
+        stdout: err.stdout ? decodeOutput(err.stdout).trim() : '',
+        stderr: err.stderr ? String(err.stderr).trim() : '',
+        exitCode: err.status ?? 1,
+      };
+    }
+  }
   try {
     const buf = execSync(cmd, {
       timeout,
