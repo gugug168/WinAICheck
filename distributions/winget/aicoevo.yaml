@@ -1,0 +1,22 @@
+PackageIdentifier: aicoevo.aicoevo
+PackageName: aicoevo
+PackageVersion: 0.1.0
+Publisher: aicoevo
+License: MIT
+ShortDescription: Windows AI 开发环境一键诊断与修复工具
+Description: 扫描 25 个环境维度，给出加权评分，自动修复常见问题。支持 GPU 驱动、CUDA、镜像源、PowerShell 策略等一键修复。
+Tags:
+  - ai
+  - diagnostic
+  - windows
+  - gpu
+  - cuda
+  - python
+  - environment
+Installers:
+  - Architecture: x64
+    InstallerType: zip
+    InstallerUrl: https://github.com/user/aicoevo/releases/download/v0.1.0/aicoevo.zip
+    InstallerSha256: ""
+ManifestType: singleton
+ManifestVersion: 1.6.0

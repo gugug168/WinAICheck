@@ -40,17 +40,28 @@ export interface FixSuggestion {
   risk: string;
 }
 
+/** 备份数据，用于 rollback */
+export interface BackupData {
+  scannerId: string;
+  timestamp: number;
+  data: Record<string, string>; // 旧值键值对
+}
+
 /** Fixer 接口 */
 export interface Fixer {
   scannerId: string;
   getFix(result: ScanResult): FixSuggestion;
-  execute?(fix: FixSuggestion): Promise<FixResult>;
+  backup?(result: ScanResult): Promise<BackupData>;
+  execute(fix: FixSuggestion, backup: BackupData): Promise<FixResult>;
+  rollback?(backup: BackupData): Promise<void>;
 }
 
 /** 修复执行结果 */
 export interface FixResult {
   success: boolean;
   message: string;
+  rolledBack?: boolean;
+  newScanResult?: ScanResult;
 }
 
 /** 类别权重映射 */

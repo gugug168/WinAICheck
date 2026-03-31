@@ -1,5 +1,6 @@
-import type { Fixer, FixSuggestion, FixResult, ScanResult } from '../scanners/types';
+import type { Fixer, FixSuggestion, FixResult, ScanResult, BackupData } from '../scanners/types';
 import { runCommand } from '../executor/index';
+import { getScannerById } from '../scanners/registry';
 
 /**
  * 修复系统：4 档分类
@@ -7,6 +8,9 @@ import { runCommand } from '../executor/index';
  * - yellow: 审查确认执行
  * - red: 只给指引
  * - black: 只告知
+ *
+ * 三阶段执行: backup() → execute() → verify(重扫)
+ * 失败时自动 rollback()
  */
 
 const fixers: Fixer[] = [];
@@ -36,13 +40,75 @@ export function getFixSuggestions(results: ScanResult[]): FixSuggestion[] {
   return suggestions;
 }
 
-/** 执行修复 */
+/** 三阶段执行修复：backup → execute → verify，失败时 rollback */
 export async function executeFix(fix: FixSuggestion): Promise<FixResult> {
   const fixer = getFixerByScannerId(fix.scannerId);
-  if (!fixer?.execute) {
-    return { success: false, message: '此修复项不支持自动执行' };
+  if (!fixer) {
+    return { success: false, message: `未找到 scanner ${fix.scannerId} 对应的 fixer` };
   }
-  return fixer.execute(fix);
+
+  // Phase 1: Backup
+  let backup: BackupData;
+  try {
+    backup = fixer.backup ? await fixer.backup({} as ScanResult) : emptyBackup(fix.scannerId);
+  } catch (err) {
+    return { success: false, message: `备份失败: ${err instanceof Error ? err.message : String(err)}` };
+  }
+
+  // Phase 2: Execute
+  try {
+    const result = await fixer.execute(fix, backup);
+
+    // Phase 3: Verify（重扫对应 scanner）
+    const scanner = getScannerById(fix.scannerId);
+    if (scanner) {
+      try {
+        const newScan = await scanner.scan();
+        result.newScanResult = newScan;
+      } catch {
+        // 重扫失败不影响修复结果
+      }
+    }
+
+    return result;
+  } catch (err) {
+    // Execute 失败 → 尝试 rollback
+    if (fixer.rollback) {
+      try {
+        await fixer.rollback(backup);
+        return {
+          success: false,
+          message: `修复失败，已自动回滚: ${err instanceof Error ? err.message : String(err)}`,
+          rolledBack: true,
+        };
+      } catch (rollbackErr) {
+        return {
+          success: false,
+          message: `修复失败，回滚也失败: ${rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr)}`,
+          rolledBack: false,
+        };
+      }
+    }
+    return { success: false, message: `修复失败: ${err instanceof Error ? err.message : String(err)}` };
+  }
+}
+
+/** 空 backup（无需备份的 fixer 使用） */
+function emptyBackup(scannerId: string): BackupData {
+  return { scannerId, timestamp: Date.now(), data: {} };
+}
+
+/** 通用执行器：只执行命令，不备份 */
+function simpleExecute(fix: FixSuggestion, _backup: BackupData): Promise<FixResult> {
+  const results: string[] = [];
+  for (const cmd of fix.commands || []) {
+    const r = runCommand(cmd, 15000);
+    results.push(`${cmd}: ${r.exitCode === 0 ? '成功' : '失败'}`);
+    if (r.exitCode !== 0) {
+      return Promise.resolve({ success: false, message: results.join('\n') });
+    }
+  }
+  return Promise.resolve({ success: true, message: results.join('\n') || '执行完成' });
 }
 
 /** 创建恢复点（简单版：导出当前注册表/配置状态） */
@@ -68,13 +134,24 @@ registerFixer({
       risk: '低风险：仅修改包管理器下载源',
     };
   },
-  async execute(fix): Promise<FixResult> {
-    const results: string[] = [];
-    for (const cmd of fix.commands || []) {
-      const r = runCommand(cmd, 15000);
-      results.push(`${cmd}: ${r.exitCode === 0 ? '成功' : '失败'}`);
+  async backup(result: ScanResult): Promise<BackupData> {
+    const data: Record<string, string> = {};
+    const pip = runCommand('pip config get global.index-url', 5000);
+    data['pip.index-url'] = pip.exitCode === 0 ? pip.stdout : '';
+    const npm = runCommand('npm config get registry', 5000);
+    data['npm.registry'] = npm.exitCode === 0 ? npm.stdout : '';
+    return { scannerId: 'mirror-sources', timestamp: Date.now(), data };
+  },
+  async execute(fix: FixSuggestion, _backup: BackupData): Promise<FixResult> {
+    return simpleExecute(fix, _backup);
+  },
+  async rollback(backup: BackupData): Promise<void> {
+    if (backup.data['pip.index-url']) {
+      runCommand(`pip config set global.index-url "${backup.data['pip.index-url']}"`, 10000);
     }
-    return { success: true, message: results.join('\n') };
+    if (backup.data['npm.registry']) {
+      runCommand(`npm config set registry "${backup.data['npm.registry']}"`, 10000);
+    }
   },
 });
 
@@ -93,9 +170,16 @@ registerFixer({
       risk: '低风险：仅允许运行本地脚本',
     };
   },
-  async execute(fix): Promise<FixResult> {
+  async backup(result: ScanResult): Promise<BackupData> {
+    const r = runCommand('powershell -Command "Get-ExecutionPolicy -Scope CurrentUser"', 5000);
+    return { scannerId: 'powershell-policy', timestamp: Date.now(), data: { oldPolicy: r.stdout.trim() || 'Restricted' } };
+  },
+  async execute(fix: FixSuggestion, _backup: BackupData): Promise<FixResult> {
     const r = runCommand(fix.commands![0], 10000);
     return { success: r.exitCode === 0, message: r.exitCode === 0 ? '执行策略已更新' : r.stderr };
+  },
+  async rollback(backup: BackupData): Promise<void> {
+    runCommand(`powershell -Command "Set-ExecutionPolicy ${backup.data.oldPolicy} -Scope CurrentUser -Force"`, 10000);
   },
 });
 
@@ -114,9 +198,17 @@ registerFixer({
       risk: '低风险：启用系统长路径支持',
     };
   },
-  async execute(fix): Promise<FixResult> {
+  async backup(result: ScanResult): Promise<BackupData> {
+    const r = runCommand('reg query "HKLM\\SYSTEM\\CurrentControlSet\\Control\\FileSystem" /v LongPathsEnabled', 5000);
+    return { scannerId: 'long-paths', timestamp: Date.now(), data: { LongPathsEnabled: r.exitCode === 0 ? r.stdout : '0' } };
+  },
+  async execute(fix: FixSuggestion, _backup: BackupData): Promise<FixResult> {
     const r = runCommand(fix.commands![0], 10000);
     return { success: r.exitCode === 0, message: r.exitCode === 0 ? '长路径支持已启用' : r.stderr };
+  },
+  async rollback(backup: BackupData): Promise<void> {
+    const oldVal = backup.data.LongPathsEnabled?.includes('0x1') ? '1' : '0';
+    runCommand(`reg add "HKLM\\SYSTEM\\CurrentControlSet\\Control\\FileSystem" /v LongPathsEnabled /t REG_DWORD /d ${oldVal} /f`, 10000);
   },
 });
 
@@ -133,10 +225,14 @@ registerFixer({
       risk: '低风险：同步系统时钟',
     };
   },
-  async execute(fix): Promise<FixResult> {
+  async backup(): Promise<BackupData> {
+    return emptyBackup('time-sync');
+  },
+  async execute(fix: FixSuggestion, _backup: BackupData): Promise<FixResult> {
     const r = runCommand(fix.commands![0], 15000);
     return { success: r.exitCode === 0, message: r.exitCode === 0 ? '时间同步成功' : r.stderr };
   },
+  // 幂等操作，无需 rollback
 });
 
 // 5. env-path-length → 分析重复项
@@ -150,6 +246,12 @@ registerFixer({
       description: '分析 PATH 中的重复和失效条目',
       risk: '低风险：仅分析不修改',
     };
+  },
+  async backup(): Promise<BackupData> {
+    return emptyBackup('env-path-length');
+  },
+  async execute(): Promise<FixResult> {
+    return { success: true, message: '仅分析，无需修改' };
   },
 });
 
@@ -167,6 +269,19 @@ registerFixer({
       risk: '中风险：将安装或升级 Git',
     };
   },
+  async backup(): Promise<BackupData> {
+    const r = runCommand('git --version', 5000);
+    return { scannerId: 'git', timestamp: Date.now(), data: { gitVersion: r.exitCode === 0 ? r.stdout : 'not-installed' } };
+  },
+  async execute(fix: FixSuggestion, _backup: BackupData): Promise<FixResult> {
+    const r = runCommand(fix.commands![0], 60000);
+    return { success: r.exitCode === 0, message: r.exitCode === 0 ? 'Git 安装/升级成功' : r.stderr };
+  },
+  async rollback(backup: BackupData): Promise<void> {
+    if (backup.data.gitVersion === 'not-installed') {
+      runCommand('winget uninstall Git.Git', 30000);
+    }
+  },
 });
 
 registerFixer({
@@ -181,6 +296,14 @@ registerFixer({
       risk: '中风险：将安装 nvm-windows',
     };
   },
+  async backup(): Promise<BackupData> {
+    const r = runCommand('node --version', 5000);
+    return { scannerId: 'node-version', timestamp: Date.now(), data: { nodeVersion: r.exitCode === 0 ? r.stdout : 'not-installed' } };
+  },
+  async execute(fix: FixSuggestion, _backup: BackupData): Promise<FixResult> {
+    const r = runCommand(fix.commands![0], 60000);
+    return { success: r.exitCode === 0, message: r.exitCode === 0 ? 'nvm-windows 安装成功' : r.stderr };
+  },
 });
 
 registerFixer({
@@ -193,6 +316,13 @@ registerFixer({
       description: '列出所有 Python 版本及路径，建议清理冲突版本',
       risk: '中风险：需手动选择保留/卸载的版本',
     };
+  },
+  async backup(): Promise<BackupData> {
+    return emptyBackup('python-versions');
+  },
+  async execute(): Promise<FixResult> {
+    const r = runCommand('where.exe python', 5000);
+    return { success: true, message: r.exitCode === 0 ? r.stdout : '未找到 Python' };
   },
 });
 
@@ -212,6 +342,18 @@ registerFixer({
       risk: '中风险：将开放防火墙端口',
     };
   },
+  async backup(): Promise<BackupData> {
+    return { scannerId: 'firewall-ports', timestamp: Date.now(), data: { rules: 'Gradio,Jupyter,Ollama' } };
+  },
+  async execute(fix: FixSuggestion, _backup: BackupData): Promise<FixResult> {
+    return simpleExecute(fix, _backup);
+  },
+  async rollback(backup: BackupData): Promise<void> {
+    const rules = (backup.data.rules || '').split(',');
+    for (const rule of rules) {
+      runCommand(`netsh advfirewall firewall delete rule name="${rule}"`, 10000);
+    }
+  },
 });
 
 registerFixer({
@@ -225,6 +367,27 @@ registerFixer({
       commands: ['powershell -Command "Get-ChildItem $env:TEMP | Where-Object {$_.LastWriteTime -lt (Get-Date).AddDays(-7)} | Remove-Item -Recurse -Force"'],
       risk: '中风险：删除 7 天前的临时文件',
     };
+  },
+  async backup(): Promise<BackupData> {
+    // 将旧文件先移到备份目录
+    const backupDir = `${process.env.TEMP}\\aicoevo-backup-${Date.now()}`;
+    runCommand(`powershell -Command "New-Item -ItemType Directory -Force -Path '${backupDir}'; Get-ChildItem $env:TEMP | Where-Object {$_.LastWriteTime -lt (Get-Date).AddDays(-7)} | Move-Item -Destination '${backupDir}' -Force"`, 15000);
+    return { scannerId: 'temp-space', timestamp: Date.now(), data: { backupDir } };
+  },
+  async execute(_fix: FixSuggestion, backup: BackupData): Promise<FixResult> {
+    // backup 阶段已移走文件，这里删除备份目录
+    const dir = backup.data.backupDir;
+    if (dir) {
+      runCommand(`powershell -Command "Remove-Item -Path '${dir}' -Recurse -Force"`, 15000);
+    }
+    return { success: true, message: '旧临时文件已清理' };
+  },
+  async rollback(backup: BackupData): Promise<void> {
+    const dir = backup.data.backupDir;
+    if (dir) {
+      // 从备份目录移回 TEMP
+      runCommand(`powershell -Command "Get-ChildItem '${dir}' | Move-Item -Destination $env:TEMP -Force"`, 15000);
+    }
   },
 });
 
@@ -241,6 +404,8 @@ registerFixer({
       risk: '高风险：需要系统级更改',
     };
   },
+  async backup(): Promise<BackupData> { return emptyBackup('path-chinese'); },
+  async execute(): Promise<FixResult> { return { success: false, message: '需手动操作，请参考指引' }; },
 });
 
 registerFixer({
@@ -254,6 +419,8 @@ registerFixer({
       risk: '需手动操作',
     };
   },
+  async backup(): Promise<BackupData> { return emptyBackup('gpu-driver'); },
+  async execute(): Promise<FixResult> { return { success: false, message: '需手动操作，请参考指引' }; },
 });
 
 registerFixer({
@@ -267,6 +434,8 @@ registerFixer({
       risk: '需手动 BIOS 操作',
     };
   },
+  async backup(): Promise<BackupData> { return emptyBackup('virtualization'); },
+  async execute(): Promise<FixResult> { return { success: false, message: '需手动操作，请参考指引' }; },
 });
 
 registerFixer({
@@ -280,6 +449,8 @@ registerFixer({
       risk: '需手动安装',
     };
   },
+  async backup(): Promise<BackupData> { return emptyBackup('cpp-compiler'); },
+  async execute(): Promise<FixResult> { return { success: false, message: '需手动操作，请参考指引' }; },
 });
 
 registerFixer({
@@ -293,6 +464,8 @@ registerFixer({
       risk: '需手动配置',
     };
   },
+  async backup(): Promise<BackupData> { return emptyBackup('proxy-config'); },
+  async execute(): Promise<FixResult> { return { success: false, message: '需手动操作，请参考指引' }; },
 });
 
 // ==================== 黑色档（5个，只告知）====================
@@ -308,6 +481,8 @@ registerFixer({
       risk: '仅告知',
     };
   },
+  async backup(): Promise<BackupData> { return emptyBackup('vram-usage'); },
+  async execute(): Promise<FixResult> { return { success: true, message: '仅供参考' }; },
 });
 
 registerFixer({
@@ -321,6 +496,8 @@ registerFixer({
       risk: '仅告知',
     };
   },
+  async backup(): Promise<BackupData> { return emptyBackup('cuda-version'); },
+  async execute(): Promise<FixResult> { return { success: true, message: '仅供参考' }; },
 });
 
 registerFixer({
@@ -334,6 +511,8 @@ registerFixer({
       risk: '仅告知',
     };
   },
+  async backup(): Promise<BackupData> { return emptyBackup('ssl-certs'); },
+  async execute(): Promise<FixResult> { return { success: true, message: '仅供参考' }; },
 });
 
 registerFixer({
@@ -347,6 +526,8 @@ registerFixer({
       risk: '仅告知',
     };
   },
+  async backup(): Promise<BackupData> { return emptyBackup('dns-resolution'); },
+  async execute(): Promise<FixResult> { return { success: true, message: '仅供参考' }; },
 });
 
 registerFixer({
@@ -359,5 +540,127 @@ registerFixer({
       description: '部分 AI 站点不可达。可能原因：\n1. 网络限制/防火墙\n2. 需要代理或 VPN\n3. 站点临时故障\n建议配置镜像源作为替代',
       risk: '仅告知',
     };
+  },
+  async backup(): Promise<BackupData> { return emptyBackup('site-reachability'); },
+  async execute(): Promise<FixResult> { return { success: true, message: '仅供参考' }; },
+});
+
+// ==================== 补充 fixer（原 5 个未覆盖的 scanner）====================
+
+// admin-perms → 管理员权限提示
+registerFixer({
+  scannerId: 'admin-perms',
+  getFix(result: ScanResult): FixSuggestion {
+    return {
+      id: 'fix-admin-perms',
+      scannerId: 'admin-perms',
+      tier: 'red',
+      description: '当前非管理员权限。部分修复操作（注册表、防火墙、时间同步）需要管理员权限。\n请以管理员身份重新运行本工具：\n右键 → 以管理员身份运行',
+      risk: '需手动操作：重新以管理员身份运行',
+    };
+  },
+  async backup(): Promise<BackupData> { return emptyBackup('admin-perms'); },
+  async execute(): Promise<FixResult> { return { success: false, message: '请以管理员身份重新运行本工具' }; },
+});
+
+// package-managers → 安装缺失的包管理器
+registerFixer({
+  scannerId: 'package-managers',
+  getFix(result: ScanResult): FixSuggestion {
+    return {
+      id: 'fix-package-managers',
+      scannerId: 'package-managers',
+      tier: 'yellow',
+      description: '安装缺失的包管理器',
+      commands: ['winget install Bun.HBun --accept-package-agreements'],
+      risk: '中风险：将安装 Bun 包管理器',
+    };
+  },
+  async backup(): Promise<BackupData> {
+    const data: Record<string, string> = {};
+    for (const cmd of ['pip', 'npm', 'bun']) {
+      const r = runCommand(`where.exe ${cmd}`, 3000);
+      data[cmd] = r.exitCode === 0 ? 'installed' : 'missing';
+    }
+    return { scannerId: 'package-managers', timestamp: Date.now(), data };
+  },
+  async execute(fix: FixSuggestion, _backup: BackupData): Promise<FixResult> {
+    return simpleExecute(fix, _backup);
+  },
+  async rollback(backup: BackupData): Promise<void> {
+    // 只卸载本次新安装的（原来就有的不动）
+    if (backup.data['bun'] === 'missing') {
+      runCommand('winget uninstall Bun.HBun', 30000);
+    }
+  },
+});
+
+// path-spaces → 路径空格指引
+registerFixer({
+  scannerId: 'path-spaces',
+  getFix(result: ScanResult): FixSuggestion {
+    return {
+      id: 'fix-path-spaces',
+      scannerId: 'path-spaces',
+      tier: 'red',
+      description: '部分工具安装在含空格的路径下，可能导致兼容性问题。\n建议：\n1. 将工具重新安装到无空格路径（如 C:\\Tools\\）\n2. 或创建符号链接: mklink /D C:\\Tools\\Git "C:\\Program Files\\Git"\n3. 部分工具可通过配置独立路径绕过',
+      risk: '需手动操作',
+    };
+  },
+  async backup(): Promise<BackupData> { return emptyBackup('path-spaces'); },
+  async execute(): Promise<FixResult> { return { success: false, message: '需手动操作，请参考指引' }; },
+});
+
+// unix-commands → 安装 Unix 命令（通过 Git Bash 或 WSL）
+registerFixer({
+  scannerId: 'unix-commands',
+  getFix(result: ScanResult): FixSuggestion {
+    return {
+      id: 'fix-unix-commands',
+      scannerId: 'unix-commands',
+      tier: 'yellow',
+      description: '安装 Git for Windows 可获得 ls, grep, curl, ssh, tar 等常用 Unix 命令',
+      commands: ['winget install Git.Git --accept-package-agreements'],
+      risk: '中风险：将安装 Git for Windows（包含 Unix 命令）',
+    };
+  },
+  async backup(): Promise<BackupData> {
+    const data: Record<string, string> = {};
+    for (const cmd of ['ls', 'grep', 'curl', 'ssh', 'tar']) {
+      const r = runCommand(`where.exe ${cmd}`, 3000);
+      data[cmd] = r.exitCode === 0 ? 'available' : 'missing';
+    }
+    return { scannerId: 'unix-commands', timestamp: Date.now(), data };
+  },
+  async execute(fix: FixSuggestion, _backup: BackupData): Promise<FixResult> {
+    return simpleExecute(fix, _backup);
+  },
+});
+
+// wsl-version → 安装/升级 WSL
+registerFixer({
+  scannerId: 'wsl-version',
+  getFix(result: ScanResult): FixSuggestion {
+    return {
+      id: 'fix-wsl-version',
+      scannerId: 'wsl-version',
+      tier: 'yellow',
+      description: '安装或升级 WSL2',
+      commands: ['wsl --install --no-distribution'],
+      risk: '中风险：将安装 WSL2 组件',
+    };
+  },
+  async backup(): Promise<BackupData> {
+    const r = runCommand('wsl --status', 8000);
+    return { scannerId: 'wsl-version', timestamp: Date.now(), data: { status: r.exitCode === 0 ? r.stdout : 'not-installed' } };
+  },
+  async execute(fix: FixSuggestion, _backup: BackupData): Promise<FixResult> {
+    const r = runCommand(fix.commands![0], 60000);
+    return { success: r.exitCode === 0, message: r.exitCode === 0 ? 'WSL2 安装成功，可能需要重启' : r.stderr };
+  },
+  async rollback(backup: BackupData): Promise<void> {
+    if (backup.data.status === 'not-installed') {
+      runCommand('wsl --uninstall', 15000);
+    }
   },
 });

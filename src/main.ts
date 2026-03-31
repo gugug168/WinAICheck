@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import { calculateScore } from './scoring/calculator';
-import { runAllScanners } from './scanners/registry';
+import { runAllScanners, getScannerById } from './scanners/registry';
 import { generateJsonReport } from './report/json';
 import { generateHtmlReport } from './report/html';
 import { getConsent, saveConsent } from './privacy/consent';
@@ -122,6 +122,19 @@ async function webMode(port: number) {
       if (url.pathname === '/api/scan' && req.method === 'POST') {
         cached = await runAllScanners(5);
         return Response.json({ ok: true });
+      }
+
+      if (url.pathname === '/api/scan-one' && req.method === 'POST') {
+        const { scannerId } = await req.json() as { scannerId: string };
+        const scanner = getScannerById(scannerId);
+        if (!scanner) return Response.json({ error: '未找到 scanner' }, { status: 404 });
+        const result = await scanner.scan();
+        // 更新缓存中对应项
+        if (cached) {
+          const idx = cached.findIndex((r: any) => r.id === scannerId);
+          if (idx >= 0) cached[idx] = result;
+        }
+        return Response.json(result);
       }
 
       return new Response('Not Found', { status: 404 });

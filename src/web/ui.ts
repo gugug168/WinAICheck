@@ -1,5 +1,5 @@
 import { calculateScore } from '../scoring/calculator';
-import { getFixSuggestions, executeFix } from '../fixers/index';
+import { getFixSuggestions } from '../fixers/index';
 import type { ScanResult, ScoreResult, FixSuggestion, ScannerCategory } from '../scanners/types';
 import type { FixResult } from '../scanners/types';
 
@@ -92,7 +92,7 @@ h1{font-size:1.6rem;font-weight:700;background:linear-gradient(135deg,#60a5fa,#a
 .category-bar{height:4px;border-radius:2px;background:#1e293b;overflow:hidden;margin-top:6px}
 .category-fill{height:100%;border-radius:2px;transition:width .6s ease}
 .footer{text-align:center;color:#334155;font-size:.75rem;margin-top:24px;padding:16px 0}
-.scan-btn{background:linear-gradient(135deg,#3b82f6,#8b5cf6);color:#fff;border:none;padding:10px 24px;border-radius:8px;font-size:.9rem;font-weight:600;cursor:pointer;margin:8px auto;display:block}
+.scan-btn{background:linear-gradient(135deg,#3b82f6,#8b5cf6);color:#fff;border:none;padding:10px 24px;border-radius:8px;font-size:.9rem;font-weight:600;cursor:pointer;margin:0 auto 16px;display:block}
 .scan-btn:hover{opacity:.9}
 .scan-btn:disabled{opacity:.5;cursor:not-allowed}
 .progress-bar{height:6px;background:#1e293b;border-radius:3px;overflow:hidden;margin:12px 0}
@@ -100,6 +100,30 @@ h1{font-size:1.6rem;font-weight:700;background:linear-gradient(135deg,#60a5fa,#a
 #loading{display:none;text-align:center;padding:40px 0}
 .spinner{width:36px;height:36px;border:3px solid #1e293b;border-top-color:#3b82f6;border-radius:50%;animation:spin .8s linear infinite;margin:0 auto 12px}
 @keyframes spin{to{transform:rotate(360deg)}}
+
+/* 确认弹窗 */
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;z-index:100;opacity:0;pointer-events:none;transition:opacity .2s}
+.modal-overlay.active{opacity:1;pointer-events:auto}
+.modal{background:#1e293b;border:1px solid #334155;border-radius:16px;padding:24px;max-width:500px;width:90%;box-shadow:0 20px 60px rgba(0,0,0,.5)}
+.modal h3{font-size:1.1rem;margin-bottom:12px}
+.modal .modal-desc{font-size:.85rem;color:#94a3b8;margin-bottom:12px;white-space:pre-wrap;max-height:200px;overflow-y:auto}
+.modal .modal-cmds{background:#0a0e1a;border-radius:8px;padding:10px 12px;font-family:monospace;font-size:.8rem;color:#64748b;margin-bottom:12px;white-space:pre-wrap}
+.modal .modal-risk{font-size:.8rem;padding:8px 12px;border-radius:8px;margin-bottom:16px}
+.modal .modal-risk.green-bg{background:#22c55e10;color:#22c55e}
+.modal .modal-risk.yellow-bg{background:#eab30810;color:#eab308}
+.modal .modal-risk.red-bg{background:#ef444410;color:#ef4444}
+.modal .modal-checkbox{display:flex;align-items:center;gap:8px;margin-bottom:16px;font-size:.85rem;color:#94a3b8}
+.modal .modal-checkbox input{width:16px;height:16px;accent-color:#eab308}
+.modal-actions{display:flex;gap:10px;justify-content:flex-end}
+.modal-btn{padding:10px 20px;border:none;border-radius:8px;font-size:.85rem;font-weight:600;cursor:pointer;transition:all .15s}
+.modal-btn.cancel{background:#334155;color:#94a3b8}.modal-btn.cancel:hover{background:#475569}
+.modal-btn.confirm{background:#3b82f6;color:#fff}.modal-btn.confirm:hover{background:#2563eb}
+.modal-btn.confirm:disabled{opacity:.4;cursor:not-allowed}
+.modal-btn.danger{background:#ef444420;color:#ef4444}.modal-btn.danger:hover{background:#ef444430}
+
+/* 修复后状态动画 */
+.fix-updating{animation:pulse .6s ease}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
 </style>
 </head>
 <body>
@@ -109,11 +133,35 @@ h1{font-size:1.6rem;font-weight:700;background:linear-gradient(135deg,#60a5fa,#a
 
   <div id="results">
     ${renderScoreCard(score)}
+    <button class="scan-btn" onclick="rescan()">重新扫描</button>
     ${renderFixSection(fixesByTier)}
     ${renderCategoryResults(grouped, score)}
   </div>
 
+  <div id="loading">
+    <div class="spinner"></div>
+    <p style="color:#94a3b8">正在扫描...</p>
+  </div>
+
   <div class="footer">aicoevo v0.1.0 — AI 环境诊断工具</div>
+</div>
+
+<!-- 确认弹窗 -->
+<div id="modal-overlay" class="modal-overlay">
+  <div class="modal">
+    <h3 id="modal-title"></h3>
+    <div id="modal-desc" class="modal-desc"></div>
+    <div id="modal-cmds" class="modal-cmds"></div>
+    <div id="modal-risk" class="modal-risk"></div>
+    <label id="modal-checkbox-label" class="modal-checkbox" style="display:none">
+      <input type="checkbox" id="modal-checkbox" onchange="toggleConfirmBtn()">
+      我已了解风险，确认执行
+    </label>
+    <div class="modal-actions">
+      <button class="modal-btn cancel" onclick="closeModal()">取消</button>
+      <button id="modal-confirm" class="modal-btn confirm" onclick="confirmFix()">确认执行</button>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -122,12 +170,71 @@ const fixes = ${JSON.stringify(
     .map(f => ({ ...f, executed: false, result: null }))
 )};
 
-async function doFix(idx) {
+let pendingFixIdx = null;
+
+function openModal(idx) {
   const fix = fixes[idx];
   if (!fix || fix.executed) return;
+  pendingFixIdx = idx;
+
+  const tierConfig = ${JSON.stringify(TIER_CONFIG)};
+  const tc = tierConfig[fix.tier] || {};
+
+  document.getElementById('modal-title').textContent = tc.label + ': ' + (fix.description || '').split('\\n')[0];
+  document.getElementById('modal-desc').textContent = fix.description || '';
+
+  const cmdsEl = document.getElementById('modal-cmds');
+  if (fix.commands && fix.commands.length > 0) {
+    cmdsEl.textContent = fix.commands.map(c => '$ ' + c).join('\\n');
+    cmdsEl.style.display = 'block';
+  } else {
+    cmdsEl.style.display = 'none';
+  }
+
+  const riskEl = document.getElementById('modal-risk');
+  riskEl.textContent = '风险: ' + (fix.risk || '未知');
+  riskEl.className = 'modal-risk ' + fix.tier + '-bg';
+
+  const checkboxLabel = document.getElementById('modal-checkbox-label');
+  const confirmBtn = document.getElementById('modal-confirm');
+
+  if (fix.tier === 'green') {
+    checkboxLabel.style.display = 'none';
+    confirmBtn.className = 'modal-btn confirm';
+    confirmBtn.disabled = false;
+  } else if (fix.tier === 'yellow') {
+    checkboxLabel.style.display = 'flex';
+    document.getElementById('modal-checkbox').checked = false;
+    confirmBtn.className = 'modal-btn confirm';
+    confirmBtn.disabled = true;
+  } else {
+    checkboxLabel.style.display = 'none';
+    confirmBtn.className = 'modal-btn danger';
+    confirmBtn.disabled = false;
+  }
+
+  document.getElementById('modal-overlay').classList.add('active');
+}
+
+function closeModal() {
+  document.getElementById('modal-overlay').classList.remove('active');
+  pendingFixIdx = null;
+}
+
+function toggleConfirmBtn() {
+  const checked = document.getElementById('modal-checkbox').checked;
+  document.getElementById('modal-confirm').disabled = !checked;
+}
+
+async function confirmFix() {
+  if (pendingFixIdx === null) return;
+  const idx = pendingFixIdx;
+  const fix = fixes[idx];
+  closeModal();
+
   const btn = document.getElementById('fix-btn-' + idx);
-  btn.disabled = true;
-  btn.textContent = '执行中...';
+  if (btn) { btn.disabled = true; btn.textContent = '执行中...'; }
+
   try {
     const res = await fetch('/api/fix', {
       method: 'POST',
@@ -137,17 +244,61 @@ async function doFix(idx) {
     const data = await res.json();
     fix.executed = true;
     fix.result = data;
+
+    // 显示执行结果
     const el = document.getElementById('fix-result-' + idx);
-    el.className = 'fix-result ' + (data.success ? 'success' : 'fail');
-    el.textContent = (data.success ? '✓ ' : '✗ ') + data.message;
-    btn.textContent = data.success ? '已修复' : '失败';
-    btn.className = 'fix-btn ' + (data.success ? 'green' : 'yellow');
+    if (el) {
+      el.className = 'fix-result ' + (data.success ? 'success' : 'fail');
+      el.textContent = (data.success ? '✓ ' : '✗ ') + data.message;
+    }
+
+    if (btn) {
+      btn.textContent = data.success ? '已修复' : (data.rolledBack ? '已回滚' : '重试');
+      btn.className = 'fix-btn ' + (data.success ? 'green' : 'yellow');
+      if (!data.success) btn.disabled = false;
+    }
+
+    // 修复成功后，自动重扫对应 scanner 并更新 UI
+    if (data.success && fix.scannerId) {
+      await rescanOne(fix.scannerId);
+    }
   } catch(e) {
     const el = document.getElementById('fix-result-' + idx);
-    el.className = 'fix-result fail';
-    el.textContent = '✗ 网络错误: ' + e.message;
-    btn.textContent = '重试';
-    btn.disabled = false;
+    if (el) { el.className = 'fix-result fail'; el.textContent = '✗ 网络错误: ' + e.message; }
+    if (btn) { btn.textContent = '重试'; btn.disabled = false; }
+  }
+}
+
+async function rescanOne(scannerId) {
+  try {
+    const res = await fetch('/api/scan-one', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ scannerId }),
+    });
+    const newResult = await res.json();
+
+    // 更新 scanner 状态
+    const el = document.querySelector('[data-scanner-id="' + scannerId + '"]');
+    if (el) {
+      el.classList.add('fix-updating');
+      const statusEl = el.querySelector('.status-icon');
+      const msgEl = el.querySelector('.result-msg');
+      const sc = ${JSON.stringify(STATUS_CONFIG)}[newResult.status] || ${JSON.stringify(STATUS_CONFIG)}.unknown;
+      if (statusEl) {
+        statusEl.style.background = sc.bg;
+        statusEl.style.color = sc.color;
+        statusEl.textContent = sc.icon;
+      }
+      if (msgEl) {
+        msgEl.style.color = sc.color;
+        msgEl.textContent = newResult.message;
+      }
+      setTimeout(() => el.classList.remove('fix-updating'), 600);
+    }
+  } catch(e) {
+    // 单项重扫失败不影响主流程
+    console.warn('重扫失败:', e);
   }
 }
 
@@ -168,7 +319,7 @@ async function rescan() {
 
 function renderScoreCard(score: ScoreResult): string {
   return `
-  <div class="card score-card">
+  <div class="card score-card" id="score-card">
     <div class="score-number">${score.score}</div>
     <div class="score-label">${score.label}</div>
     <div class="score-detail">
@@ -197,7 +348,7 @@ function renderCategoryResults(grouped: Map<ScannerCategory, ScanResult[]>, scor
         ${items.map(r => {
           const sc = STATUS_CONFIG[r.status];
           return `
-          <div class="result-item">
+          <div class="result-item" data-scanner-id="${esc(r.id)}">
             <div class="status-icon" style="background:${sc.bg};color:${sc.color}">${sc.icon}</div>
             <div>
               <div class="result-name">${esc(r.name)}</div>
@@ -235,7 +386,7 @@ function renderFixSection(fixesByTier: Record<string, FixSuggestion[]>): string 
           <div class="fix-risk">风险: ${esc(f.risk)}</div>
           <div id="fix-result-${f._idx}"></div>
         </div>
-        ${(tier === 'green' || tier === 'yellow') ? `<button id="fix-btn-${f._idx}" class="fix-btn ${tier}" onclick="doFix(${f._idx})">${label}</button>` : ''}
+        ${(tier === 'green' || tier === 'yellow') ? `<button id="fix-btn-${f._idx}" class="fix-btn ${tier}" onclick="openModal(${f._idx})">${label}</button>` : ''}
       </div>`).join('')}
     </div>`);
   }

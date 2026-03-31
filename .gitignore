@@ -2,6 +2,8 @@ node_modules/
 dist/
 build-test/
 *.exe
+*.obj
+*.pdb
 .DS_Store
 Thumbs.db
 .env
@@ -9,3 +11,5 @@ Thumbs.db
 reports/
 .claude/
 .gstack/
+*.tsbuildinfo
+bun.lock
