@@ -24,6 +24,7 @@ import './cuda-version.js';
 
 // 权限与安全
 import './powershell-policy.js';
+import './powershell-version.js';
 import './firewall-ports.js';
 import './admin-perms.js';
 import './time-sync.js';

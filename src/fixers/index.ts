@@ -711,3 +711,52 @@ registerFixer({
     }
   },
 });
+
+// ==================== PowerShell 7 升级 ====================
+
+registerFixer({
+  scannerId: 'powershell-version',
+  getFix(result: ScanResult): FixSuggestion {
+    return {
+      id: 'fix-powershell-version',
+      scannerId: 'powershell-version',
+      tier: 'green',
+      description: '使用 winget 安装 PowerShell 7（最新稳定版）\n\nPowerShell 7 相比 5.x 的优势:\n- 并行执行 (ForEach-Object -Parallel)\n- 管道链操作符 (&& 和 ||)\n- 三元运算符 ($a ? $b : $c)\n- null 合并操作符 (??)\n- 更快速度、跨平台兼容\n- 更好的错误提示和补全',
+      commands: ['winget install Microsoft.PowerShell --accept-package-agreements --accept-source-agreements'],
+      risk: '低风险：安装 PowerShell 7 不影响现有的 Windows PowerShell 5',
+    };
+  },
+  async backup(): Promise<BackupData> {
+    const r = runCommand('pwsh --version', 3000);
+    return { scannerId: 'powershell-version', timestamp: Date.now(), data: { pwshVersion: r.exitCode === 0 ? r.stdout.trim() : 'not-installed' } };
+  },
+  async execute(fix: FixSuggestion, _backup: BackupData): Promise<FixResult> {
+    const r = runCommand(fix.commands![0], 120000);
+    if (r.exitCode !== 0) {
+      return { success: false, message: `安装失败: ${r.stderr || r.stdout}` };
+    }
+
+    // 安装完成后，把 pwsh 设为 Windows Terminal 默认 profile（如果 Windows Terminal 存在）
+    const wtExists = runCommand('where.exe wt', 3000).exitCode === 0;
+    let extra = '';
+    if (wtExists) {
+      try {
+        // 设置 Windows Terminal 默认 profile 为 PowerShell 7
+        runCommand(
+          `powershell -Command "$settings = Get-Content '$env:LOCALAPPDATA\\Packages\\Microsoft.WindowsTerminal_8wekyb3d8bbwe\\LocalState\\settings.json' | ConvertFrom-Json; $settings.defaultProfile = '{574e775e-4f2a-5b96-ac1e-a2962a402336}'; $settings | ConvertTo-Json -Depth 10 | Set-Content '$env:LOCALAPPDATA\\Packages\\Microsoft.WindowsTerminal_8wekyb3d8bbwe\\LocalState\\settings.json'"`,
+          10000,
+        );
+        extra = '，已设为 Windows Terminal 默认';
+      } catch {
+        // 不影响主流程
+      }
+    }
+
+    return { success: true, message: `PowerShell 7 安装成功${extra}。请重新打开终端使用 pwsh 命令。` };
+  },
+  async rollback(backup: BackupData): Promise<void> {
+    if (backup.data.pwshVersion === 'not-installed') {
+      runCommand('winget uninstall Microsoft.PowerShell', 30000);
+    }
+  },
+});
