@@ -187,6 +187,21 @@ h1{font-family:var(--display);font-size:1.5rem;font-weight:700;letter-spacing:3p
 .tab-btn.active[onclick*="install"]::after{background:#a78bfa;box-shadow:0 0 15px rgba(167,139,250,.35),0 0 30px rgba(124,58,237,.2)}
 .tab-btn.active[onclick*="install"]::before{content:'';position:absolute;inset:0;border-radius:12px;
   background:linear-gradient(135deg,rgba(124,58,237,.03),transparent 50%,rgba(124,58,237,.02));pointer-events:none}
+/* 教学Tab - 绿色霓虹 */
+.tab-btn.active[onclick*="learn"]{
+  background:rgba(0,255,136,.05);border-color:rgba(0,255,136,.25);
+  box-shadow:0 0 30px rgba(0,255,136,.12),0 0 60px rgba(0,255,136,.06),inset 0 0 20px rgba(0,255,136,.04);
+  color:#6ee7b7;
+  text-shadow:0 0 8px rgba(0,255,136,.6),0 0 20px rgba(0,255,136,.3)}
+.tab-btn.active[onclick*="learn"]::after{background:var(--green);box-shadow:0 0 15px rgba(0,255,136,.35),0 0 30px rgba(0,255,136,.2)}
+.tab-btn.active[onclick*="learn"]::before{content:'';position:absolute;inset:0;border-radius:12px;
+  background:linear-gradient(135deg,rgba(0,255,136,.03),transparent 50%,rgba(0,255,136,.02));pointer-events:none}
+/* 学习链接 */
+.learn-link{display:flex;align-items:center;gap:14px;padding:14px;border-radius:10px;border:1px solid var(--border);text-decoration:none;color:var(--text);transition:all .2s}
+.learn-link:hover{border-color:var(--border-hover);background:rgba(0,240,255,.03)}
+.learn-link-icon{font-size:1.5rem;flex-shrink:0}
+.learn-link-title{font-weight:600;font-size:.88rem;margin-bottom:2px}
+.learn-link-desc{font-size:.78rem;color:var(--text-dim)}
 .tab-content{display:none}
 .tab-content.active{display:block}
 /* ====== 安装卡片 ====== */
@@ -250,6 +265,7 @@ h1{font-family:var(--display);font-size:1.5rem;font-weight:700;letter-spacing:3p
   <div class="tab-nav">
     <button class="tab-btn active" onclick="switchTab('diag')">诊断结果</button>
     <button class="tab-btn" onclick="switchTab('install')">AI 工具安装</button>
+    <button class="tab-btn" onclick="switchTab('learn')">教学中心</button>
   </div>
 
   <!-- 诊断结果 Tab -->
@@ -270,6 +286,24 @@ h1{font-family:var(--display);font-size:1.5rem;font-weight:700;letter-spacing:3p
   <!-- AI 工具安装 Tab -->
   <div id="tab-install" class="tab-content">
     ${renderInstallTab()}
+  </div>
+
+  <!-- 教学中心 Tab -->
+  <div id="tab-learn" class="tab-content">
+    <div class="card" style="text-align:center;padding:40px 20px">
+      <div style="font-family:var(--display);font-size:1.3rem;font-weight:700;letter-spacing:2px;color:var(--green);margin-bottom:8px;text-shadow:0 0 20px rgba(0,255,136,.3)">Claude Code 教学</div>
+      <div style="color:var(--text-mid);font-size:.88rem;margin-bottom:24px">大古出品，从入门到精通的 AI 编程实战指南</div>
+      <a href="https://claudecode.tumuai.net/" target="_blank" rel="noopener" style="display:inline-block;padding:14px 36px;border:1px solid rgba(0,255,136,.25);border-radius:12px;font-family:var(--mono);font-size:.9rem;font-weight:600;letter-spacing:1px;color:var(--green);background:rgba(0,255,136,.06);text-decoration:none;transition:all .2s;box-shadow:0 0 20px rgba(0,255,136,.08)" onmouseover="this.style.background='rgba(0,255,136,.12)';this.style.boxShadow='0 0 30px rgba(0,255,136,.15)';this.style.transform='translateY(-2px)'" onmouseout="this.style.background='rgba(0,255,136,.06)';this.style.boxShadow='0 0 20px rgba(0,255,136,.08)';this.style.transform='translateY(0)'">开始学习 &rarr;</a>
+    </div>
+    <div class="card">
+      <div style="font-family:var(--display);font-size:.85rem;font-weight:700;letter-spacing:2px;color:var(--cyan);margin-bottom:14px">学习资源</div>
+      <div style="display:grid;gap:12px">
+        <a href="https://claudecode.tumuai.net/" target="_blank" rel="noopener" class="learn-link">
+          <span class="learn-link-icon">&#128218;</span>
+          <div><div class="learn-link-title">大古的 Claude Code 教程</div><div class="learn-link-desc">大古倾心制作的中文教学，涵盖安装、配置、实战技巧</div></div>
+        </a>
+      </div>
+    </div>
   </div>
 
   <div class="footer">aicoevo v0.1.0 — AI 环境诊断工具</div>
