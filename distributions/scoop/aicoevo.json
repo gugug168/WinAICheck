@@ -1,21 +1,21 @@
 {
   "version": "0.1.0",
   "description": "Windows AI 开发环境一键诊断与修复工具",
-  "homepage": "https://github.com/user/aicoevo",
+  "homepage": "https://github.com/gugug168/WinAICheck",
   "license": "MIT",
   "architecture": {
     "64bit": {
-      "url": "https://github.com/user/aicoevo/releases/download/v0.1.0/aicoevo.exe",
+      "url": "https://github.com/gugug168/WinAICheck/releases/download/v0.1.0/WinAICheck.exe",
       "hash": ""
     }
   },
-  "bin": "aicoevo.exe",
+  "bin": "WinAICheck.exe",
   "suggest": {
     "Bun Runtime": "bun"
   },
   "notes": [
-    "运行 'aicoevo' 启动 Web UI 模式",
-    "运行 'aicoevo --cli' 使用终端模式",
+    "运行 'WinAICheck' 启动 Web UI 模式",
+    "运行 'WinAICheck --cli' 使用终端模式",
     "部分修复操作需要管理员权限"
   ]
 }

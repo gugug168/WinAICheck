@@ -1,7 +1,7 @@
-PackageIdentifier: aicoevo.aicoevo
-PackageName: aicoevo
+PackageIdentifier: gugug168.WinAICheck
+PackageName: WinAICheck
 PackageVersion: 0.1.0
-Publisher: aicoevo
+Publisher: gugug168
 License: MIT
 ShortDescription: Windows AI 开发环境一键诊断与修复工具
 Description: 扫描 25 个环境维度，给出加权评分，自动修复常见问题。支持 GPU 驱动、CUDA、镜像源、PowerShell 策略等一键修复。
@@ -13,10 +13,12 @@ Tags:
   - cuda
   - python
   - environment
+  - fix
+Homepage: https://github.com/gugug168/WinAICheck
 Installers:
   - Architecture: x64
     InstallerType: zip
-    InstallerUrl: https://github.com/user/aicoevo/releases/download/v0.1.0/aicoevo.zip
+    InstallerUrl: https://github.com/gugug168/WinAICheck/releases/download/v0.1.0/WinAICheck.zip
     InstallerSha256: ""
 ManifestType: singleton
 ManifestVersion: 1.6.0
