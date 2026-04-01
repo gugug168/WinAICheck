@@ -1,5 +1,5 @@
 import type { Fixer, FixSuggestion, FixResult, ScanResult, BackupData } from '../scanners/types';
-import { runCommand } from '../executor/index';
+import { runCommand, isAdmin } from '../executor/index';
 import { getScannerById } from '../scanners/registry';
 
 /**
@@ -229,8 +229,13 @@ registerFixer({
     return emptyBackup('time-sync');
   },
   async execute(fix: FixSuggestion, _backup: BackupData): Promise<FixResult> {
+    if (!isAdmin()) {
+      return { success: false, message: '需要管理员权限。请右键以管理员身份运行本工具后重试。' };
+    }
+    // 先启动时间服务
+    runCommand('net start w32time', 5000);
     const r = runCommand(fix.commands![0], 15000);
-    return { success: r.exitCode === 0, message: r.exitCode === 0 ? '时间同步成功' : r.stderr };
+    return { success: r.exitCode === 0, message: r.exitCode === 0 ? '时间同步成功' : `同步失败: ${r.stderr || r.stdout}` };
   },
   // 幂等操作，无需 rollback
 });
@@ -346,6 +351,9 @@ registerFixer({
     return { scannerId: 'firewall-ports', timestamp: Date.now(), data: { rules: 'Gradio,Jupyter,Ollama' } };
   },
   async execute(fix: FixSuggestion, _backup: BackupData): Promise<FixResult> {
+    if (!isAdmin()) {
+      return { success: false, message: '需要管理员权限才能修改防火墙规则。请右键以管理员身份运行本工具后重试。' };
+    }
     return simpleExecute(fix, _backup);
   },
   async rollback(backup: BackupData): Promise<void> {
@@ -661,6 +669,45 @@ registerFixer({
   async rollback(backup: BackupData): Promise<void> {
     if (backup.data.status === 'not-installed') {
       runCommand('wsl --uninstall', 15000);
+    }
+  },
+});
+
+// ==================== Git PATH 完整性修复 ====================
+
+registerFixer({
+  scannerId: 'git-path',
+  getFix(result: ScanResult): FixSuggestion {
+    return {
+      id: 'fix-git-path',
+      scannerId: 'git-path',
+      tier: 'green',
+      description: '将 Git\\bin、Git\\usr\\bin 添加到用户 PATH 环境变量',
+      commands: [
+        'powershell -Command "$gitDir=(Get-Command git).Source | Split-Path | Split-Parent; $dirs=@(\"$gitDir\\bin\",\"$gitDir\\usr\\bin\"); $path=[Environment]::GetEnvironmentVariable(\'Path\',\'User\'); foreach($d in $dirs){ if($path -notlike \"*$d*\"){ $path+=\";$d\" } }; [Environment]::SetEnvironmentVariable(\'Path\',$path,\'User\'); echo $path"',
+      ],
+      risk: '低风险：仅添加 Git 子目录到用户 PATH',
+    };
+  },
+  async backup(): Promise<BackupData> {
+    const r = runCommand('powershell -Command "[Environment]::GetEnvironmentVariable(\'Path\',\'User\')"', 5000);
+    return { scannerId: 'git-path', timestamp: Date.now(), data: { oldPath: r.exitCode === 0 ? r.stdout : '' } };
+  },
+  async execute(fix: FixSuggestion, _backup: BackupData): Promise<FixResult> {
+    const r = runCommand(fix.commands![0], 15000);
+    if (r.exitCode !== 0) {
+      return { success: false, message: `添加 PATH 失败: ${r.stderr}` };
+    }
+    // 同时更新当前进程的 PATH，让后续检测立即生效
+    const newPath = r.stdout.trim();
+    if (newPath) {
+      process.env.PATH = newPath + ';' + process.env.PATH;
+    }
+    return { success: true, message: 'Git PATH 已补全，新终端窗口生效。请重启终端使 PATH 生效。' };
+  },
+  async rollback(backup: BackupData): Promise<void> {
+    if (backup.data.oldPath) {
+      runCommand(`powershell -Command "[Environment]::SetEnvironmentVariable('Path','${backup.data.oldPath}','User')"`, 10000);
     }
   },
 });

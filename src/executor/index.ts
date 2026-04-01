@@ -86,3 +86,10 @@ export function runPS(script: string, timeout = DEFAULT_TIMEOUT): string {
 export function commandExists(cmd: string): boolean {
   return runCommand(`where.exe ${cmd}`, 5_000).exitCode === 0;
 }
+
+/**
+ * 检查当前是否以管理员权限运行
+ */
+export function isAdmin(): boolean {
+  return runCommand('net session', 5_000).exitCode === 0;
+}

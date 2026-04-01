@@ -8,6 +8,7 @@ import './temp-space.js';
 
 // 核心工具链
 import './git.js';
+import './git-path.js';
 import './unix-commands.js';
 import './python-versions.js';
 import './node-version.js';
