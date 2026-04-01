@@ -2,7 +2,7 @@
 <p align="center"><strong>Windows AI 开发环境一键诊断与修复工具</strong></p>
 <p align="center">
   <a href="https://github.com/gugug168/WinAICheck/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-MIT-green.svg" alt="License"></a>
-  <img src="https://img.shields.io/badge/version-0.1.0-orange.svg" alt="Version">
+  <a href="https://www.npmjs.com/package/winaicheck"><img src="https://img.shields.io/npm/v/winaicheck.svg" alt="npm"></a>
   <img src="https://img.shields.io/badge/platform-Windows-blue.svg" alt="Platform">
 </p>
 
