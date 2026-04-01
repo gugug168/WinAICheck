@@ -19,28 +19,59 @@
 - 给出 **0-100 综合评分**，哪里有问题一目了然
 - 一键自动修复常见问题（**修复前自动备份，失败自动回滚**）
 
-## 快速开始（30 秒上手）
+## 快速安装
 
-### 1. 安装 Bun（如果还没有）
+### 方式一：PowerShell 一键安装（推荐）
+
+打开 PowerShell，粘贴这一行：
+
+```powershell
+irm https://raw.githubusercontent.com/gugug168/WinAICheck/main/install.ps1 | iex
+```
+
+自动下载最新版并启动，无需手动安装任何依赖。
+
+### 方式二：npm / npx
+
+```bash
+npx winaicheck
+```
+
+首次运行自动从 GitHub Release 下载 exe，后续使用缓存。
+
+### 方式三：手动下载 exe
+
+去 [Releases](https://github.com/gugug168/WinAICheck/releases) 页面下载 `WinAICheck.exe`，双击运行。
+
+### 方式四：从源码运行（开发者）
+
+需要先安装 [Bun](https://bun.sh)：
 
 ```powershell
 powershell -c "irm bun.sh/install.ps1 | iex"
 ```
 
-### 2. 下载并运行
-
 ```bash
 git clone https://github.com/gugug168/WinAICheck.git
 cd WinAICheck
 bun install
-bun run src/main.ts
+bun run dev
 ```
 
 浏览器会自动打开诊断页面。
 
-### 或者：直接下载 exe（免安装 Bun）
+## 发布新版本
 
-去 [Releases](https://github.com/gugug168/WinAICheck/releases) 页面下载 `WinAICheck.exe`，双击运行即可。
+```bash
+# 1. 更新 package.json 中的 version
+# 2. 提交并打 tag
+git add . && git commit -m "release: v0.x.x"
+git tag v0.x.x
+git push origin main --tags
+# 3. GitHub Actions 自动构建并创建 Release
+# 4. npm 发布
+npm publish
+```
 
 ## 两种使用方式
 

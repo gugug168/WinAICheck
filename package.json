@@ -1,11 +1,14 @@
 {
-  "name": "aicoevo",
+  "name": "winaicheck",
   "version": "0.1.0",
   "description": "Windows AI 开发环境一键诊断与修复工具 - 扫描 25 个维度，自动修复常见问题",
   "type": "module",
   "bin": {
-    "aicoevo": "src/main.ts"
+    "winaicheck": "./bin/winaicheck.js"
   },
+  "files": [
+    "bin/"
+  ],
   "keywords": [
     "ai",
     "diagnostic",
@@ -16,13 +19,24 @@
     "python",
     "node",
     "fix",
-    "scanner"
+    "scanner",
+    "winaicheck",
+    "aicheck"
   ],
+  "author": "大古",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gugug168/WinAICheck.git"
+  },
+  "homepage": "https://github.com/gugug168/WinAICheck#readme",
+  "bugs": {
+    "url": "https://github.com/gugug168/WinAICheck/issues"
+  },
   "scripts": {
     "dev": "bun run src/main.ts",
     "dev:cli": "bun run src/main.ts -- --cli",
-    "build": "bun run scripts/prebuild.ts && bun build --compile --minify src/main.ts --outfile dist/aicoevo.exe",
+    "build": "bun run scripts/prebuild.ts && bun build --compile --minify src/main.ts --outfile dist/WinAICheck.exe",
     "test": "bun test"
   },
   "dependencies": {},
