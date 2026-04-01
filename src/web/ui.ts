@@ -127,10 +127,33 @@ h1{font-size:1.6rem;font-weight:700;background:linear-gradient(135deg,#60a5fa,#a
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
 
 /* Tab 导航 */
-.tab-nav{display:flex;gap:0;margin-bottom:20px;border-bottom:2px solid #1e293b}
-.tab-btn{padding:12px 24px;font-size:.92rem;font-weight:600;color:#64748b;background:none;border:none;border-bottom:2px solid transparent;cursor:pointer;transition:all .15s;margin-bottom:-2px}
-.tab-btn:hover{color:#94a3b8}
-.tab-btn.active{color:#60a5fa;border-bottom-color:#60a5fa}
+.tab-nav{display:flex;gap:28px;margin-bottom:32px;padding:16px 6px}
+.tab-btn{font-size:2rem;font-weight:900;padding:18px 48px;border:none;border-radius:16px;cursor:pointer;transition:all .3s cubic-bezier(.4,0,.2,1);position:relative;letter-spacing:2px;
+  background:linear-gradient(145deg,#181d32,#0b0f1e);
+  box-shadow:5px 5px 15px rgba(0,0,0,.7);
+  color:#6b7280}
+.tab-btn:hover{transform:translateY(-3px) scale(1.03);color:#d1d5db}
+.tab-btn.active{transform:translateY(-4px) scale(1.08)}
+/* 诊断Tab - 蓝色霓虹渐变文字 */
+.tab-btn.active[onclick*="diag"]{
+  background:linear-gradient(90deg,#3b82f6,#60a5fa,#93c5fd,#bfdbfe,#93c5fd,#60a5fa,#3b82f6);
+  -webkit-background-clip:text;background-clip:text;color:transparent;
+  filter:drop-shadow(0 0 10px rgba(96,165,250,.9)) drop-shadow(0 0 25px rgba(59,130,246,.7)) drop-shadow(0 0 50px rgba(59,130,246,.4)) drop-shadow(0 4px 10px rgba(0,0,0,.9))}
+.tab-btn.active[onclick*="diag"]::before{
+  content:'';position:absolute;inset:0;border-radius:16px;z-index:-1;
+  background:linear-gradient(145deg,#0d1a3a,#080f25);
+  box-shadow:0 0 60px rgba(59,130,246,.5),0 0 120px rgba(59,130,246,.2),0 12px 40px rgba(0,0,0,.7);
+  border:1px solid rgba(59,130,246,.35)}
+/* 安装Tab - 紫色霓虹渐变文字 */
+.tab-btn.active[onclick*="install"]{
+  background:linear-gradient(90deg,#7c3aed,#a78bfa,#c4b5fd,#ddd6fe,#c4b5fd,#a78bfa,#7c3aed);
+  -webkit-background-clip:text;background-clip:text;color:transparent;
+  filter:drop-shadow(0 0 10px rgba(167,139,250,.9)) drop-shadow(0 0 25px rgba(124,58,237,.7)) drop-shadow(0 0 50px rgba(124,58,237,.4)) drop-shadow(0 4px 10px rgba(0,0,0,.9))}
+.tab-btn.active[onclick*="install"]::before{
+  content:'';position:absolute;inset:0;border-radius:16px;z-index:-1;
+  background:linear-gradient(145deg,#160d30,#0d0820);
+  box-shadow:0 0 60px rgba(124,58,237,.5),0 0 120px rgba(124,58,237,.2),0 12px 40px rgba(0,0,0,.7);
+  border:1px solid rgba(124,58,237,.35)}
 .tab-content{display:none}
 .tab-content.active{display:block}
 
