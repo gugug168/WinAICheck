@@ -83,6 +83,18 @@ function allPassResponses(): Map<string, MockResponse> {
     ['nslookup huggingface.co', { stdout: 'Name: huggingface.co\nAddress: 1.2.3.4', exitCode: 0 }],
     ['nslookup github.com', { stdout: 'Name: github.com\nAddress: 5.6.7.8', exitCode: 0 }],
     ['nslookup pypi.org', { stdout: 'Name: pypi.org\nAddress: 9.10.11.12', exitCode: 0 }],
+    // uv-package-manager
+    ['where.exe uv', { stdout: 'C:\\Python311\\Scripts\\uv.exe', exitCode: 0 }],
+    ['uv --version', { stdout: 'uv 0.4.0', exitCode: 0 }],
+    // claude-cli
+    ['where.exe claude', { stdout: 'C:\\node\\claude.cmd', exitCode: 0 }],
+    ['claude --version', { stdout: 'Claude Code v1.0.0', exitCode: 0 }],
+    // openclaw
+    ['where.exe openclaw', { stdout: 'C:\\node\\openclaw.cmd', exitCode: 0 }],
+    ['openclaw --version', { stdout: 'OpenClaw v0.1.0', exitCode: 0 }],
+    // ccswitch
+    ['where.exe ccswitch', { stdout: 'C:\\node\\ccswitch.cmd', exitCode: 0 }],
+    ['ccswitch --version', { stdout: 'CCSwitch v0.1.0', exitCode: 0 }],
   ]);
 }
 

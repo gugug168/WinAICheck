@@ -29,6 +29,12 @@ import './firewall-ports.js';
 import './admin-perms.js';
 import './time-sync.js';
 
+// AI 开发工具
+import './uv-package-manager.js';
+import './claude-cli.js';
+import './openclaw.js';
+import './ccswitch.js';
+
 // 网络与镜像
 import './mirror-sources.js';
 import './proxy-config.js';

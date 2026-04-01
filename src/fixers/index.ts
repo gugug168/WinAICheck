@@ -712,6 +712,137 @@ registerFixer({
   },
 });
 
+// ==================== AI 开发工具一键安装 ====================
+
+// uv 包管理器 → pip 国内镜像安装
+registerFixer({
+  scannerId: 'uv-package-manager',
+  getFix(result: ScanResult): FixSuggestion {
+    return {
+      id: 'fix-uv-package-manager',
+      scannerId: 'uv-package-manager',
+      tier: 'green',
+      description: '使用 pip 国内镜像安装 uv（Python MCP 服务器必需）\n\n将执行: pip install uv -i https://pypi.tuna.tsinghua.edu.cn/simple',
+      commands: ['pip install uv -i https://pypi.tuna.tsinghua.edu.cn/simple'],
+      risk: '低风险：仅安装 Python 包管理工具',
+    };
+  },
+  async backup(): Promise<BackupData> {
+    const r = runCommand('uv --version', 5000);
+    return { scannerId: 'uv-package-manager', timestamp: Date.now(), data: { uvVersion: r.exitCode === 0 ? r.stdout.trim() : 'not-installed' } };
+  },
+  async execute(fix: FixSuggestion, _backup: BackupData): Promise<FixResult> {
+    const r = runCommand(fix.commands![0], 60000);
+    if (r.exitCode !== 0) {
+      // pip 失败时尝试 PowerShell 安装
+      const r2 = runCommand('powershell -Command "irm https://astral.sh/uv/install.ps1 | iex"', 60000);
+      if (r2.exitCode !== 0) {
+        return { success: false, message: `pip 安装失败: ${r.stderr}\nPowerShell 安装也失败: ${r2.stderr}` };
+      }
+      return { success: true, message: 'uv 安装成功（via PowerShell）' };
+    }
+    return { success: true, message: 'uv 安装成功（via pip 清华镜像）' };
+  },
+  async rollback(backup: BackupData): Promise<void> {
+    if (backup.data.uvVersion === 'not-installed') {
+      runCommand('pip uninstall uv -y', 15000);
+    }
+  },
+});
+
+// Claude Code CLI → npm 国内镜像安装
+registerFixer({
+  scannerId: 'claude-cli',
+  getFix(result: ScanResult): FixSuggestion {
+    return {
+      id: 'fix-claude-cli',
+      scannerId: 'claude-cli',
+      tier: 'green',
+      description: '使用 npmmirror 国内镜像安装 Claude Code CLI\n\n将执行: npm install -g @anthropic-ai/claude-code --registry https://registry.npmmirror.com\n\n安装后运行 claude 命令启动，首次需登录 Anthropic 账号',
+      commands: ['npm install -g @anthropic-ai/claude-code --registry https://registry.npmmirror.com'],
+      risk: '低风险：仅安装 npm 全局包',
+    };
+  },
+  async backup(): Promise<BackupData> {
+    const r = runCommand('claude --version', 8000);
+    return { scannerId: 'claude-cli', timestamp: Date.now(), data: { claudeVersion: r.exitCode === 0 ? r.stdout.trim() : 'not-installed' } };
+  },
+  async execute(fix: FixSuggestion, _backup: BackupData): Promise<FixResult> {
+    const r = runCommand(fix.commands![0], 120000);
+    if (r.exitCode !== 0) {
+      return { success: false, message: `安装失败: ${r.stderr || r.stdout}` };
+    }
+    return { success: true, message: 'Claude Code 安装成功。运行 claude 命令启动。' };
+  },
+  async rollback(backup: BackupData): Promise<void> {
+    if (backup.data.claudeVersion === 'not-installed') {
+      runCommand('npm uninstall -g @anthropic-ai/claude-code', 30000);
+    }
+  },
+});
+
+// OpenClaw → npm 国内镜像安装
+registerFixer({
+  scannerId: 'openclaw',
+  getFix(result: ScanResult): FixSuggestion {
+    return {
+      id: 'fix-openclaw',
+      scannerId: 'openclaw',
+      tier: 'green',
+      description: '使用 npmmirror 国内镜像安装 OpenClaw（开源 Claude Code 替代品）\n\n将执行: npm install -g openclaw --registry https://registry.npmmirror.com\n\n支持 OpenRouter/兼容 API，无需 Anthropic 账号',
+      commands: ['npm install -g openclaw --registry https://registry.npmmirror.com'],
+      risk: '低风险：仅安装 npm 全局包',
+    };
+  },
+  async backup(): Promise<BackupData> {
+    const r = runCommand('openclaw --version', 8000);
+    return { scannerId: 'openclaw', timestamp: Date.now(), data: { version: r.exitCode === 0 ? r.stdout.trim() : 'not-installed' } };
+  },
+  async execute(fix: FixSuggestion, _backup: BackupData): Promise<FixResult> {
+    const r = runCommand(fix.commands![0], 120000);
+    if (r.exitCode !== 0) {
+      return { success: false, message: `安装失败: ${r.stderr || r.stdout}` };
+    }
+    return { success: true, message: 'OpenClaw 安装成功。运行 openclaw 命令启动。' };
+  },
+  async rollback(backup: BackupData): Promise<void> {
+    if (backup.data.version === 'not-installed') {
+      runCommand('npm uninstall -g openclaw', 30000);
+    }
+  },
+});
+
+// CCSwitch → npm 国内镜像安装
+registerFixer({
+  scannerId: 'ccswitch',
+  getFix(result: ScanResult): FixSuggestion {
+    return {
+      id: 'fix-ccswitch',
+      scannerId: 'ccswitch',
+      tier: 'green',
+      description: '使用 npmmirror 国内镜像安装 CCSwitch（Claude Code 多账号切换工具）\n\n将执行: npm install -g ccswitch --registry https://registry.npmmirror.com\n\n可在多个 Anthropic 账号/API Key 之间快速切换',
+      commands: ['npm install -g ccswitch --registry https://registry.npmmirror.com'],
+      risk: '低风险：仅安装 npm 全局包',
+    };
+  },
+  async backup(): Promise<BackupData> {
+    const r = runCommand('ccswitch --version', 8000);
+    return { scannerId: 'ccswitch', timestamp: Date.now(), data: { version: r.exitCode === 0 ? r.stdout.trim() : 'not-installed' } };
+  },
+  async execute(fix: FixSuggestion, _backup: BackupData): Promise<FixResult> {
+    const r = runCommand(fix.commands![0], 120000);
+    if (r.exitCode !== 0) {
+      return { success: false, message: `安装失败: ${r.stderr || r.stdout}` };
+    }
+    return { success: true, message: 'CCSwitch 安装成功。运行 ccswitch 命令管理账号。' };
+  },
+  async rollback(backup: BackupData): Promise<void> {
+    if (backup.data.version === 'not-installed') {
+      runCommand('npm uninstall -g ccswitch', 30000);
+    }
+  },
+});
+
 // ==================== PowerShell 7 升级 ====================
 
 registerFixer({
