@@ -196,6 +196,15 @@ h1{font-family:var(--display);font-size:1.5rem;font-weight:700;letter-spacing:3p
 .tab-btn.active[onclick*="learn"]::after{background:var(--green);box-shadow:0 0 15px rgba(0,255,136,.35),0 0 30px rgba(0,255,136,.2)}
 .tab-btn.active[onclick*="learn"]::before{content:'';position:absolute;inset:0;border-radius:12px;
   background:linear-gradient(135deg,rgba(0,255,136,.03),transparent 50%,rgba(0,255,136,.02));pointer-events:none}
+/* 资源Tab - 琥珀/橙色霓虹 */
+.tab-btn.active[onclick*="resources"]{
+  background:rgba(255,107,53,.05);border-color:rgba(255,107,53,.25);
+  box-shadow:0 0 30px rgba(255,107,53,.12),0 0 60px rgba(255,107,53,.06),inset 0 0 20px rgba(255,107,53,.04);
+  color:#fdba74;
+  text-shadow:0 0 8px rgba(255,107,53,.6),0 0 20px rgba(255,107,53,.3)}
+.tab-btn.active[onclick*="resources"]::after{background:var(--amber);box-shadow:0 0 15px rgba(255,107,53,.35),0 0 30px rgba(255,107,53,.2)}
+.tab-btn.active[onclick*="resources"]::before{content:'';position:absolute;inset:0;border-radius:12px;
+  background:linear-gradient(135deg,rgba(255,107,53,.03),transparent 50%,rgba(255,107,53,.02));pointer-events:none}
 /* 学习链接 */
 .learn-link{display:flex;align-items:center;gap:14px;padding:14px;border-radius:10px;border:1px solid var(--border);text-decoration:none;color:var(--text);transition:all .2s}
 .learn-link:hover{border-color:var(--border-hover);background:rgba(0,240,255,.03)}
@@ -266,6 +275,7 @@ h1{font-family:var(--display);font-size:1.5rem;font-weight:700;letter-spacing:3p
     <button class="tab-btn active" onclick="switchTab('diag')">诊断结果</button>
     <button class="tab-btn" onclick="switchTab('install')">AI 工具安装</button>
     <button class="tab-btn" onclick="switchTab('learn')">教学中心</button>
+    <button class="tab-btn" onclick="switchTab('resources')">AI 资源</button>
   </div>
 
   <!-- 诊断结果 Tab -->
@@ -301,6 +311,83 @@ h1{font-family:var(--display);font-size:1.5rem;font-weight:700;letter-spacing:3p
         <a href="https://claudecode.tumuai.net/" target="_blank" rel="noopener" class="learn-link">
           <span class="learn-link-icon">&#128218;</span>
           <div><div class="learn-link-title">大古的 Claude Code 教程</div><div class="learn-link-desc">大古倾心制作的中文教学，涵盖安装、配置、实战技巧</div></div>
+        </a>
+      </div>
+    </div>
+  </div>
+
+  <!-- AI 资源导航 Tab -->
+  <div id="tab-resources" class="tab-content">
+    <div class="card" style="text-align:center;padding:36px 20px">
+      <div style="font-family:var(--display);font-size:1.2rem;font-weight:700;letter-spacing:2px;color:var(--amber);margin-bottom:8px;text-shadow:0 0 20px rgba(255,107,53,.3)">AI 资源导航</div>
+      <div style="color:var(--text-mid);font-size:.85rem">国产 AI 平台 & 云服务一键直达</div>
+    </div>
+
+    <!-- 大模型平台 -->
+    <div class="card">
+      <div style="font-family:var(--display);font-size:.85rem;font-weight:700;letter-spacing:2px;color:var(--cyan);margin-bottom:14px">大模型平台</div>
+      <div style="display:grid;gap:10px">
+        <a href="https://open.bigmodel.cn/" target="_blank" rel="noopener" class="learn-link">
+          <span class="learn-link-icon">&#129504;</span>
+          <div><div class="learn-link-title">智谱 GLM (BigModel)</div><div class="learn-link-desc">清华系大模型，GLM-4 系列，国产顶尖</div></div>
+        </a>
+        <a href="https://yiyan.baidu.com/" target="_blank" rel="noopener" class="learn-link">
+          <span class="learn-link-icon">&#128064;</span>
+          <div><div class="learn-link-title">百度文心一言</div><div class="learn-link-desc">百度出品，文心大模型 4.5，企业级 AI</div></div>
+        </a>
+        <a href="https://tongyi.aliyun.com/" target="_blank" rel="noopener" class="learn-link">
+          <span class="learn-link-icon">&#127811;</span>
+          <div><div class="learn-link-title">阿里通义千问</div><div class="learn-link-desc">通义大模型系列，Qwen 开源生态</div></div>
+        </a>
+        <a href="https://kimi.moonshot.cn/" target="_blank" rel="noopener" class="learn-link">
+          <span class="learn-link-icon">&#127769;</span>
+          <div><div class="learn-link-title">Kimi (月之暗面)</div><div class="learn-link-desc">长文本处理专家，200 万字上下文窗口</div></div>
+        </a>
+        <a href="https://chat.deepseek.com/" target="_blank" rel="noopener" class="learn-link">
+          <span class="learn-link-icon">&#128300;</span>
+          <div><div class="learn-link-title">DeepSeek</div><div class="learn-link-desc">深度求索，R1 推理模型，开源先锋</div></div>
+        </a>
+      </div>
+    </div>
+
+    <!-- AI 云服务 / API -->
+    <div class="card">
+      <div style="font-family:var(--display);font-size:.85rem;font-weight:700;letter-spacing:2px;color:#a78bfa;margin-bottom:14px">AI 云服务 & API</div>
+      <div style="display:grid;gap:10px">
+        <a href="https://open.volcengineapi.com/" target="_blank" rel="noopener" class="learn-link">
+          <span class="learn-link-icon">&#127755;</span>
+          <div><div class="learn-link-title">火山引擎 (字节跳动)</div><div class="learn-link-desc">豆包大模型 API，高性价比推理服务</div></div>
+        </a>
+        <a href="https://cloud.tencent.com/product/lighthouse" target="_blank" rel="noopener" class="learn-link">
+          <span class="learn-link-icon">&#9729;</span>
+          <div><div class="learn-link-title">腾讯云轻量服务器</div><div class="learn-link-desc">国内 GPU 云服务器，搭建 AI 开发环境首选</div></div>
+        </a>
+        <a href="https://www.modelscope.cn/" target="_blank" rel="noopener" class="learn-link">
+          <span class="learn-link-icon">&#127880;</span>
+          <div><div class="learn-link-title">魔搭 ModelScope (阿里)</div><div class="learn-link-desc">国产 AI 模型社区，开源模型 + 数据集 + 应用</div></div>
+        </a>
+        <a href="https://openrouter.ai/" target="_blank" rel="noopener" class="learn-link">
+          <span class="learn-link-icon">&#127760;</span>
+          <div><div class="learn-link-title">OpenRouter</div><div class="learn-link-desc">聚合多模型 API，Claude/GPT/Gemini 一站式调用</div></div>
+        </a>
+      </div>
+    </div>
+
+    <!-- 实用工具 -->
+    <div class="card">
+      <div style="font-family:var(--display);font-size:.85rem;font-weight:700;letter-spacing:2px;color:var(--green);margin-bottom:14px">实用工具 & 加速</div>
+      <div style="display:grid;gap:10px">
+        <a href="https://registry.npmmirror.com/" target="_blank" rel="noopener" class="learn-link">
+          <span class="learn-link-icon">&#128230;</span>
+          <div><div class="learn-link-title">npmmirror 镜像</div><div class="learn-link-desc">淘宝 NPM 镜像，npm 国内加速必备</div></div>
+        </a>
+        <a href="https://mirrors.tuna.tsinghua.edu.cn/" target="_blank" rel="noopener" class="learn-link">
+          <span class="learn-link-icon">&#127967;</span>
+          <div><div class="learn-link-title">清华开源镜像站</div><div class="learn-link-desc">TUNA 镜像，PyPI/npm/apt 全覆盖</div></div>
+        </a>
+        <a href="https://ghfast.top/" target="_blank" rel="noopener" class="learn-link">
+          <span class="learn-link-icon">&#9889;</span>
+          <div><div class="learn-link-title">ghfast.top</div><div class="learn-link-desc">GitHub 下载加速，国内访问 GitHub 资源利器</div></div>
         </a>
       </div>
     </div>

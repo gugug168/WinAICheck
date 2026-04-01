@@ -303,9 +303,66 @@ const ccswitchInstaller: Installer = {
   },
 };
 
+// ==================== Cute Claude Hooks（汉化）安装器 ====================
+
+const cuteClaudeHooksInstaller: Installer = {
+  id: 'cute-claude-hooks',
+  name: 'Claude Code 汉化',
+  description: 'Claude Code 中文界面汉化 + 实用 Hooks 集合，让 Claude Code 拥有完整中文体验',
+  icon: '🌸',
+  needsAdmin: false,
+
+  async run(onProgress): Promise<InstallResult> {
+    return new Promise((resolve) => {
+      onProgress({ type: 'progress', step: '正在通过 npmmirror 安装 Claude Code 汉化...', pct: 30 });
+      onProgress({ type: 'log', line: '$ npx cute-claude-hooks@latest --registry=https://registry.npmmirror.com' });
+
+      const proc = spawn('npx', [
+        'cute-claude-hooks@latest', '--registry=https://registry.npmmirror.com',
+      ], { stdio: ['pipe', 'pipe', 'pipe'] });
+
+      proc.stdout.on('data', (data: Buffer) => {
+        const text = data.toString('utf-8');
+        for (const line of text.split('\n')) {
+          const trimmed = line.trim();
+          if (trimmed) onProgress({ type: 'log', line: trimmed });
+        }
+        onProgress({ type: 'progress', step: '安装汉化包中...', pct: 60 });
+      });
+
+      proc.stderr.on('data', (data: Buffer) => {
+        const text = data.toString('utf-8');
+        for (const line of text.split('\n')) {
+          const trimmed = line.trim();
+          if (trimmed && !trimmed.startsWith('npm warn')) {
+            onProgress({ type: 'log', line: trimmed });
+          }
+        }
+      });
+
+      proc.on('close', (code) => {
+        const success = code === 0;
+        onProgress({
+          type: 'done',
+          success,
+          message: success
+            ? 'Claude Code 汉化安装完成！请重启 Claude Code 生效。'
+            : '安装失败，请检查 npm 和网络连接',
+        });
+        resolve({ success, message: success ? '安装完成' : `安装失败 (${code})` });
+      });
+
+      proc.on('error', (err) => {
+        onProgress({ type: 'done', success: false, message: `启动失败: ${err.message}` });
+        resolve({ success: false, message: err.message });
+      });
+    });
+  },
+};
+
 // ==================== 注册表 ====================
 
-const ALL_INSTALLERS: Installer[] = [claudeCodeInstaller, openclawInstaller, ccswitchInstaller];
+const ALL_INSTALLERS: Installer[] = [claudeCodeInstaller, openclawInstaller, ccswitchInstaller, cuteClaudeHooksInstaller];
 
 export function getInstallers(): Installer[] {
   return [...ALL_INSTALLERS];
