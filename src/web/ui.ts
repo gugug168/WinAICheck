@@ -1,5 +1,6 @@
 import { calculateScore } from '../scoring/calculator';
 import { getFixSuggestions } from '../fixers/index';
+import { getInstallers } from '../installers/index';
 import type { ScanResult, ScoreResult, FixSuggestion, ScannerCategory } from '../scanners/types';
 import type { FixResult } from '../scanners/types';
 
@@ -124,6 +125,42 @@ h1{font-size:1.6rem;font-weight:700;background:linear-gradient(135deg,#60a5fa,#a
 /* 修复后状态动画 */
 .fix-updating{animation:pulse .6s ease}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
+
+/* Tab 导航 */
+.tab-nav{display:flex;gap:0;margin-bottom:20px;border-bottom:2px solid #1e293b}
+.tab-btn{padding:12px 24px;font-size:.92rem;font-weight:600;color:#64748b;background:none;border:none;border-bottom:2px solid transparent;cursor:pointer;transition:all .15s;margin-bottom:-2px}
+.tab-btn:hover{color:#94a3b8}
+.tab-btn.active{color:#60a5fa;border-bottom-color:#60a5fa}
+.tab-content{display:none}
+.tab-content.active{display:block}
+
+/* 安装卡片 */
+.install-card{background:#111827;border:1px solid #1e293b;border-radius:12px;padding:20px;margin-bottom:16px;transition:border-color .2s}
+.install-card:hover{border-color:#334155}
+.install-header{display:flex;align-items:center;gap:12px;margin-bottom:10px}
+.install-icon{font-size:2rem}
+.install-title{font-size:1.05rem;font-weight:600}
+.install-desc{font-size:.82rem;color:#94a3b8;margin-top:2px}
+.install-meta{display:flex;gap:8px;margin-top:6px}
+.install-tag{background:#1e293b;border-radius:4px;padding:2px 8px;font-size:.72rem;color:#64748b}
+.install-tag.admin{color:#f97316;background:#f9731615}
+.install-actions{margin-top:14px}
+.install-btn{padding:10px 28px;border:none;border-radius:8px;font-size:.88rem;font-weight:600;cursor:pointer;transition:all .15s;background:linear-gradient(135deg,#3b82f6,#8b5cf6);color:#fff}
+.install-btn:hover{opacity:.9}
+.install-btn:disabled{opacity:.5;cursor:not-allowed}
+.install-progress{margin-top:12px;display:none}
+.install-progress.active{display:block}
+.install-progress-bar{height:6px;background:#1e293b;border-radius:3px;overflow:hidden;margin-bottom:6px}
+.install-progress-fill{height:100%;background:linear-gradient(90deg,#3b82f6,#8b5cf6);border-radius:3px;transition:width .3s ease;width:0%}
+.install-step{font-size:.82rem;color:#94a3b8}
+.install-log{background:#0a0e1a;border-radius:8px;padding:10px 12px;margin-top:10px;max-height:200px;overflow-y:auto;font-family:'Cascadia Code','Consolas',monospace;font-size:.75rem;color:#64748b;display:none}
+.install-log.active{display:block}
+.install-log .log-line{margin-bottom:2px;white-space:pre-wrap}
+.install-log .log-success{color:#22c55e}
+.install-log .log-error{color:#ef4444}
+.install-result{margin-top:10px;padding:10px 14px;border-radius:8px;font-size:.85rem;font-weight:500;display:none}
+.install-result.success{display:block;background:#22c55e15;color:#22c55e;border:1px solid #22c55e30}
+.install-result.fail{display:block;background:#ef444415;color:#ef4444;border:1px solid #ef444430}
 </style>
 </head>
 <body>
@@ -131,16 +168,30 @@ h1{font-size:1.6rem;font-weight:700;background:linear-gradient(135deg,#60a5fa,#a
   <h1>aicoevo AI 环境诊断</h1>
   <p class="subtitle">扫描时间: ${new Date().toLocaleString('zh-CN')}</p>
 
-  <div id="results">
-    ${renderScoreCard(score)}
-    <button class="scan-btn" onclick="rescan()">重新扫描</button>
-    ${renderFixSection(fixesByTier)}
-    ${renderCategoryResults(grouped, score)}
+  <!-- Tab 导航 -->
+  <div class="tab-nav">
+    <button class="tab-btn active" onclick="switchTab('diag')">诊断结果</button>
+    <button class="tab-btn" onclick="switchTab('install')">AI 工具安装</button>
   </div>
 
-  <div id="loading">
-    <div class="spinner"></div>
-    <p style="color:#94a3b8">正在扫描...</p>
+  <!-- 诊断结果 Tab -->
+  <div id="tab-diag" class="tab-content active">
+    <div id="results">
+      ${renderScoreCard(score)}
+      <button class="scan-btn" onclick="rescan()">重新扫描</button>
+      ${renderFixSection(fixesByTier)}
+      ${renderCategoryResults(grouped, score)}
+    </div>
+
+    <div id="loading">
+      <div class="spinner"></div>
+      <p style="color:#94a3b8">正在扫描...</p>
+    </div>
+  </div>
+
+  <!-- AI 工具安装 Tab -->
+  <div id="tab-install" class="tab-content">
+    ${renderInstallTab()}
   </div>
 
   <div class="footer">aicoevo v0.1.0 — AI 环境诊断工具</div>
@@ -165,6 +216,123 @@ h1{font-size:1.6rem;font-weight:700;background:linear-gradient(135deg,#60a5fa,#a
 </div>
 
 <script>
+// --- Tab 切换 ---
+function switchTab(tab) {
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+  document.querySelector('.tab-btn[onclick*="' + tab + '"]').classList.add('active');
+  document.getElementById('tab-' + tab).classList.add('active');
+}
+
+// --- 安装器数据 ---
+const installers = ${JSON.stringify(getInstallers().map(i => ({
+  id: i.id, name: i.name, description: i.description,
+  icon: i.icon, needsAdmin: i.needsAdmin,
+})))};
+
+const installStates = {};
+installers.forEach(i => { installStates[i.id] = 'idle'; });
+
+async function startInstall(toolId) {
+  if (installStates[toolId] !== 'idle') return;
+  installStates[toolId] = 'installing';
+
+  const card = document.getElementById('install-' + toolId);
+  const btn = card.querySelector('.install-btn');
+  const progressBar = card.querySelector('.install-progress-fill');
+  const progressWrap = card.querySelector('.install-progress');
+  const stepEl = card.querySelector('.install-step');
+  const logEl = card.querySelector('.install-log');
+  const resultEl = card.querySelector('.install-result');
+
+  btn.disabled = true;
+  btn.textContent = '安装中...';
+  progressWrap.classList.add('active');
+  logEl.classList.add('active');
+  logEl.innerHTML = '';
+  resultEl.className = 'install-result';
+  resultEl.style.display = 'none';
+
+  try {
+    const res = await fetch('/api/install', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ tool: toolId }),
+    });
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        if (line.startsWith('event: ')) {
+          // store event type for next data line
+          continue;
+        }
+        if (line.startsWith('data: ')) {
+          try {
+            const evt = JSON.parse(line.slice(6));
+            handleInstallEvent(evt, progressBar, stepEl, logEl);
+          } catch(e) {}
+        }
+      }
+    }
+  } catch(e) {
+    resultEl.textContent = '连接失败: ' + e.message;
+    resultEl.className = 'install-result fail';
+    btn.textContent = '重试';
+    btn.disabled = false;
+    installStates[toolId] = 'idle';
+    progressWrap.classList.remove('active');
+  }
+}
+
+function handleInstallEvent(evt, progressBar, stepEl, logEl) {
+  if (evt.type === 'progress') {
+    if (evt.pct != null) progressBar.style.width = evt.pct + '%';
+    if (evt.step) stepEl.textContent = evt.step;
+  }
+  if (evt.type === 'log') {
+    const div = document.createElement('div');
+    div.className = 'log-line';
+    if (evt.line.includes('[SUCCESS]')) div.classList.add('log-success');
+    if (evt.line.includes('[ERROR]')) div.classList.add('log-error');
+    div.textContent = evt.line;
+    logEl.appendChild(div);
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+  if (evt.type === 'done') {
+    const card = progressBar.closest('.install-card');
+    const toolId = card.id.replace('install-', '');
+    const btn = card.querySelector('.install-btn');
+    const resultEl = card.querySelector('.install-result');
+    const progressWrap = card.querySelector('.install-progress');
+
+    if (evt.success) {
+      progressBar.style.width = '100%';
+      resultEl.textContent = '✓ ' + (evt.message || '安装完成');
+      resultEl.className = 'install-result success';
+      btn.textContent = '已安装';
+      installStates[toolId] = 'done';
+      setTimeout(() => { progressWrap.classList.remove('active'); }, 2000);
+    } else {
+      resultEl.textContent = '✗ ' + (evt.message || '安装失败');
+      resultEl.className = 'install-result fail';
+      btn.textContent = '重试';
+      btn.disabled = false;
+      installStates[toolId] = 'idle';
+    }
+  }
+}
+
 const fixes = ${JSON.stringify(
   [...fixesByTier.green, ...fixesByTier.yellow, ...fixesByTier.red, ...fixesByTier.black]
     .map(f => ({ ...f, executed: false, result: null }))
@@ -395,6 +563,47 @@ function renderFixSection(fixesByTier: Record<string, FixSuggestion[]>): string 
   <div class="card fix-section">
     <div class="section-title" style="color:#22c55e">修复建议 (${allFixes.length} 项)</div>
     ${sections.join('')}
+  </div>`;
+}
+
+function renderInstallTab(): string {
+  const installers = getInstallers();
+  return `
+  <div style="margin-bottom:16px">
+    <div style="font-size:.92rem;color:#94a3b8;margin-bottom:4px">选择要安装的 AI 开发工具，点击安装按钮开始一键部署。</div>
+    <div style="font-size:.78rem;color:#64748b">所有工具均使用国内镜像源加速下载</div>
+  </div>
+  ${installers.map(inst => `
+  <div class="install-card" id="install-${esc(inst.id)}">
+    <div class="install-header">
+      <span class="install-icon">${inst.icon}</span>
+      <div>
+        <div class="install-title">${esc(inst.name)}</div>
+        <div class="install-desc">${esc(inst.description)}</div>
+        <div class="install-meta">
+          ${inst.needsAdmin ? '<span class="install-tag admin">需要管理员权限</span>' : ''}
+          <span class="install-tag">国内镜像加速</span>
+        </div>
+      </div>
+    </div>
+    <div class="install-actions">
+      <button class="install-btn" onclick="startInstall('${esc(inst.id)}')">一键安装</button>
+    </div>
+    <div class="install-progress">
+      <div class="install-progress-bar"><div class="install-progress-fill"></div></div>
+      <div class="install-step">准备中...</div>
+    </div>
+    <div class="install-log"></div>
+    <div class="install-result"></div>
+  </div>`).join('')}
+  <div class="card" style="border-color:#334155">
+    <div style="font-size:.82rem;color:#64748b">
+      <div style="font-weight:600;color:#94a3b8;margin-bottom:6px">安装说明</div>
+      <div style="margin-bottom:4px">• Claude Code 安装包含: Chocolatey、Node.js、Git、npm 镜像、Claude Code CLI、MCP 服务器、CC Switch</div>
+      <div style="margin-bottom:4px">• OpenClaw 是开源 Claude Code 替代品，通过 npmmirror.com 加速安装</div>
+      <div style="margin-bottom:4px">• CCSwitch 通过 ghfast.top 镜像从 GitHub 下载</div>
+      <div>• 需要管理员权限的工具会在安装时自动请求提权</div>
+    </div>
   </div>`;
 }
 

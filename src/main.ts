@@ -96,6 +96,7 @@ async function cliMode(wantJson: boolean, wantHtml: boolean) {
 async function webMode(port: number) {
   const { generateWebUI } = await import('./web/ui');
   const { executeFix } = await import('./fixers/index');
+  const { getInstallerById } = await import('./installers/index');
 
   let cached: any = null;
 
@@ -135,6 +136,40 @@ async function webMode(port: number) {
           if (idx >= 0) cached[idx] = result;
         }
         return Response.json(result);
+      }
+
+      // SSE 安装端点
+      if (url.pathname === '/api/install' && req.method === 'POST') {
+        const { tool } = await req.json() as { tool: string };
+        const installer = getInstallerById(tool);
+        if (!installer) return Response.json({ error: '未找到安装器' }, { status: 404 });
+
+        const stream = new ReadableStream({
+          start(controller) {
+            const encoder = new TextEncoder();
+            const send = (event: string, data: any) => {
+              controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
+            };
+
+            installer.run((evt) => {
+              send('progress', evt);
+              if (evt.type === 'done') {
+                controller.close();
+              }
+            }).catch(err => {
+              send('progress', { type: 'done', success: false, message: `内部错误: ${err.message}` });
+              controller.close();
+            });
+          },
+        });
+
+        return new Response(stream, {
+          headers: {
+            'Content-Type': 'text/event-stream',
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+          },
+        });
       }
 
       return new Response('Not Found', { status: 404 });
