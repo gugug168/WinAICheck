@@ -1,1 +1,57 @@
+name: Release
 
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - run: bun install
+
+      - name: Build exe
+        run: |
+          bun run scripts/prebuild.ts
+          bun build --compile --minify src/main.ts --outfile dist/WinAICheck.exe
+
+      - name: Get version
+        id: version
+        shell: bash
+        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: WinAICheck v${{ steps.version.outputs.VERSION }}
+          body: |
+            Windows AI 开发环境一键诊断与修复工具
+
+            ## 安装方式
+
+            ### PowerShell 一键安装（推荐）
+            ```powershell
+            irm https://raw.githubusercontent.com/gugug168/WinAICheck/main/install.ps1 | iex
+            ```
+
+            ### npm / npx
+            ```bash
+            npx winaicheck
+            ```
+
+            ### 手动下载
+            下载下方 `WinAICheck.exe`，双击运行即可。
+          files: |
+            dist/WinAICheck.exe
+          draft: false
+          prerelease: false
