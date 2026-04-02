@@ -120,9 +120,42 @@ async function webMode(port: number) {
         return Response.json(result);
       }
 
+      // SSE 重新扫描端点：逐个推送进度和结果
       if (url.pathname === '/api/scan' && req.method === 'POST') {
-        cached = await runAllScanners(5);
-        return Response.json({ ok: true });
+        const stream = new ReadableStream({
+          start(controller) {
+            const encoder = new TextEncoder();
+            const send = (event: string, data: any) => {
+              controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
+            };
+
+            runAllScanners(5, (completed, total, current, result) => {
+              send('progress', { completed, total, current });
+              if (result) {
+                send('result', result);
+              }
+            })
+              .then(results => {
+                cached = results;
+                const score = calculateScore(cached);
+                saveLocal(createPayload(cached, score));
+                send('done', { ok: true });
+                controller.close();
+              })
+              .catch(err => {
+                send('done', { ok: false, error: err.message });
+                controller.close();
+              });
+          },
+        });
+
+        return new Response(stream, {
+          headers: {
+            'Content-Type': 'text/event-stream',
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+          },
+        });
       }
 
       if (url.pathname === '/api/scan-one' && req.method === 'POST') {

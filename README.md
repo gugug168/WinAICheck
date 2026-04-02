@@ -1,5 +1,5 @@
 <h1 align="center">WinAICheck</h1>
-<p align="center"><strong>Windows AI 开发环境一键诊断与修复工具</strong></p>
+<p align="center"><strong>Windows AI 开发环境一键诊断与修复 + AI 工具一键安装 + Coding Plan 导航</strong></p>
 <p align="center">
   <a href="https://github.com/gugug168/WinAICheck/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-MIT-green.svg" alt="License"></a>
   <a href="https://www.npmjs.com/package/winaicheck"><img src="https://img.shields.io/npm/v/winaicheck.svg" alt="npm"></a>
@@ -18,8 +18,38 @@
 - 检测 **权限、防火墙、路径** 是否有隐患
 - 给出 **0-100 综合评分**，哪里有问题一目了然
 - 一键自动修复常见问题（**修复前自动备份，失败自动回滚**）
+- 一键安装 **Claude Code、OpenClaw、CCSwitch、Claude Code 汉化** 等 AI 编程工具
+- **Coding Plan 编程套餐**购买直达，按次数计费，不用担心 AI 写代码烧 Token 超预算
 
-## 快速安装
+## AI 工具一键安装
+
+Web UI 的"AI 工具安装"Tab 提供一键安装：
+
+| 工具 | 说明 | 需要管理员 |
+|:-----|:-----|:----------|
+| Claude Code | CLI + MCP 服务器 + CC Switch，含 Node.js/Git 环境 | 是 |
+| OpenClaw | 开源 Claude Code 替代品，支持 OpenRouter 等兼容 API | 否 |
+| CCSwitch | Claude Code 多账号/API Key 切换工具 | 是 |
+| Claude Code 汉化 | 中文界面汉化 + 实用 Hooks 集合 | 否 |
+
+安装过程通过 SSE 实时显示进度，全程可视。
+
+## Coding Plan 编程套餐导航
+
+Web UI 的"AI 资源"Tab 提供国内 Coding Plan 购买直达：
+
+**推荐购买 Coding Plan（按次数计费）**，而不是 API（按 Token 计费）。AI 编程一次对话消耗几千 Token，按 Token 计费容易超预算。
+
+| 平台 | 起步价 | 包含模型 |
+|:-----|:-------|:---------|
+| 智谱 GLM Coding Plan | ¥20/月 | GLM-5/4.6 系列 |
+| 阿里云百炼 Coding Plan | 首月¥7.9 | 千问/Kimi/GLM 多模型 |
+| 腾讯云 Coding Plan | 首月¥7.9 | 混元/GLM-5/Kimi 多模型 |
+| 火山方舟 Coding Plan (字节) | ¥9.9/月 | 豆包/GLM/DeepSeek/Kimi |
+| 百度千帆 Coding Plan | ¥40/月 | 文心+多模型 |
+| Kimi Code (月之暗面) | 会员权益 | K2.5 编程模型 |
+| MiniMax Token Plan | ¥40/月 | M2.5 全模态（编程+生图+语音） |
+| 无问芯穹 Infini Coding | ¥40/月 | 聚合多家顶尖编程模型 |
 
 ### 方式一：PowerShell 一键安装（推荐）
 
@@ -150,7 +180,8 @@ src/
 ├── scanners/         # 25 个扫描器
 ├── fixers/           # 25 个修复器（backup → execute → rollback）
 ├── scoring/          # 加权评分
-├── web/              # Web UI
+├── installers/      # AI 工具安装器（Claude Code、OpenClaw、CCSwitch、汉化）
+├── web/              # Web UI（诊断 + 安装 + 资源导航）
 ├── executor/         # 命令执行
 ├── report/           # 报告生成
 └── privacy/          # 隐私保护

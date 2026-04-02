@@ -20,7 +20,7 @@ export function getScannerById(id: string): Scanner | undefined {
 /** 并发执行所有 scanner，限制并发数 */
 export async function runAllScanners(
   limit = 5,
-  onProgress?: (completed: number, total: number, current: string) => void,
+  onProgress?: (completed: number, total: number, current: string, result?: ScanResult) => void,
 ): Promise<ScanResult[]> {
   const total = scanners.length;
   const results: ScanResult[] = new Array(total);
@@ -44,7 +44,7 @@ export async function runAllScanners(
         };
       }
       completed++;
-      onProgress?.(completed, total, scanner.name);
+      onProgress?.(completed, total, scanner.name, results[idx]);
     }
   }
 

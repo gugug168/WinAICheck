@@ -159,6 +159,10 @@ h1{font-family:var(--display);font-size:1.5rem;font-weight:700;letter-spacing:3p
 .progress-fill{height:100%;background:linear-gradient(90deg,var(--cyan),#7c3aed);border-radius:2px;transition:width .3s ease;width:0%;box-shadow:0 0 10px var(--cyan-glow)}
 #loading{display:none;text-align:center;padding:40px 0}
 .spinner{width:36px;height:36px;border:3px solid rgba(0,240,255,.1);border-top-color:var(--cyan);border-radius:50%;animation:spin .8s linear infinite;margin:0 auto 12px}
+.scan-progress-wrap{max-width:400px;margin:0 auto}
+.scan-progress-bar{height:6px;background:rgba(0,240,255,.08);border-radius:3px;overflow:hidden;margin:12px 0 8px}
+.scan-progress-fill{height:100%;background:linear-gradient(90deg,var(--cyan),#7c3aed);border-radius:3px;transition:width .3s ease;width:0%;box-shadow:0 0 10px var(--cyan-glow)}
+.scan-progress-text{color:#94a3b8;font-size:14px;margin:0}
 @keyframes spin{to{transform:rotate(360deg)}}
 /* ====== Tab 导航 - 赛博朋克风格 ====== */
 .tab-nav{display:flex;gap:16px;margin-bottom:32px;padding:8px}
@@ -289,7 +293,10 @@ h1{font-family:var(--display);font-size:1.5rem;font-weight:700;letter-spacing:3p
 
     <div id="loading">
       <div class="spinner"></div>
-      <p style="color:#94a3b8">正在扫描...</p>
+      <div class="scan-progress-wrap">
+        <div class="scan-progress-bar"><div class="scan-progress-fill" id="scan-progress-fill"></div></div>
+        <p class="scan-progress-text" id="scan-progress-text">正在扫描...</p>
+      </div>
     </div>
   </div>
 
@@ -320,55 +327,81 @@ h1{font-family:var(--display);font-size:1.5rem;font-weight:700;letter-spacing:3p
   <div id="tab-resources" class="tab-content">
     <div class="card" style="text-align:center;padding:36px 20px">
       <div style="font-family:var(--display);font-size:1.2rem;font-weight:700;letter-spacing:2px;color:var(--amber);margin-bottom:8px;text-shadow:0 0 20px rgba(255,107,53,.3)">AI 资源导航</div>
-      <div style="color:var(--text-mid);font-size:.85rem">国产 AI 平台 & 云服务一键直达</div>
+      <div style="color:var(--text-mid);font-size:.85rem">Coding Plan 编程套餐购买直达，按次数计费更划算</div>
     </div>
 
-    <!-- 大模型平台 -->
+    <!-- Coding Plan 编程套餐（按次数计费，推荐） -->
     <div class="card">
-      <div style="font-family:var(--display);font-size:.85rem;font-weight:700;letter-spacing:2px;color:var(--cyan);margin-bottom:14px">大模型平台</div>
+      <div style="font-family:var(--display);font-size:.85rem;font-weight:700;letter-spacing:2px;color:var(--cyan);margin-bottom:6px">Coding Plan 编程套餐</div>
+      <div style="color:var(--green);font-size:.75rem;margin-bottom:14px;padding:6px 10px;background:rgba(16,185,129,.08);border-radius:6px;border-left:3px solid var(--green)">
+        <strong>推荐!</strong> Coding Plan 按次数计费，写再多代码也不会超支。别买 API（按 Token 计费），AI 写代码一次对话就烧几千 Token，分分钟欠费。
+      </div>
       <div style="display:grid;gap:10px">
-        <a href="https://open.bigmodel.cn/" target="_blank" rel="noopener" class="learn-link">
+        <a href="https://www.bigmodel.cn/glm-coding" target="_blank" rel="noopener" class="learn-link">
           <span class="learn-link-icon">&#129504;</span>
-          <div><div class="learn-link-title">智谱 GLM (BigModel)</div><div class="learn-link-desc">清华系大模型，GLM-4 系列，国产顶尖</div></div>
+          <div><div class="learn-link-title">智谱 GLM Coding Plan</div><div class="learn-link-desc">GLM-5.1 编程模型，¥20起/月，按次数计费</div></div>
         </a>
-        <a href="https://yiyan.baidu.com/" target="_blank" rel="noopener" class="learn-link">
-          <span class="learn-link-icon">&#128064;</span>
-          <div><div class="learn-link-title">百度文心一言</div><div class="learn-link-desc">百度出品，文心大模型 4.5，企业级 AI</div></div>
-        </a>
-        <a href="https://tongyi.aliyun.com/" target="_blank" rel="noopener" class="learn-link">
+        <a href="https://www.aliyun.com/benefit/scene/codingplan" target="_blank" rel="noopener" class="learn-link">
           <span class="learn-link-icon">&#127811;</span>
-          <div><div class="learn-link-title">阿里通义千问</div><div class="learn-link-desc">通义大模型系列，Qwen 开源生态</div></div>
+          <div><div class="learn-link-title">阿里云百炼 Coding Plan</div><div class="learn-link-desc">通义千问+Kimi+GLM 多模型，首月¥7.9，¥40起/月</div></div>
         </a>
-        <a href="https://kimi.moonshot.cn/" target="_blank" rel="noopener" class="learn-link">
+        <a href="https://www.volcengine.com/docs/82379/1925114" target="_blank" rel="noopener" class="learn-link">
+          <span class="learn-link-icon">&#127755;</span>
+          <div><div class="learn-link-title">火山方舟 Coding Plan (字节)</div><div class="learn-link-desc">豆包+GLM+DeepSeek+Kimi，¥9.9起/月</div></div>
+        </a>
+        <a href="https://www.kimi.com/code" target="_blank" rel="noopener" class="learn-link">
           <span class="learn-link-icon">&#127769;</span>
-          <div><div class="learn-link-title">Kimi (月之暗面)</div><div class="learn-link-desc">长文本处理专家，200 万字上下文窗口</div></div>
+          <div><div class="learn-link-title">Kimi Coding Plan (月之暗面)</div><div class="learn-link-desc">Kimi K2.5 编程模型，会员权益含编程额度</div></div>
         </a>
-        <a href="https://chat.deepseek.com/" target="_blank" rel="noopener" class="learn-link">
-          <span class="learn-link-icon">&#128300;</span>
-          <div><div class="learn-link-title">DeepSeek</div><div class="learn-link-desc">深度求索，R1 推理模型，开源先锋</div></div>
+        <a href="https://platform.minimaxi.com/docs/token-plan/promotion" target="_blank" rel="noopener" class="learn-link">
+          <span class="learn-link-icon">&#127880;</span>
+          <div><div class="learn-link-title">MiniMax Token Plan</div><div class="learn-link-desc">MiniMax-M2.5 全模态订阅，编程+生图+语音</div></div>
+        </a>
+        <a href="https://cloud.tencent.com/act/pro/codingplan" target="_blank" rel="noopener" class="learn-link">
+          <span class="learn-link-icon">&#9729;</span>
+          <div><div class="learn-link-title">腾讯云 Coding Plan</div><div class="learn-link-desc">混元+GLM-5+Kimi，首月¥7.9，次月5折</div></div>
+        </a>
+        <a href="https://cloud.infini-ai.com/" target="_blank" rel="noopener" class="learn-link">
+          <span class="learn-link-icon">&#128640;</span>
+          <div><div class="learn-link-title">无问芯穹 Infini Coding Plan</div><div class="learn-link-desc">聚合多家顶尖编程模型，¥40起/月</div></div>
+        </a>
+        <a href="https://cloud.baidu.com/product/codingplan.html" target="_blank" rel="noopener" class="learn-link">
+          <span class="learn-link-icon">&#128064;</span>
+          <div><div class="learn-link-title">百度千帆 Coding Plan</div><div class="learn-link-desc">文心+多模型编程，首月¥40起，每日限量</div></div>
         </a>
       </div>
     </div>
 
-    <!-- AI 云服务 / API -->
+    <!-- AI API 平台（按 Token 计费） -->
     <div class="card">
-      <div style="font-family:var(--display);font-size:.85rem;font-weight:700;letter-spacing:2px;color:#a78bfa;margin-bottom:14px">AI 云服务 & API</div>
+      <div style="font-family:var(--display);font-size:.85rem;font-weight:700;letter-spacing:2px;color:#a78bfa;margin-bottom:6px">AI API 平台</div>
+      <div style="color:var(--amber);font-size:.75rem;margin-bottom:14px;padding:6px 10px;background:rgba(255,107,53,.08);border-radius:6px;border-left:3px solid var(--amber)">
+        <strong>注意!</strong> 以下平台按 Token 计费，写代码消耗大量 Token，费用不可控。建议优先购买上方的 Coding Plan。
+      </div>
       <div style="display:grid;gap:10px">
-        <a href="https://open.volcengineapi.com/" target="_blank" rel="noopener" class="learn-link">
-          <span class="learn-link-icon">&#127755;</span>
-          <div><div class="learn-link-title">火山引擎 (字节跳动)</div><div class="learn-link-desc">豆包大模型 API，高性价比推理服务</div></div>
+        <a href="https://open.bigmodel.cn/" target="_blank" rel="noopener" class="learn-link">
+          <span class="learn-link-icon">&#129504;</span>
+          <div><div class="learn-link-title">智谱 BigModel 开放平台</div><div class="learn-link-desc">GLM 系列模型 API，按 Token 计费</div></div>
         </a>
-        <a href="https://cloud.tencent.com/product/lighthouse" target="_blank" rel="noopener" class="learn-link">
-          <span class="learn-link-icon">&#9729;</span>
-          <div><div class="learn-link-title">腾讯云轻量服务器</div><div class="learn-link-desc">国内 GPU 云服务器，搭建 AI 开发环境首选</div></div>
+        <a href="https://platform.deepseek.com/" target="_blank" rel="noopener" class="learn-link">
+          <span class="learn-link-icon">&#128300;</span>
+          <div><div class="learn-link-title">DeepSeek 开放平台</div><div class="learn-link-desc">DeepSeek R1/V3 API，按 Token 计费，夜间半价</div></div>
+        </a>
+        <a href="https://platform.kimi.com/" target="_blank" rel="noopener" class="learn-link">
+          <span class="learn-link-icon">&#127769;</span>
+          <div><div class="learn-link-title">Kimi API 开放平台</div><div class="learn-link-desc">Kimi K2 系列模型 API</div></div>
+        </a>
+        <a href="https://cloud.baidu.com/product-price/nlp.html" target="_blank" rel="noopener" class="learn-link">
+          <span class="learn-link-icon">&#128064;</span>
+          <div><div class="learn-link-title">百度智能云 文心大模型</div><div class="learn-link-desc">ERNIE 5.0 / 文心快码 Comate</div></div>
         </a>
         <a href="https://www.modelscope.cn/" target="_blank" rel="noopener" class="learn-link">
           <span class="learn-link-icon">&#127880;</span>
-          <div><div class="learn-link-title">魔搭 ModelScope (阿里)</div><div class="learn-link-desc">国产 AI 模型社区，开源模型 + 数据集 + 应用</div></div>
+          <div><div class="learn-link-title">魔搭 ModelScope (阿里)</div><div class="learn-link-desc">国产 AI 模型社区，开源模型 + 数据集</div></div>
         </a>
-        <a href="https://openrouter.ai/" target="_blank" rel="noopener" class="learn-link">
+        <a href="https://openrouter.ai/pricing" target="_blank" rel="noopener" class="learn-link">
           <span class="learn-link-icon">&#127760;</span>
-          <div><div class="learn-link-title">OpenRouter</div><div class="learn-link-desc">聚合多模型 API，Claude/GPT/Gemini 一站式调用</div></div>
+          <div><div class="learn-link-title">OpenRouter</div><div class="learn-link-desc">聚合 300+ 模型 API，Claude/GPT/Gemini 一站式</div></div>
         </a>
       </div>
     </div>
@@ -670,13 +703,113 @@ async function rescanOne(scannerId) {
 }
 
 async function rescan() {
-  document.getElementById('loading').style.display = 'block';
-  document.getElementById('results').style.display = 'none';
+  const results = document.getElementById('results');
   const btn = document.querySelector('.scan-btn');
   if (btn) btn.disabled = true;
+
+  // 清空结果区域，插入进度条
+  const CATEGORY_LABELS = ${JSON.stringify(CATEGORY_LABELS)};
+  const STATUS_CONFIG = ${JSON.stringify(STATUS_CONFIG)};
+  results.innerHTML = '<div id="scan-live-progress" style="text-align:center;padding:24px 0 16px">'
+    + '<div style="font-family:var(--mono);font-size:.85rem;color:var(--text-mid);margin-bottom:12px">正在扫描...</div>'
+    + '<div style="max-width:480px;margin:0 auto;height:6px;background:rgba(0,240,255,.08);border-radius:3px;overflow:hidden">'
+    + '<div id="scan-live-fill" style="height:100%;width:0%;background:linear-gradient(90deg,var(--cyan),#7c3aed);border-radius:3px;transition:width .3s ease"></div></div>'
+    + '<div id="scan-live-text" style="font-family:var(--mono);font-size:.78rem;color:var(--text-dim);margin-top:8px"></div>'
+    + '</div>'
+    + '<div id="scan-live-items" style="display:grid;gap:12px"></div>';
+
+  results.style.display = 'block';
+
   try {
     const res = await fetch('/api/scan', {method:'POST'});
-    if (res.ok) location.reload();
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const {done, value} = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, {stream:true});
+
+      // SSE 以双换行分割消息
+      const messages = buffer.split('\\n\\n');
+      buffer = messages.pop() || '';
+
+      for (const msg of messages) {
+        let eventType = '';
+        let eventData = '';
+        for (const line of msg.split('\\n')) {
+          if (line.startsWith('event: ')) eventType = line.slice(7);
+          else if (line.startsWith('data: ')) eventData = line.slice(6);
+        }
+        if (!eventData) continue;
+
+        try {
+          const data = JSON.parse(eventData);
+
+          // 更新进度条
+          if (eventType === 'progress' && data.completed !== undefined) {
+            const pct = Math.round((data.completed / data.total) * 100);
+            const fill = document.getElementById('scan-live-fill');
+            const text = document.getElementById('scan-live-text');
+            if (fill) fill.style.width = pct + '%';
+            if (text) text.textContent = data.completed + '/' + data.total + ' — ' + data.current;
+          }
+
+          // 逐个渲染扫描结果
+          if (eventType === 'result' && data.id) {
+            const sc = STATUS_CONFIG[data.status] || STATUS_CONFIG.unknown;
+            const container = document.getElementById('scan-live-items');
+            if (!container) continue;
+
+            var card = document.createElement('div');
+            card.style.cssText = 'background:rgba(15,23,42,.6);border:1px solid rgba(0,240,255,.1);border-radius:10px;padding:14px 18px;display:flex;align-items:flex-start;gap:12px;animation:fadeSlideIn .3s ease';
+
+            var iconDiv = document.createElement('div');
+            iconDiv.style.cssText = 'width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:14px;flex-shrink:0';
+            iconDiv.style.background = sc.bg;
+            iconDiv.style.color = sc.color;
+            iconDiv.textContent = sc.icon;
+
+            var bodyDiv = document.createElement('div');
+            bodyDiv.style.cssText = 'flex:1;min-width:0';
+
+            var nameEl = document.createElement('div');
+            nameEl.style.cssText = 'font-family:var(--mono);font-size:.82rem;font-weight:600;color:var(--text)';
+            nameEl.textContent = data.name;
+
+            var msgEl = document.createElement('div');
+            msgEl.style.cssText = 'font-family:var(--mono);font-size:.78rem;margin-top:2px';
+            msgEl.style.color = sc.color;
+            msgEl.textContent = data.message;
+
+            bodyDiv.appendChild(nameEl);
+            bodyDiv.appendChild(msgEl);
+
+            if (data.detail) {
+              var detailEl = document.createElement('div');
+              detailEl.style.cssText = 'font-family:var(--mono);font-size:.72rem;color:var(--text-dim);margin-top:4px;white-space:pre-wrap;max-height:60px;overflow:hidden';
+              detailEl.textContent = data.detail.split('\\n').slice(0,3).join('\\n');
+              bodyDiv.appendChild(detailEl);
+            }
+
+            card.appendChild(iconDiv);
+            card.appendChild(bodyDiv);
+            container.appendChild(card);
+
+            // 自动滚动到底部
+            card.scrollIntoView({behavior:'smooth',block:'end'});
+          }
+
+          // 扫描完成，刷新完整页面
+          if (eventType === 'done') {
+            setTimeout(() => location.reload(), 600);
+            return;
+          }
+        } catch {}
+      }
+    }
+    setTimeout(() => location.reload(), 1000);
   } catch(e) { location.reload(); }
 }
 </script>

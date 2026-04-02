@@ -52,6 +52,7 @@ export function setupMock(responses: Map<string, MockResponse>) {
 /** 清除 mock */
 export function teardownMock() {
   _test.mockExecSync = null;
+  _test.mockExistsSync = null;
 }
 
 /**

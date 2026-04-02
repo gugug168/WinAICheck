@@ -6,6 +6,7 @@ const DEFAULT_TIMEOUT = 15_000;
 /** 测试钩子：注入 mock 函数，避免 mock.module 的跨文件冲突 */
 export const _test = {
   mockExecSync: null as ((cmd: string, opts: any) => Buffer) | null,
+  mockExistsSync: null as ((path: string) => boolean) | null,
 };
 
 /**
