@@ -287,6 +287,7 @@ h1{font-family:var(--display);font-size:1.5rem;font-weight:700;letter-spacing:3p
     <div id="results">
       ${renderScoreCard(score)}
       <button class="scan-btn" onclick="rescan()">重新扫描</button>
+      <button class="scan-btn" style="background:linear-gradient(135deg,rgba(0,240,255,.12),rgba(167,139,250,.12));border-color:rgba(167,139,250,.3);color:#c4b5fd" onclick="openCommunity()">查看社区方案</button>
       ${renderFixSection(fixesByTier)}
       ${renderCategoryResults(grouped, score)}
     </div>
@@ -459,6 +460,10 @@ h1{font-family:var(--display);font-size:1.5rem;font-weight:700;letter-spacing:3p
 </div>
 
 <script>
+window.__scanPayload = {
+  results: ${JSON.stringify(results.map(r => ({id:r.id,name:r.name,category:r.category,status:r.status,message:r.message})))},
+  score: ${score.score},
+};
 // --- Tab 切换 ---
 function switchTab(tab) {
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
@@ -952,4 +957,24 @@ function renderInstallTab(): string {
 
 function esc(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+async function openCommunity() {
+  const btn = document.querySelector('[onclick="openCommunity()"]');
+  if (btn) { btn.textContent = '上传中...'; btn.disabled = true; }
+
+  try {
+    const res = await fetch('/api/stash', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(window.__scanPayload || {}),
+    });
+
+    if (!res.ok) throw new Error('上传失败: ' + res.status);
+    const {token} = await res.json();
+    window.open('https://aicoevo.net/claim?t=' + token, '_blank');
+  } catch(e) {
+    alert('连接社区失败，请检查网络\\n' + e.message);
+    if (btn) { btn.textContent = '查看社区方案'; btn.disabled = false; }
+  }
 }

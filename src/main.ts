@@ -205,6 +205,23 @@ async function webMode(port: number) {
         });
       }
 
+      // Stash: 暂存扫描数据到远程 AIECCOEVO 平台，返回 token
+      if (url.pathname === '/api/stash' && req.method === 'POST') {
+        try {
+          const body = await req.json() as { data?: string; fingerprint?: string };
+          const remoteUrl = 'https://aicoevo.net/api/v1/stash';
+          const remoteRes = await fetch(remoteUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+          });
+          const remoteData = await remoteRes.json();
+          return Response.json(remoteData, { status: remoteRes.status });
+        } catch (e: any) {
+          return Response.json({ error: '无法连接 AIECCOEVO 服务器: ' + e.message }, { status: 502 });
+        }
+      }
+
       return new Response('Not Found', { status: 404 });
     },
   });
