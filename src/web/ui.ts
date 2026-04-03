@@ -307,10 +307,17 @@ h1{font-family:var(--display);font-size:1.5rem;font-weight:700;letter-spacing:3p
 
   <!-- 教学中心 Tab -->
   <div id="tab-learn" class="tab-content">
-    <div class="card" style="text-align:center;padding:40px 20px">
-      <div style="font-family:var(--display);font-size:1.3rem;font-weight:700;letter-spacing:2px;color:var(--green);margin-bottom:8px;text-shadow:0 0 20px rgba(0,255,136,.3)">Claude Code 教学</div>
-      <div style="color:var(--text-mid);font-size:.88rem;margin-bottom:24px">大古出品，从入门到精通的 AI 编程实战指南</div>
-      <a href="https://claudecode.tumuai.net/" target="_blank" rel="noopener" style="display:inline-block;padding:14px 36px;border:1px solid rgba(0,255,136,.25);border-radius:12px;font-family:var(--mono);font-size:.9rem;font-weight:600;letter-spacing:1px;color:var(--green);background:rgba(0,255,136,.06);text-decoration:none;transition:all .2s;box-shadow:0 0 20px rgba(0,255,136,.08)" onmouseover="this.style.background='rgba(0,255,136,.12)';this.style.boxShadow='0 0 30px rgba(0,255,136,.15)';this.style.transform='translateY(-2px)'" onmouseout="this.style.background='rgba(0,255,136,.06)';this.style.boxShadow='0 0 20px rgba(0,255,136,.08)';this.style.transform='translateY(0)'">开始学习 &rarr;</a>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+      <div class="card" style="text-align:center;padding:40px 20px">
+        <div style="font-family:var(--display);font-size:1.3rem;font-weight:700;letter-spacing:2px;color:var(--green);margin-bottom:8px;text-shadow:0 0 20px rgba(0,255,136,.3)">Claude Code 教学</div>
+        <div style="color:var(--text-mid);font-size:.88rem;margin-bottom:24px">大古出品，从入门到精通的 AI 编程实战指南</div>
+        <a href="https://claudecode.tumuai.net/" target="_blank" rel="noopener" style="display:inline-block;padding:14px 36px;border:1px solid rgba(0,255,136,.25);border-radius:12px;font-family:var(--mono);font-size:.9rem;font-weight:600;letter-spacing:1px;color:var(--green);background:rgba(0,255,136,.06);text-decoration:none;transition:all .2s;box-shadow:0 0 20px rgba(0,255,136,.08)" onmouseover="this.style.background='rgba(0,255,136,.12)';this.style.boxShadow='0 0 30px rgba(0,255,136,.15)';this.style.transform='translateY(-2px)'" onmouseout="this.style.background='rgba(0,255,136,.06)';this.style.boxShadow='0 0 20px rgba(0,255,136,.08)';this.style.transform='translateY(0)'">开始学习 &rarr;</a>
+      </div>
+      <div class="card" style="text-align:center;padding:40px 20px">
+        <div style="font-family:var(--display);font-size:1.3rem;font-weight:700;letter-spacing:2px;color:#ff6b6b;margin-bottom:8px;text-shadow:0 0 20px rgba(255,107,107,.3)">🦞 OpenClaw 教学</div>
+        <div style="color:var(--text-mid);font-size:.88rem;margin-bottom:24px">大古出品，从零开始手把手教你用 AI 助手</div>
+        <a href="https://openclaw.tumuai.net/" target="_blank" rel="noopener" style="display:inline-block;padding:14px 36px;border:1px solid rgba(255,107,107,.25);border-radius:12px;font-family:var(--mono);font-size:.9rem;font-weight:600;letter-spacing:1px;color:#ff6b6b;background:rgba(255,107,107,.06);text-decoration:none;transition:all .2s;box-shadow:0 0 20px rgba(255,107,107,.08)" onmouseover="this.style.background='rgba(255,107,107,.12)';this.style.boxShadow='0 0 30px rgba(255,107,107,.15)';this.style.transform='translateY(-2px)'" onmouseout="this.style.background='rgba(255,107,107,.06)';this.style.boxShadow='0 0 20px rgba(255,107,107,.08)';this.style.transform='translateY(0)'">开始学习 &rarr;</a>
+      </div>
     </div>
     <div class="card">
       <div style="font-family:var(--display);font-size:.85rem;font-weight:700;letter-spacing:2px;color:var(--cyan);margin-bottom:14px">学习资源</div>
@@ -318,6 +325,10 @@ h1{font-family:var(--display);font-size:1.5rem;font-weight:700;letter-spacing:3p
         <a href="https://claudecode.tumuai.net/" target="_blank" rel="noopener" class="learn-link">
           <span class="learn-link-icon">&#128218;</span>
           <div><div class="learn-link-title">大古的 Claude Code 教程</div><div class="learn-link-desc">大古倾心制作的中文教学，涵盖安装、配置、实战技巧</div></div>
+        </a>
+        <a href="https://openclaw.tumuai.net/" target="_blank" rel="noopener" class="learn-link">
+          <span class="learn-link-icon">&#129432;</span>
+          <div><div class="learn-link-title">大古的 OpenClaw 教程</div><div class="learn-link-desc">最懂小白的 OpenClaw 中文教程，从安装到接入飞书全覆盖</div></div>
         </a>
       </div>
     </div>
