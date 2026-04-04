@@ -967,7 +967,10 @@ async function openCommunity() {
     const res = await fetch('/api/stash', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify(window.__scanPayload || {}),
+      body: JSON.stringify({
+        data: JSON.stringify(window.__scanPayload || {}),
+        fingerprint: JSON.stringify({platform: navigator.platform, userAgent: navigator.userAgent}),
+      }),
     });
 
     if (!res.ok) throw new Error('上传失败: ' + res.status);
