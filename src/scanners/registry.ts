@@ -2,14 +2,19 @@ import type { Scanner, ScanResult } from './types';
 
 const scanners: Scanner[] = [];
 
+function isDefaultEnabled(scanner: Scanner): boolean {
+  return scanner.defaultEnabled !== false;
+}
+
 /** 注册一个 scanner */
 export function registerScanner(scanner: Scanner): void {
   scanners.push(scanner);
 }
 
 /** 获取所有已注册的 scanner */
-export function getScanners(): Scanner[] {
-  return [...scanners];
+export function getScanners(options?: { includeDefaultDisabled?: boolean }): Scanner[] {
+  if (options?.includeDefaultDisabled) return [...scanners];
+  return scanners.filter(isDefaultEnabled);
 }
 
 /** 按 ID 查找 scanner */
@@ -22,7 +27,8 @@ export async function runAllScanners(
   limit = 5,
   onProgress?: (completed: number, total: number, current: string, result?: ScanResult) => void,
 ): Promise<ScanResult[]> {
-  const total = scanners.length;
+  const activeScanners = getScanners();
+  const total = activeScanners.length;
   const results: ScanResult[] = new Array(total);
   let nextIndex = 0;
   let completed = 0;
@@ -30,7 +36,7 @@ export async function runAllScanners(
   async function runNext(): Promise<void> {
     while (nextIndex < total) {
       const idx = nextIndex++;
-      const scanner = scanners[idx];
+      const scanner = activeScanners[idx];
 
       try {
         results[idx] = await scanner.scan();

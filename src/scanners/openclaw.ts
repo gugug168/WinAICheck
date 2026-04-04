@@ -11,6 +11,7 @@ const scanner: Scanner = {
   name: 'OpenClaw 检测',
   category: 'toolchain',
   affectsScore: false,
+  defaultEnabled: false,
 
   async scan(): Promise<ScanResult> {
     if (!commandExists('openclaw')) {

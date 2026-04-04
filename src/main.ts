@@ -9,6 +9,8 @@ import { loadPreviousReport, loadHistory } from './privacy/uploader';
 import { writeFileSync, mkdirSync, existsSync } from 'fs';
 import { join } from 'path';
 import { execSync } from 'child_process';
+import { requestRemoteJson } from './web/remote-json';
+import { getCommunityApiBase } from './web/community-config';
 
 // 导入所有 scanner（触发注册）
 import './scanners/index';
@@ -95,11 +97,12 @@ async function cliMode(wantJson: boolean, wantHtml: boolean) {
 // ==================== Web UI 模式 ====================
 
 async function webMode(port: number) {
-  const { generateWebUI } = await import('./web/ui');
+  const { generateWebUI, renderDiagPanel } = await import('./web/ui');
   const { executeFix } = await import('./fixers/index');
   const { getInstallerById } = await import('./installers/index');
 
   let cached: any = null;
+  const communityApiBase = getCommunityApiBase();
 
   const server = Bun.serve({
     port,
@@ -141,7 +144,13 @@ async function webMode(port: number) {
                 cached = results;
                 const score = calculateScore(cached);
                 saveLocal(createPayload(cached, score));
-                send('done', { ok: true });
+                const prev = loadPreviousReport();
+                send('done', {
+                  ok: true,
+                  results: cached,
+                  score,
+                  html: renderDiagPanel(cached, score, prev?.score ?? null),
+                });
                 controller.close();
               })
               .catch(err => {
@@ -170,7 +179,14 @@ async function webMode(port: number) {
           const idx = cached.findIndex((r: any) => r.id === scannerId);
           if (idx >= 0) cached[idx] = result;
         }
-        return Response.json(result);
+        const score = calculateScore(cached || [result]);
+        const prev = loadPreviousReport();
+        return Response.json({
+          result,
+          results: cached || [result],
+          score,
+          html: renderDiagPanel(cached || [result], score, prev?.score ?? null),
+        });
       }
 
       // SSE 安装端点
@@ -211,14 +227,12 @@ async function webMode(port: number) {
       if (url.pathname === '/api/stash' && req.method === 'POST') {
         try {
           const body = await req.json() as { data?: string; fingerprint?: string };
-          const remoteUrl = 'https://aicoevo.net/api/v1/stash';
-          const remoteRes = await fetch(remoteUrl, {
+          const remote = await requestRemoteJson(`${communityApiBase}/stash`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body),
+            headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+            body,
           });
-          const remoteData = await remoteRes.json();
-          return Response.json(remoteData, { status: remoteRes.status });
+          return Response.json(remote.data, { status: remote.status });
         } catch (e: any) {
           return Response.json({ error: '无法连接 AIECCOEVO 服务器: ' + e.message }, { status: 502 });
         }
@@ -231,10 +245,11 @@ async function webMode(port: number) {
           const params = new URLSearchParams();
           if (categories) params.set('category', categories);
           params.set('page_size', '20');
-          const remoteUrl = `https://aicoevo.net/api/v1/solutions?${params}`;
-          const remoteRes = await fetch(remoteUrl, { headers: { 'Accept': 'application/json' } });
-          const remoteData = await remoteRes.json();
-          return Response.json(remoteData, { status: remoteRes.status });
+          const remote = await requestRemoteJson(`${communityApiBase}/solutions?${params}`, {
+            method: 'GET',
+            headers: { 'Accept': 'application/json' },
+          });
+          return Response.json(remote.data, { status: remote.status });
         } catch (e: any) {
           return Response.json({ solutions: [], error: '无法获取社区方案' }, { status: 502 });
         }

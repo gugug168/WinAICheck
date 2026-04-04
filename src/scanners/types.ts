@@ -29,6 +29,7 @@ export interface Scanner {
   name: string;
   category: ScannerCategory;
   affectsScore?: boolean;
+  defaultEnabled?: boolean;
   scan(): Promise<ScanResult>;
 }
 

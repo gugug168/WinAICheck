@@ -11,6 +11,7 @@ const scanner: Scanner = {
   name: 'Claude Code CLI 检测',
   category: 'toolchain',
   affectsScore: false,
+  defaultEnabled: false,
 
   async scan(): Promise<ScanResult> {
     if (!commandExists('claude')) {

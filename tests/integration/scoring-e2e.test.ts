@@ -233,6 +233,23 @@ describe('scoring e2e', () => {
     expect(scanners.length).toBeGreaterThanOrEqual(20);
   });
 
+  test('默认扫描列表不包含 AI 客户端安装与本地配置检查', () => {
+    const scanners = getScanners();
+    const ids = scanners.map(scanner => scanner.id);
+
+    expect(ids).not.toContain('claude-cli');
+    expect(ids).not.toContain('openclaw');
+    expect(ids).not.toContain('ccswitch');
+    expect(ids).not.toContain('claude-config-health');
+    expect(ids).not.toContain('openclaw-config-health');
+
+    expect(getScannerById('claude-cli')).toBeDefined();
+    expect(getScannerById('openclaw')).toBeDefined();
+    expect(getScannerById('ccswitch')).toBeDefined();
+    expect(getScannerById('claude-config-health')).toBeDefined();
+    expect(getScannerById('openclaw-config-health')).toBeDefined();
+  });
+
   test('全通过 mock 环境下核心命令式 scanner 返回 pass', async () => {
     const responses = allPassResponses();
     _test.mockExecSync = createCommandMock(responses);

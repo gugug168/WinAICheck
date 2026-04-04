@@ -19,6 +19,7 @@ const scanner: Scanner = {
   name: 'CCSwitch 检测',
   category: 'toolchain',
   affectsScore: false,
+  defaultEnabled: false,
 
   async scan(): Promise<ScanResult> {
     // 1. 先检查 CLI 版本（ccswitch 命令在 PATH 中）

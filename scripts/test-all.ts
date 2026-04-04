@@ -2,6 +2,7 @@ const groups = {
   core: [
     'tests/calculator-sanitizer.test.ts',
     'tests/fixers.test.ts',
+    'tests/remote-json.test.ts',
     'tests/scanner-parse.test.ts',
     'tests/integration/ccswitch-scanner.test.ts',
   ],

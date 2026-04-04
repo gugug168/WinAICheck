@@ -3,6 +3,7 @@ import { getFixSuggestions } from '../fixers/index';
 import { getInstallers } from '../installers/index';
 import type { ScanResult, ScoreResult, FixSuggestion, ScannerCategory } from '../scanners/types';
 import type { FixResult } from '../scanners/types';
+import { buildCommunityClaimUrl } from './community-config';
 
 const CATEGORY_LABELS: Record<ScannerCategory, string> = {
   path: '路径与系统环境',
@@ -26,12 +27,17 @@ const TIER_CONFIG: Record<string, { label: string; color: string; bg: string; ic
   black: { label: '仅供参考', color: '#94a3b8', bg: '#94a3b815', icon: '⚫' },
 };
 
+const FIX_ACTION_SECTIONS = [
+  { tier: 'green', title: '立即处理', buttonLabel: '立即执行', desc: '风险低、收益高，优先消除直接阻塞。' },
+  { tier: 'yellow', title: '建议处理', buttonLabel: '确认执行', desc: '建议尽快处理，避免后续工具链漂移。' },
+  { tier: 'red', title: '手动处理', buttonLabel: '查看指引', desc: '需要你手动确认环境或系统设置。' },
+  { tier: 'black', title: '可选优化', buttonLabel: '查看建议', desc: '不会立刻阻塞，但能提升稳定性。' },
+] as const;
+
 type CommunityPayload = {
   results?: Array<{ status: string; category: string }>;
-  score?: number;
+  score?: number | ScoreResult;
   system?: Record<string, unknown>;
-  pathEntries?: string[];
-  envKeys?: Record<string, string>;
 };
 
 type CommunitySolution = {
@@ -44,6 +50,8 @@ type CommunitySolution = {
 declare global {
   interface Window {
     __scanPayload?: CommunityPayload;
+    __prevScore?: number | null;
+    __resultFilter?: string;
   }
 }
 
@@ -59,6 +67,80 @@ function gradeGradient(score: number): string {
   return `linear-gradient(135deg, ${c}22, ${c}08)`;
 }
 
+function getPriorityIssues(results: ScanResult[]): ScanResult[] {
+  const statusRank: Record<string, number> = { fail: 0, warn: 1, unknown: 2, pass: 3 };
+  return results
+    .filter(r => r.status === 'fail' || r.status === 'warn')
+    .sort((a, b) => {
+      const byStatus = statusRank[a.status] - statusRank[b.status];
+      if (byStatus !== 0) return byStatus;
+      return a.name.localeCompare(b.name, 'zh-CN');
+    })
+    .slice(0, 4);
+}
+
+function getOutcomeSummary(score: ScoreResult, results: ScanResult[]): {
+  title: string;
+  subtitle: string;
+  nextStep: string;
+  tone: 'good' | 'medium' | 'bad';
+} {
+  const failCount = results.filter(r => r.status === 'fail').length;
+  const warnCount = results.filter(r => r.status === 'warn').length;
+
+  if (failCount === 0 && score.score >= 90) {
+    return {
+      title: '环境已就绪，可直接开始使用',
+      subtitle: `当前无阻塞项，${warnCount > 0 ? `还有 ${warnCount} 个建议优化项` : '关键链路已通过'}。`,
+      nextStep: '建议直接开始使用你的 AI 开发工具，后续按需做可选优化。',
+      tone: 'good',
+    };
+  }
+
+  if (failCount <= 1 && score.score >= 70) {
+    return {
+      title: '环境基本可用，先处理少量阻塞项',
+      subtitle: `检测到 ${failCount} 个失败项、${warnCount} 个警告项，主流程已经接近可用。`,
+      nextStep: '优先修掉“立即处理”中的问题，再重新扫描确认。',
+      tone: 'medium',
+    };
+  }
+
+  return {
+    title: '当前环境不建议直接开工',
+    subtitle: `仍有 ${failCount} 个失败项、${warnCount} 个警告项，会影响安装、扫描或 AI 工作流稳定性。`,
+    nextStep: '先处理 Top 问题和“立即处理”项，再进入安装或配置阶段。',
+    tone: 'bad',
+  };
+}
+
+function getWorkflowState(results: ScanResult[]): {
+  stage: 'diagnose' | 'fix' | 'verify';
+  summary: string;
+} {
+  const failCount = results.filter(r => r.status === 'fail').length;
+  const warnCount = results.filter(r => r.status === 'warn').length;
+
+  if (failCount > 0) {
+    return {
+      stage: 'fix',
+      summary: `当前还有 ${failCount} 个阻塞项，建议先处理失败项，再继续安装和配置。`,
+    };
+  }
+
+  if (warnCount > 0) {
+    return {
+      stage: 'verify',
+      summary: `阻塞项已清掉，剩余 ${warnCount} 个警告项，建议复检后再进入长期使用。`,
+    };
+  }
+
+  return {
+    stage: 'verify',
+    summary: '主要链路已通过，可以开始使用；后续按需复检即可。',
+  };
+}
+
 /**
  * 生成完整的 Web UI HTML 页面
  */
@@ -68,9 +150,12 @@ export function generateWebUI(
   prevScore: number | null = null,
 ): string {
   const fixes = getFixSuggestions(results);
-  const fixesByTier = { green: fixes.filter(f => f.tier === 'green'), yellow: fixes.filter(f => f.tier === 'yellow'), red: fixes.filter(f => f.tier === 'red'), black: fixes.filter(f => f.tier === 'black') };
-  const grouped = new Map<ScannerCategory, ScanResult[]>();
-  for (const r of results) grouped.set(r.category, (grouped.get(r.category) || []).concat(r));
+  const fixesByTier = {
+    green: fixes.filter(f => f.tier === 'green'),
+    yellow: fixes.filter(f => f.tier === 'yellow'),
+    red: fixes.filter(f => f.tier === 'red'),
+    black: fixes.filter(f => f.tier === 'black'),
+  };
 
   return `<!DOCTYPE html>
 <html lang="zh-CN">
@@ -148,9 +233,16 @@ h1{font-family:var(--display);font-size:1.5rem;font-weight:700;letter-spacing:3p
 .result-item:hover{background:rgba(0,240,255,.03)}
 .status-icon{width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:.75rem;font-weight:700;flex-shrink:0;margin-top:1px;transition:box-shadow .2s}
 .result-item:hover .status-icon{box-shadow:0 0 12px currentColor}
+.result-item.is-hidden{display:none}
 .result-name{font-weight:500;font-size:.88rem;letter-spacing:.3px}
 .result-msg{font-size:.82rem;color:var(--text-mid);margin-top:2px}
 .result-detail{font-size:.75rem;color:var(--text-dim);margin-top:6px;white-space:pre-wrap;background:rgba(0,0,0,.3);border:1px solid var(--border);border-radius:8px;padding:8px 10px;font-family:var(--mono)}
+.result-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}
+.result-meta{display:flex;gap:6px;flex-wrap:wrap}
+.result-chip{padding:2px 8px;border-radius:999px;font-size:.68rem;font-family:var(--mono);border:1px solid rgba(0,240,255,.12);color:var(--text-dim);background:rgba(0,240,255,.05)}
+.result-chip.fixable{border-color:rgba(34,197,94,.25);color:var(--green);background:rgba(34,197,94,.08)}
+.result-chip.status-fail{border-color:rgba(239,68,68,.25);color:var(--red);background:rgba(239,68,68,.08)}
+.result-chip.status-warn{border-color:rgba(234,179,8,.25);color:var(--yellow);background:rgba(234,179,8,.08)}
 /* 修复区 */
 .fix-section{border:1px solid rgba(0,255,136,.15)}
 .fix-item{display:flex;align-items:center;gap:14px;padding:14px;border-radius:10px;margin-bottom:8px;background:var(--bg-card);border:1px solid var(--border);transition:border-color .2s}
@@ -166,9 +258,14 @@ h1{font-family:var(--display);font-size:1.5rem;font-weight:700;letter-spacing:3p
 .fix-result{font-size:.78rem;margin-top:8px;padding:6px 10px;border-radius:6px}
 .fix-result.success{background:rgba(0,255,136,.08);color:var(--green)}
 .fix-result.fail{background:rgba(255,51,85,.08);color:var(--red)}
+.fix-section-block{margin-bottom:18px}
+.fix-section-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:10px}
+.fix-section-title{font-size:.88rem;font-weight:700}
+.fix-section-desc{font-size:.76rem;color:var(--text-dim);margin-top:2px}
 /* 分类进度条 */
 .category-bar{height:3px;border-radius:2px;background:rgba(0,240,255,.08);overflow:hidden;margin-top:8px}
 .category-fill{height:100%;border-radius:2px;transition:width .6s ease;box-shadow:0 0 8px currentColor}
+.category-card.is-hidden{display:none}
 /* 底部 */
 .footer{text-align:center;color:var(--text-dim);font-size:.72rem;margin-top:32px;padding:20px 0;letter-spacing:2px;font-family:var(--mono)}
 .footer::before{content:'';display:block;width:60px;height:1px;background:linear-gradient(90deg,transparent,var(--cyan-dim),transparent);margin:0 auto 12px}
@@ -176,6 +273,53 @@ h1{font-family:var(--display);font-size:1.5rem;font-weight:700;letter-spacing:3p
 .scan-btn{background:linear-gradient(135deg,var(--cyan),#7c3aed);color:#fff;border:none;padding:10px 28px;border-radius:10px;font-size:.85rem;font-weight:600;cursor:pointer;margin:0 auto 20px;display:block;font-family:var(--mono);letter-spacing:1px;transition:all .2s;box-shadow:0 0 20px rgba(0,240,255,.15)}
 .scan-btn:hover{transform:translateY(-1px);box-shadow:0 0 30px rgba(0,240,255,.25)}
 .scan-btn:disabled{opacity:.4;cursor:not-allowed;transform:none}
+.scan-btn.secondary{background:linear-gradient(135deg,rgba(0,240,255,.12),rgba(167,139,250,.12));border:1px solid rgba(167,139,250,.3);color:#c4b5fd;box-shadow:none}
+.diag-actions{display:flex;flex-wrap:wrap;gap:12px;justify-content:center;margin:0 0 18px}
+.diag-actions .scan-btn{margin:0}
+.diag-grid{display:grid;grid-template-columns:1.1fr .9fr;gap:16px;margin-bottom:16px}
+.outcome-card{position:relative;overflow:hidden}
+.outcome-card::before{content:'';position:absolute;inset:auto -20% 0 auto;width:180px;height:180px;border-radius:50%;filter:blur(40px);opacity:.18}
+.outcome-card.good::before{background:rgba(34,197,94,.35)}
+.outcome-card.medium::before{background:rgba(234,179,8,.35)}
+.outcome-card.bad::before{background:rgba(239,68,68,.35)}
+.eyebrow{font-family:var(--mono);font-size:.72rem;letter-spacing:2px;text-transform:uppercase;color:var(--text-dim);margin-bottom:10px}
+.outcome-title{font-family:var(--display);font-size:1.05rem;letter-spacing:1px;margin-bottom:10px}
+.outcome-copy{font-size:.86rem;color:var(--text-mid);line-height:1.65}
+.outcome-next{margin-top:12px;padding-top:12px;border-top:1px solid rgba(0,240,255,.08);font-size:.78rem;color:var(--text)}
+.summary-badges{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}
+.summary-badge{padding:6px 10px;border-radius:999px;font-size:.72rem;font-family:var(--mono);border:1px solid var(--border);background:rgba(0,240,255,.05);color:var(--text-mid)}
+.summary-badge strong{color:var(--text)}
+.priority-list{display:grid;gap:10px}
+.priority-item{padding:12px;border-radius:12px;border:1px solid var(--border);background:rgba(7,11,24,.55)}
+.priority-item-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:6px}
+.priority-item-title{font-size:.84rem;font-weight:600}
+.priority-item-copy{font-size:.76rem;color:var(--text-mid);line-height:1.6}
+.priority-index{font-family:var(--display);font-size:.82rem;color:var(--cyan)}
+.toolbar-card{margin-bottom:16px}
+.toolbar-row{display:flex;flex-wrap:wrap;gap:10px;justify-content:space-between;align-items:center}
+.filter-group{display:flex;flex-wrap:wrap;gap:8px}
+.filter-chip-btn{padding:8px 12px;border-radius:999px;border:1px solid var(--border);background:rgba(0,240,255,.04);color:var(--text-mid);font-size:.74rem;font-family:var(--mono);cursor:pointer;transition:all .18s}
+.filter-chip-btn:hover{border-color:var(--border-hover);color:var(--text)}
+.filter-chip-btn.active{border-color:rgba(0,240,255,.24);background:rgba(0,240,255,.1);color:var(--cyan)}
+.search-wrap{display:flex;align-items:center;gap:10px}
+.search-input{min-width:220px;padding:10px 12px;border-radius:10px;border:1px solid var(--border);background:rgba(6,11,24,.7);color:var(--text);font-size:.78rem;font-family:var(--mono);outline:none}
+.search-input:focus{border-color:rgba(0,240,255,.28);box-shadow:0 0 0 4px rgba(0,240,255,.06)}
+.filter-stats{font-size:.74rem;color:var(--text-dim);font-family:var(--mono)}
+.result-empty{display:none;text-align:center;padding:26px 10px;color:var(--text-dim);font-size:.82rem}
+.two-col{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.flow-strip{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:16px}
+.flow-card{position:relative;padding:14px 14px 14px 44px;border-radius:12px;border:1px solid var(--border);background:rgba(7,11,24,.52)}
+.flow-card::before{content:attr(data-step);position:absolute;left:14px;top:14px;width:20px;height:20px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:.7rem;background:rgba(0,240,255,.08);color:var(--text-mid)}
+.flow-card.active{border-color:rgba(0,240,255,.24);background:linear-gradient(135deg,rgba(0,240,255,.08),rgba(124,58,237,.05))}
+.flow-title{font-size:.8rem;font-weight:700;color:var(--text);margin-bottom:4px}
+.flow-copy{font-size:.74rem;color:var(--text-dim);line-height:1.55}
+.support-hub{margin-top:18px;border-color:rgba(255,255,255,.06)}
+.support-hub .section-title{color:#7dd3fc}
+.support-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+.support-link{display:block;padding:14px 16px;border-radius:12px;border:1px solid rgba(255,255,255,.06);background:rgba(255,255,255,.02);text-decoration:none;color:var(--text);transition:all .18s}
+.support-link:hover{border-color:rgba(0,240,255,.18);background:rgba(0,240,255,.04);transform:translateY(-1px)}
+.support-link-title{font-size:.82rem;font-weight:700;margin-bottom:6px}
+.support-link-copy{font-size:.74rem;color:var(--text-dim);line-height:1.55}
 /* 进度条 */
 .progress-bar{height:4px;background:rgba(0,240,255,.08);border-radius:2px;overflow:hidden;margin:12px 0}
 .progress-fill{height:100%;background:linear-gradient(90deg,var(--cyan),#7c3aed);border-radius:2px;transition:width .3s ease;width:0%;box-shadow:0 0 10px var(--cyan-glow)}
@@ -187,7 +331,7 @@ h1{font-family:var(--display);font-size:1.5rem;font-weight:700;letter-spacing:3p
 .scan-progress-text{color:#94a3b8;font-size:14px;margin:0}
 @keyframes spin{to{transform:rotate(360deg)}}
 /* ====== Tab 导航 - 赛博朋克风格 ====== */
-.tab-nav{display:flex;gap:16px;margin-bottom:32px;padding:8px}
+.tab-nav{display:flex;gap:16px;margin-bottom:32px;padding:8px;align-items:flex-end;flex-wrap:wrap}
 .tab-btn{font-family:var(--display);font-size:1.15rem;font-weight:700;padding:14px 40px;border:1px solid var(--border);border-radius:12px;cursor:pointer;transition:all .35s cubic-bezier(.4,0,.2,1);position:relative;letter-spacing:2px;text-transform:uppercase;
   background:rgba(8,12,24,.6);color:var(--text-dim);backdrop-filter:blur(8px);overflow:hidden}
 .tab-btn::after{content:'';position:absolute;bottom:0;left:50%;width:0;height:2px;background:var(--cyan);transition:all .35s;transform:translateX(-50%);border-radius:1px}
@@ -195,6 +339,9 @@ h1{font-family:var(--display);font-size:1.5rem;font-weight:700;letter-spacing:3p
 .tab-btn:hover::after{width:40%}
 .tab-btn.active{transform:translateY(-2px);color:var(--cyan)}
 .tab-btn.active::after{width:80%;box-shadow:0 0 12px var(--cyan-glow)}
+.tab-btn.secondary-tab{font-size:.84rem;padding:10px 18px;border-radius:999px;letter-spacing:1px;background:rgba(8,12,24,.35);align-self:center}
+.tab-btn.secondary-tab.active{transform:none}
+.tab-note{margin-left:auto;font-size:.72rem;color:var(--text-dim);font-family:var(--mono);letter-spacing:1px}
 /* 诊断Tab - 青色霓虹 */
 .tab-btn.active[onclick*="diag"]{
   background:rgba(0,240,255,.05);border-color:rgba(0,240,255,.25);
@@ -314,7 +461,7 @@ h1{font-family:var(--display);font-size:1.5rem;font-weight:700;letter-spacing:3p
   --magenta:#ff2d95;
   --purple:#7c3aed;
 }
-.hero{position:relative;min-height:min(55vh,480px);display:flex;align-items:center;justify-content:center;padding:40px 20px 32px;overflow:hidden;margin:-28px -20px 0;
+.hero{position:relative;height:min(55vh,520px);display:flex;align-items:center;justify-content:center;padding:40px 20px 32px;overflow:hidden;margin:-28px -20px 0;
   background:radial-gradient(ellipse 50% 50% at 50% 45%,rgba(0,240,255,.04) 0%,transparent 70%);
   border-bottom:1px solid rgba(0,240,255,.06)}
 .hero-content{position:relative;z-index:2;text-align:center;max-width:640px;width:100%}
@@ -415,6 +562,18 @@ h1{font-family:var(--display);font-size:1.5rem;font-weight:700;letter-spacing:3p
   .hero-score-ring{width:160px;height:160px}
   .score-number-hero{font-size:3rem}
   .hud-corner{width:20px;height:20px}
+  .container{padding:20px 14px}
+  .diag-grid,.two-col,.flow-strip,.support-grid{grid-template-columns:1fr}
+  .tab-nav{gap:10px;padding:0;flex-wrap:wrap}
+  .tab-btn{flex:1 1 calc(50% - 8px);padding:12px 16px;font-size:.92rem}
+  .tab-btn.secondary-tab{flex:1 1 calc(50% - 8px);border-radius:12px}
+  .tab-note{width:100%;margin-left:0}
+  .toolbar-row{align-items:stretch}
+  .search-wrap,.search-input{width:100%}
+  .search-input{min-width:0}
+  .fix-item{flex-direction:column;align-items:flex-start}
+  .fix-btn{width:100%}
+  .result-head,.fix-section-head{flex-direction:column;align-items:flex-start}
 }
 
 /* 无障碍：减少动画 */
@@ -445,12 +604,12 @@ h1{font-family:var(--display);font-size:1.5rem;font-weight:700;letter-spacing:3p
                   style="stroke-dashoffset:${553 - 553 * score.score / 100}"/>
         </svg>
         <div class="score-ring-inner">
-          <div class="score-number-hero">${score.score}</div>
-          <div class="score-label-hero">${score.label}</div>
+          <div class="score-number-hero" id="hero-score-number">${score.score}</div>
+          <div class="score-label-hero" id="hero-score-label">${score.label}</div>
         </div>
       </div>
-      ${prevScore !== null ? renderScoreDelta(score.score, prevScore).replace('score-delta', 'hero-delta') : ''}
-      <div class="hero-tags">
+      <div id="hero-score-delta">${prevScore !== null ? renderScoreDelta(score.score, prevScore).replace('score-delta', 'hero-delta') : ''}</div>
+      <div class="hero-tags" id="hero-tags">
         ${score.breakdown.map(b => `<span class="hero-tag">${CATEGORY_LABELS[b.category]} <em>${b.passed}/${b.total}</em></span>`).join('')}
       </div>
     </div>
@@ -464,22 +623,14 @@ h1{font-family:var(--display);font-size:1.5rem;font-weight:700;letter-spacing:3p
   <div class="tab-nav">
     <button class="tab-btn active" onclick="switchTab('diag')">诊断结果</button>
     <button class="tab-btn" onclick="switchTab('install')">AI 工具安装</button>
-    <button class="tab-btn" onclick="switchTab('learn')">教学中心</button>
-    <button class="tab-btn" onclick="switchTab('resources')">AI 资源</button>
+    <button class="tab-btn secondary-tab" onclick="switchTab('learn')">教学中心</button>
+    <button class="tab-btn secondary-tab" onclick="switchTab('resources')">AI 资源</button>
+    <div class="tab-note">先处理诊断结果，再决定是否安装工具或查看外部资源</div>
   </div>
 
   <!-- 诊断结果 Tab -->
   <div id="tab-diag" class="tab-content active">
-    <div id="results">
-      <button class="scan-btn" onclick="rescan()">重新扫描</button>
-      <button class="scan-btn" style="background:linear-gradient(135deg,rgba(0,240,255,.12),rgba(167,139,250,.12));border-color:rgba(167,139,250,.3);color:#c4b5fd" onclick="openCommunity()">查看社区方案</button>
-      ${renderFixSection(fixesByTier)}
-      ${renderCategoryResults(grouped, score)}
-      <div id="solutions-panel" class="solutions-panel">
-        <div class="section-title" style="margin-top:20px">社区方案 <span class="badge">来自 aicoevo.net</span></div>
-        <div id="solutions-list"></div>
-      </div>
-    </div>
+    ${renderDiagPanel(results, score, prevScore)}
 
     <div id="loading">
       <div class="spinner"></div>
@@ -497,7 +648,7 @@ h1{font-family:var(--display);font-size:1.5rem;font-weight:700;letter-spacing:3p
 
   <!-- 教学中心 Tab -->
   <div id="tab-learn" class="tab-content">
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+    <div class="two-col">
       <div class="card" style="text-align:center;padding:40px 20px">
         <div style="font-family:var(--display);font-size:1.3rem;font-weight:700;letter-spacing:2px;color:var(--green);margin-bottom:8px;text-shadow:0 0 20px rgba(0,255,136,.3)">Claude Code 教学</div>
         <div style="color:var(--text-mid);font-size:.88rem;margin-bottom:24px">大古出品，从入门到精通的 AI 编程实战指南</div>
@@ -649,28 +800,18 @@ h1{font-family:var(--display);font-size:1.5rem;font-weight:700;letter-spacing:3p
 </div>
 
 <script>
+window.__prevScore = ${JSON.stringify(prevScore)};
 window.__scanPayload = {
   results: ${JSON.stringify(results.map(r => ({
     id:r.id, name:r.name, category:r.category, status:r.status,
     message:r.message, detail:r.detail||null,
-    version:r.version||null, path:r.path||null, fixCommand:r.fixCommand||null,
-    severity:r.severity||null,
   })))},
-  score: ${score.score},
+  score: ${JSON.stringify(score)},
   label: ${JSON.stringify(score.label)},
   system: ${JSON.stringify((function(){
     var si=null;
     try{ si=require('../scanners/system-info').collectSystemInfo(); }catch(e){}
     return si||{};
-  })())},
-  pathEntries: ${JSON.stringify((function(){
-    try{ return (process.env.PATH || '').split(';').filter(Boolean); }catch(e){ return []; }
-  })())},
-  envKeys: ${JSON.stringify((function(){
-    var keys=['PYTHONPATH','NODE_PATH','CUDA_PATH','JAVA_HOME','GOPATH','CONDA_PREFIX','HTTP_PROXY','HTTPS_PROXY','NO_PROXY'];
-    var env: Record<string,string>={};
-    keys.forEach(function(k){ var v=process.env[k]; if(v) env[k]=v; });
-    return env;
   })())},
   timestamp: ${JSON.stringify(new Date().toISOString())},
 };
@@ -680,6 +821,118 @@ function switchTab(tab) {
   document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
   document.querySelector('.tab-btn[onclick*="' + tab + '"]').classList.add('active');
   document.getElementById('tab-' + tab).classList.add('active');
+}
+
+function escapeHtml(text) {
+  return String(text)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function setScanPayload(results, score) {
+  window.__scanPayload = {
+    ...(window.__scanPayload || {}),
+    results,
+    score,
+    label: score.label,
+    timestamp: new Date().toISOString(),
+  };
+}
+
+function updateHero(score) {
+  if (!score) return;
+
+  const color = score.score >= 90 ? '#22c55e' : score.score >= 70 ? '#3b82f6' : score.score >= 50 ? '#eab308' : '#ef4444';
+  const numberEl = document.getElementById('hero-score-number');
+  const labelEl = document.getElementById('hero-score-label');
+  const deltaEl = document.getElementById('hero-score-delta');
+  const tagsEl = document.getElementById('hero-tags');
+  const ring = document.getElementById('score-ring-fill');
+  const glow = document.getElementById('score-ring-glow');
+
+  if (numberEl) {
+    numberEl.textContent = String(score.score);
+    numberEl.style.color = color;
+    numberEl.style.textShadow = '0 0 30px ' + color + '40, 0 0 60px ' + color + '15';
+  }
+  if (labelEl) labelEl.textContent = score.label;
+  if (ring) {
+    ring.style.stroke = color;
+    ring.style.strokeDashoffset = String(553 - 553 * score.score / 100);
+  }
+  if (glow) {
+    glow.style.stroke = color;
+    glow.style.strokeDashoffset = String(553 - 553 * score.score / 100);
+  }
+  if (tagsEl && Array.isArray(score.breakdown)) {
+    const labels = ${JSON.stringify(CATEGORY_LABELS)};
+    tagsEl.innerHTML = score.breakdown
+      .map(function(item) {
+        return '<span class="hero-tag">' + labels[item.category] + ' <em>' + item.passed + '/' + item.total + '</em></span>';
+      })
+      .join('');
+  }
+  if (deltaEl) {
+    const prev = window.__prevScore;
+    if (typeof prev === 'number') {
+      const delta = score.score - prev;
+      if (delta === 0) deltaEl.innerHTML = '<div class="hero-delta same">与上次持平 (' + prev + ' 分)</div>';
+      else deltaEl.innerHTML = '<div class="hero-delta ' + (delta > 0 ? 'up' : 'down') + '">' + (delta > 0 ? '+' : '') + delta + ' 分 ' + (delta > 0 ? '↑' : '↓') + '（上次 ' + prev + ' 分）</div>';
+    } else {
+      deltaEl.innerHTML = '';
+    }
+  }
+}
+
+function replaceDiagPanel(html, results, score) {
+  const current = document.getElementById('results');
+  if (current && html) current.outerHTML = html;
+  setScanPayload(results, score);
+  updateHero(score);
+  window.__resultFilter = window.__resultFilter || 'all';
+  applyResultFilters();
+  refreshSolutions();
+}
+
+function setResultFilter(filter, el) {
+  window.__resultFilter = filter;
+  document.querySelectorAll('.filter-chip-btn').forEach(function(btn) {
+    btn.classList.toggle('active', btn === el);
+  });
+  applyResultFilters();
+}
+
+function applyResultFilters() {
+  const filter = window.__resultFilter || 'all';
+  const keyword = ((document.getElementById('result-search') || {}).value || '').trim().toLowerCase();
+  const items = Array.from(document.querySelectorAll('.result-item'));
+  let visibleCount = 0;
+
+  items.forEach(function(item) {
+    const status = item.getAttribute('data-status') || '';
+    const fixable = item.getAttribute('data-fixable') === 'yes';
+    const haystack = (item.getAttribute('data-search') || '').toLowerCase();
+    const matchFilter = filter === 'all'
+      || (filter === 'fixable' && fixable)
+      || status === filter;
+    const matchSearch = !keyword || haystack.includes(keyword);
+    const visible = matchFilter && matchSearch;
+    item.classList.toggle('is-hidden', !visible);
+    if (visible) visibleCount++;
+  });
+
+  document.querySelectorAll('.category-card').forEach(function(card) {
+    const hasVisible = card.querySelector('.result-item:not(.is-hidden)');
+    card.classList.toggle('is-hidden', !hasVisible);
+  });
+
+  const stats = document.getElementById('filter-stats');
+  if (stats) stats.textContent = '显示 ' + visibleCount + ' / ' + items.length;
+
+  const empty = document.getElementById('result-empty');
+  if (empty) empty.style.display = visibleCount === 0 ? 'block' : 'none';
 }
 
 // --- 安装器数据 ---
@@ -902,26 +1155,9 @@ async function rescanOne(scannerId) {
       headers: {'Content-Type':'application/json'},
       body: JSON.stringify({ scannerId }),
     });
-    const newResult = await res.json();
-
-    // 更新 scanner 状态
-    const el = document.querySelector('[data-scanner-id="' + scannerId + '"]');
-    if (el) {
-      el.classList.add('fix-updating');
-      const statusEl = el.querySelector('.status-icon');
-      const msgEl = el.querySelector('.result-msg');
-      const sc = ${JSON.stringify(STATUS_CONFIG)}[newResult.status] || ${JSON.stringify(STATUS_CONFIG)}.unknown;
-      if (statusEl) {
-        statusEl.style.background = sc.bg;
-        statusEl.style.color = sc.color;
-        statusEl.textContent = sc.icon;
-      }
-      if (msgEl) {
-        msgEl.style.color = sc.color;
-        msgEl.textContent = newResult.message;
-      }
-      setTimeout(() => el.classList.remove('fix-updating'), 600);
-    }
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || '重扫失败');
+    replaceDiagPanel(data.html, data.results, data.score);
   } catch(e) {
     // 单项重扫失败不影响主流程
     console.warn('重扫失败:', e);
@@ -930,11 +1166,10 @@ async function rescanOne(scannerId) {
 
 async function rescan() {
   const results = document.getElementById('results');
-  const btn = document.querySelector('.scan-btn');
+  const btn = document.querySelector('.diag-actions .scan-btn');
   if (btn) btn.disabled = true;
 
   // 清空结果区域，插入进度条
-  const CATEGORY_LABELS = ${JSON.stringify(CATEGORY_LABELS)};
   const STATUS_CONFIG = ${JSON.stringify(STATUS_CONFIG)};
   results.innerHTML = '<div id="scan-live-progress" style="text-align:center;padding:24px 0 16px">'
     + '<div style="font-family:var(--mono);font-size:.85rem;color:var(--text-mid);margin-bottom:12px">正在扫描...</div>'
@@ -1027,17 +1262,146 @@ async function rescan() {
             card.scrollIntoView({behavior:'smooth',block:'end'});
           }
 
-          // 扫描完成，刷新完整页面
+          // 扫描完成，局部刷新诊断区和 Hero
           if (eventType === 'done') {
-            setTimeout(() => location.reload(), 600);
+            if (data.ok && data.html) {
+              replaceDiagPanel(data.html, data.results || [], data.score || { score: 0, label: '', breakdown: [] });
+            } else if (data.error) {
+              throw new Error(data.error);
+            }
             return;
           }
         } catch {}
       }
     }
-    setTimeout(() => location.reload(), 1000);
-  } catch(e) { location.reload(); }
+  } catch(e) {
+    console.error(e);
+    location.reload();
+  }
 }
+
+// --- 版本检查 ---
+(async function checkVersion() {
+  try {
+    const res = await fetch('/api/version-check');
+    const {current, latest} = await res.json();
+    if (latest && latest !== current) {
+      const banner = document.getElementById('version-banner');
+      if (banner) {
+        banner.textContent = '发现新版本 v' + latest + ' → 点击查看更新说明';
+        banner.style.display = 'block';
+        banner.onclick = () => window.open('https://github.com/gugug168/WinAICheck/releases', '_blank');
+      }
+    }
+  } catch {}
+})();
+
+function escHtml(s) {
+  var d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+async function refreshSolutions() {
+  try {
+    const payload = window.__scanPayload;
+    if (!payload || !payload.results) return;
+    const failCats = [...new Set(
+      payload.results
+        .filter(r => r.status === 'fail' || r.status === 'warn')
+        .map(r => r.category)
+    )];
+    const panel = document.getElementById('solutions-panel');
+    const list = document.getElementById('solutions-list');
+    if (!panel || !list) return;
+
+    if (failCats.length === 0) {
+      panel.classList.remove('visible');
+      list.innerHTML = '';
+      return;
+    }
+
+    const res = await fetch('/api/solutions?categories=' + failCats.join(','));
+    const data = await res.json();
+    const solutions = data.solutions || data.items || data || [];
+    if (!Array.isArray(solutions) || solutions.length === 0) {
+      panel.classList.remove('visible');
+      list.innerHTML = '';
+      return;
+    }
+
+    list.innerHTML = solutions.map(function(s) {
+      const tags = (s.tags || []).map(function(t) { return '<span class="solution-tag">' + escHtml(t) + '</span>'; }).join('');
+      return '<div class="solution-card">'
+        + '<div class="solution-title">' + escHtml(s.title) + '</div>'
+        + '<div class="solution-meta">'
+        + tags
+        + (s.votes !== undefined ? '<span class="solution-votes">▲ ' + s.votes + '</span>' : '')
+        + (s.author_name ? '<span class="solution-author">' + escHtml(s.author_name) + '</span>' : '')
+        + '</div></div>';
+    }).join('');
+    panel.classList.add('visible');
+  } catch {}
+}
+
+refreshSolutions();
+
+async function openCommunity() {
+  const btn = document.querySelector('[onclick="openCommunity()"]');
+  if (btn) { btn.textContent = '上传中...'; btn.disabled = true; }
+
+  try {
+    const payload = window.__scanPayload || {};
+    const summary = [
+      '将上传以下摘要信息到社区：',
+      '1. 诊断分数与失败分类',
+      '2. 检测项状态与说明',
+      '3. 系统基础摘要（OS / CPU / RAM / GPU / 磁盘）',
+      '',
+      '不会上传完整 PATH、环境变量或用户目录路径。',
+    ].join('\\n');
+    if (!window.confirm(summary)) {
+      if (btn) { btn.textContent = '查看社区方案'; btn.disabled = false; }
+      return;
+    }
+
+    const res = await fetch('/api/stash', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        data: JSON.stringify(payload),
+        fingerprint: JSON.stringify({
+          platform: navigator.platform,
+          userAgent: navigator.userAgent,
+          system: payload.system || {},
+          score: payload.score?.score || payload.score || 0,
+          failCount: (payload.results || []).filter(r => r.status === 'fail').length,
+          failCategories: [...new Set((payload.results || []).filter(r => r.status === 'fail').map(r => r.category))],
+        }),
+      }),
+    });
+
+    if (!res.ok) throw new Error('上传失败: ' + res.status);
+    const {token} = await res.json();
+    if (btn) { btn.textContent = '查看社区方案'; btn.disabled = false; }
+    window.open(${JSON.stringify(buildCommunityClaimUrl('__TOKEN__'))}.replace('__TOKEN__', encodeURIComponent(token)), '_blank');
+  } catch(e) {
+    const message = e instanceof Error ? e.message : String(e);
+    alert('连接社区失败，请检查网络\\n' + message);
+    if (btn) { btn.textContent = '查看社区方案'; btn.disabled = false; }
+  }
+}
+
+window.__resultFilter = window.__resultFilter || 'all';
+applyResultFilters();
+
+document.addEventListener('keydown', function(event) {
+  if (event.key === 'Escape') closeModal();
+});
+
+document.getElementById('modal-overlay')?.addEventListener('click', function(event) {
+  if (event.target === this) closeModal();
+});
 // Hero SVG 分数环入场动画
 (function(){
   var ring=document.getElementById('score-ring-fill');
@@ -1059,19 +1423,134 @@ async function rescan() {
 </html>`;
 }
 
-function renderScoreCard(score: ScoreResult, prevScore: number | null): string {
+export function renderDiagPanel(
+  results: ScanResult[],
+  score: ScoreResult,
+  prevScore: number | null = null,
+): string {
+  const fixes = getFixSuggestions(results);
+  const fixesByTier = {
+    green: fixes.filter(f => f.tier === 'green'),
+    yellow: fixes.filter(f => f.tier === 'yellow'),
+    red: fixes.filter(f => f.tier === 'red'),
+    black: fixes.filter(f => f.tier === 'black'),
+  };
+  const grouped = new Map<ScannerCategory, ScanResult[]>();
+  for (const r of results) grouped.set(r.category, (grouped.get(r.category) || []).concat(r));
+
+  const issueCount = results.filter(r => r.status === 'fail' || r.status === 'warn').length;
+  const topIssues = getPriorityIssues(results);
+  const fixableIds = new Set(fixes.map(f => f.scannerId));
+  const failCount = results.filter(r => r.status === 'fail').length;
+  const warnCount = results.filter(r => r.status === 'warn').length;
+  const passCount = results.filter(r => r.status === 'pass').length;
+
   return `
-  <div class="card score-card" id="score-card">
-    <div class="score-number">${score.score}</div>
-    <div class="score-label">${score.label}</div>
-    ${prevScore !== null ? renderScoreDelta(score.score, prevScore) : ''}
-    <div class="score-detail">
-      ${score.breakdown.map(b => `<div class="score-tag">${CATEGORY_LABELS[b.category]}: <span class="pass-count">${b.passed}/${b.total}</span></div>`).join('')}
+  <div id="results" class="diag-panel">
+    ${renderWorkflowStrip(results)}
+    <div class="diag-actions">
+      <button class="scan-btn" onclick="rescan()">重新扫描</button>
+      <button class="scan-btn secondary" onclick="openCommunity()">查看社区方案</button>
     </div>
+
+    <div class="diag-grid">
+      ${renderOutcomeCard(score, results)}
+      <div class="card">
+        <div class="section-title">当前最该处理 <span class="badge">${topIssues.length} 项</span></div>
+        <div class="priority-list">
+          ${topIssues.length > 0 ? topIssues.map((issue, idx) => {
+            const sc = STATUS_CONFIG[issue.status];
+            return `
+            <div class="priority-item">
+              <div class="priority-item-head">
+                <div class="priority-item-title">${esc(issue.name)}</div>
+                <div class="priority-index">${idx + 1}</div>
+              </div>
+              <div class="result-meta">
+                <span class="result-chip status-${issue.status}" style="color:${sc.color}">${sc.label}</span>
+                <span class="result-chip">${CATEGORY_LABELS[issue.category]}</span>
+                ${fixableIds.has(issue.id) ? '<span class="result-chip fixable">可修复</span>' : ''}
+              </div>
+              <div class="priority-item-copy">${esc(issue.message)}</div>
+            </div>`;
+          }).join('') : '<div class="priority-item"><div class="priority-item-copy">当前没有失败或警告项，可以直接开始使用。</div></div>'}
+        </div>
+      </div>
+    </div>
+
+    <div class="card toolbar-card">
+      <div class="toolbar-row">
+        <div class="filter-group">
+          <button class="filter-chip-btn active" onclick="setResultFilter('all', this)">全部 ${results.length}</button>
+          <button class="filter-chip-btn" onclick="setResultFilter('fail', this)">失败 ${failCount}</button>
+          <button class="filter-chip-btn" onclick="setResultFilter('warn', this)">警告 ${warnCount}</button>
+          <button class="filter-chip-btn" onclick="setResultFilter('fixable', this)">可修复 ${fixes.length}</button>
+          <button class="filter-chip-btn" onclick="setResultFilter('pass', this)">已通过 ${passCount}</button>
+        </div>
+        <div class="search-wrap">
+          <input id="result-search" class="search-input" type="search" placeholder="搜索检测项、说明、详情" oninput="applyResultFilters()">
+          <div id="filter-stats" class="filter-stats">显示 ${results.length} / ${results.length}</div>
+        </div>
+      </div>
+    </div>
+
+    ${renderFixSection(fixesByTier)}
+    ${renderCategoryResults(grouped, score, fixableIds)}
+    <div id="result-empty" class="card result-empty">当前筛选条件下没有检测项。</div>
+    <div id="solutions-panel" class="solutions-panel">
+      <div class="section-title" style="margin-top:20px">社区方案 <span class="badge">来自 aicoevo.net</span></div>
+      <div id="solutions-list"></div>
+    </div>
+    ${renderSupportHub()}
   </div>`;
 }
 
-function renderCategoryResults(grouped: Map<ScannerCategory, ScanResult[]>, score: ScoreResult): string {
+function renderOutcomeCard(score: ScoreResult, results: ScanResult[]): string {
+  const summary = getOutcomeSummary(score, results);
+  const failCount = results.filter(r => r.status === 'fail').length;
+  const warnCount = results.filter(r => r.status === 'warn').length;
+  const fixCount = getFixSuggestions(results).length;
+
+  return `
+  <div class="card outcome-card ${summary.tone}">
+    <div class="eyebrow">环境结论</div>
+    <div class="outcome-title">${summary.title}</div>
+    <div class="outcome-copy">${summary.subtitle}</div>
+    <div class="summary-badges">
+      <span class="summary-badge"><strong>${score.score}</strong> 分</span>
+      <span class="summary-badge"><strong>${failCount}</strong> 个失败</span>
+      <span class="summary-badge"><strong>${warnCount}</strong> 个警告</span>
+      <span class="summary-badge"><strong>${fixCount}</strong> 项可行动作</span>
+    </div>
+    <div class="outcome-next">${summary.nextStep}</div>
+  </div>`;
+}
+
+function renderWorkflowStrip(results: ScanResult[]): string {
+  const state = getWorkflowState(results);
+  const activeIndex = state.stage === 'diagnose' ? 0 : state.stage === 'fix' ? 1 : 2;
+  const steps = [
+    { title: '诊断完成', copy: '先看结论、Top 问题和失败项，确认阻塞点。' },
+    { title: '处理问题', copy: state.summary },
+    { title: '复检确认', copy: '修复后重新扫描，确认总分、分类通过率和关键链路已更新。' },
+  ];
+
+  return `
+  <div class="flow-strip">
+    ${steps.map((step, idx) => `
+      <div class="flow-card ${idx <= activeIndex ? 'active' : ''}" data-step="${idx + 1}">
+        <div class="flow-title">${step.title}</div>
+        <div class="flow-copy">${step.copy}</div>
+      </div>
+    `).join('')}
+  </div>`;
+}
+
+function renderCategoryResults(
+  grouped: Map<ScannerCategory, ScanResult[]>,
+  score: ScoreResult,
+  fixableIds: Set<string>,
+): string {
   const html: string[] = [];
   for (const [cat, items] of grouped) {
     const bd = score.breakdown.find(b => b.category === cat);
@@ -1081,7 +1560,7 @@ function renderCategoryResults(grouped: Map<ScannerCategory, ScanResult[]>, scor
     const barColor = pct === 100 ? '#22c55e' : pct >= 60 ? '#eab308' : '#ef4444';
 
     html.push(`
-    <div class="card">
+    <div class="card category-card" data-category-card="${cat}">
       <div class="section-title">
         ${CATEGORY_LABELS[cat]}
         <span class="badge">${passed}/${total} 通过</span>
@@ -1090,11 +1569,22 @@ function renderCategoryResults(grouped: Map<ScannerCategory, ScanResult[]>, scor
       <div style="margin-top:12px">
         ${items.map(r => {
           const sc = STATUS_CONFIG[r.status];
+          const searchText = [r.name, r.message, r.detail || '', CATEGORY_LABELS[r.category]].join(' ').toLowerCase();
           return `
-          <div class="result-item" data-scanner-id="${esc(r.id)}">
+          <div class="result-item"
+               data-scanner-id="${esc(r.id)}"
+               data-status="${esc(r.status)}"
+               data-fixable="${fixableIds.has(r.id) ? 'yes' : 'no'}"
+               data-search="${esc(searchText)}">
             <div class="status-icon" style="background:${sc.bg};color:${sc.color}">${sc.icon}</div>
-            <div>
-              <div class="result-name">${esc(r.name)}</div>
+            <div style="flex:1">
+              <div class="result-head">
+                <div class="result-name">${esc(r.name)}</div>
+                <div class="result-meta">
+                  <span class="result-chip status-${r.status}" style="color:${sc.color}">${sc.label}</span>
+                  ${fixableIds.has(r.id) ? '<span class="result-chip fixable">可修复</span>' : ''}
+                </div>
+              </div>
               <div class="result-msg" style="color:${sc.color}">${esc(r.message)}</div>
               ${r.detail ? `<div class="result-detail">${esc(r.detail)}</div>` : ''}
             </div>
@@ -1113,13 +1603,18 @@ function renderFixSection(fixesByTier: Record<string, FixSuggestion[]>): string 
   const sections: string[] = [];
   const allFixesWithIdx = allFixes.map((f, i) => ({ ...f, _idx: i }));
 
-  for (const [tier, label] of [['green', '一键修复'], ['yellow', '确认修复'], ['red', '操作指引'], ['black', '仅供参考']] as const) {
-    const items = allFixesWithIdx.filter(f => f.tier === tier);
+  for (const section of FIX_ACTION_SECTIONS) {
+    const items = allFixesWithIdx.filter(f => f.tier === section.tier);
     if (items.length === 0) continue;
-    const tc = TIER_CONFIG[tier];
+    const tc = TIER_CONFIG[section.tier];
     sections.push(`
-    <div style="margin-bottom:8px">
-      <div style="font-size:.82rem;font-weight:600;color:${tc.color};margin-bottom:8px">${tc.icon} ${label} (${items.length})</div>
+    <div class="fix-section-block">
+      <div class="fix-section-head">
+        <div>
+          <div class="fix-section-title" style="color:${tc.color}">${tc.icon} ${section.title} (${items.length})</div>
+          <div class="fix-section-desc">${section.desc}</div>
+        </div>
+      </div>
       ${items.map(f => `
       <div class="fix-item">
         <div class="fix-info">
@@ -1129,15 +1624,38 @@ function renderFixSection(fixesByTier: Record<string, FixSuggestion[]>): string 
           <div class="fix-risk">风险: ${esc(f.risk)}</div>
           <div id="fix-result-${f._idx}"></div>
         </div>
-        ${(tier === 'green' || tier === 'yellow') ? `<button id="fix-btn-${f._idx}" class="fix-btn ${tier}" onclick="openModal(${f._idx})">${label}</button>` : ''}
+        ${(section.tier === 'green' || section.tier === 'yellow')
+          ? `<button id="fix-btn-${f._idx}" class="fix-btn ${section.tier}" onclick="openModal(${f._idx})">${section.buttonLabel}</button>`
+          : ''}
       </div>`).join('')}
     </div>`);
   }
 
   return `
   <div class="card fix-section">
-    <div class="section-title" style="color:#22c55e">修复建议 (${allFixes.length} 项)</div>
+    <div class="section-title" style="color:#22c55e">修复建议 <span class="badge">${allFixes.length} 项</span></div>
     ${sections.join('')}
+  </div>`;
+}
+
+function renderSupportHub(): string {
+  return `
+  <div class="card support-hub">
+    <div class="section-title">后续辅助入口 <span class="badge">低优先级</span></div>
+    <div class="support-grid">
+      <a class="support-link" href="javascript:void(0)" onclick="switchTab('install')">
+        <div class="support-link-title">去安装工具</div>
+        <div class="support-link-copy">诊断已经明确问题后，再进入一键安装，避免装了但仍不可用。</div>
+      </a>
+      <a class="support-link" href="javascript:void(0)" onclick="switchTab('learn')">
+        <div class="support-link-title">查看教程</div>
+        <div class="support-link-copy">适合环境已基本就绪后再看，避免边看边配导致路径更乱。</div>
+      </a>
+      <a class="support-link" href="javascript:void(0)" onclick="switchTab('resources')">
+        <div class="support-link-title">外部资源</div>
+        <div class="support-link-copy">模型套餐、API 平台和镜像站都保留，但不再放在主流程前面。</div>
+      </a>
+    </div>
   </div>`;
 }
 
@@ -1192,95 +1710,4 @@ function renderScoreDelta(current: number, prev: number): string {
 
 function esc(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-}
-
-// --- 版本检查 ---
-(async function checkVersion() {
-  try {
-    const res = await fetch('/api/version-check');
-    const {current, latest} = await res.json();
-    if (latest && latest !== current) {
-      const banner = document.getElementById('version-banner');
-      if (banner) {
-        banner.textContent = '发现新版本 v' + latest + ' → 点击查看更新说明';
-        banner.style.display = 'block';
-        banner.onclick = () => window.open('https://github.com/gugug168/WinAICheck/releases', '_blank');
-      }
-    }
-  } catch {}
-})();
-
-// --- 社区方案拉取 ---
-(async function fetchSolutions() {
-  try {
-    const payload = window.__scanPayload;
-    if (!payload || !payload.results) return;
-    const failCats = [...new Set(
-      payload.results
-        .filter(r => r.status === 'fail' || r.status === 'warn')
-        .map(r => r.category)
-    )];
-    if (failCats.length === 0) return;
-
-    const res = await fetch('/api/solutions?categories=' + failCats.join(','));
-    const data = await res.json();
-    const solutions = data.solutions || data.items || data || [];
-    if (!Array.isArray(solutions) || solutions.length === 0) return;
-
-    const panel = document.getElementById('solutions-panel');
-    const list = document.getElementById('solutions-list');
-    if (!panel || !list) return;
-
-    list.innerHTML = (solutions as CommunitySolution[]).map((s) => {
-      const tags = (s.tags || []).map((t) => '<span class="solution-tag">' + escHtml(t) + '</span>').join('');
-      return '<div class="solution-card">'
-        + '<div class="solution-title">' + escHtml(s.title) + '</div>'
-        + '<div class="solution-meta">'
-        + tags
-        + (s.votes !== undefined ? '<span class="solution-votes">▲ ' + s.votes + '</span>' : '')
-        + (s.author_name ? '<span class="solution-author">' + escHtml(s.author_name) + '</span>' : '')
-        + '</div></div>';
-    }).join('');
-    panel.classList.add('visible');
-  } catch {}
-})();
-
-function escHtml(s: string) {
-  var d = document.createElement('div');
-  d.textContent = s;
-  return d.innerHTML;
-}
-
-async function openCommunity() {
-  const btn = document.querySelector<HTMLButtonElement>('[onclick="openCommunity()"]');
-  if (btn) { btn.textContent = '上传中...'; btn.disabled = true; }
-
-  try {
-    const res = await fetch('/api/stash', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({
-        data: JSON.stringify(window.__scanPayload || {}),
-        fingerprint: JSON.stringify({
-          platform: navigator.platform,
-          userAgent: navigator.userAgent,
-          // 新增：系统摘要供经验匹配用
-          system: window.__scanPayload?.system || {},
-          pathEntries: window.__scanPayload?.pathEntries || [],
-          envKeys: window.__scanPayload?.envKeys || {},
-          score: window.__scanPayload?.score || 0,
-          failCount: (window.__scanPayload?.results || []).filter((r: any) => r.status === 'fail').length,
-          failCategories: [...new Set((window.__scanPayload?.results || []).filter((r: any) => r.status === 'fail').map((r: any) => r.category))],
-        }),
-      }),
-    });
-
-    if (!res.ok) throw new Error('上传失败: ' + res.status);
-    const {token} = await res.json();
-    window.open('https://aicoevo.net/claim?t=' + token, '_blank');
-  } catch(e: unknown) {
-    const message = e instanceof Error ? e.message : String(e);
-    alert('连接社区失败，请检查网络\\n' + message);
-    if (btn) { btn.textContent = '查看社区方案'; btn.disabled = false; }
-  }
 }
