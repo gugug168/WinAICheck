@@ -19,8 +19,8 @@ const scanner: Scanner = {
         id: this.id,
         name: this.name,
         category: this.category,
-        status: 'fail',
-        message: 'nvidia-smi 不可用，未检测到 NVIDIA GPU 或驱动未安装',
+        status: 'unknown',
+        message: '未检测到可用的 NVIDIA GPU 信息',
       };
     }
 

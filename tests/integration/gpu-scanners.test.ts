@@ -12,14 +12,14 @@ function setupMock(responses: Map<string, MockResponse>) {
 describe('gpu-driver scanner', () => {
   afterEach(teardownMock);
 
-  test('无 NVIDIA → fail', async () => {
+  test('无 NVIDIA → unknown', async () => {
     setupMock(new Map([
-      ['nvidia-smi', { exitCode: 1 }],
+      ['nvidia-smi --query-gpu=name,driver_version --format=csv,noheader', { exitCode: 1 }],
     ]));
     const scanner = getScannerById('gpu-driver')!;
     const result = await scanner.scan();
-    expect(result.status).toBe('fail');
-    expect(result.message).toContain('不可用');
+    expect(result.status).toBe('unknown');
+    expect(result.message).toContain('NVIDIA');
   });
 
   test('驱动过旧 (<525) → warn', async () => {
@@ -52,15 +52,15 @@ describe('gpu-driver scanner', () => {
 describe('cuda-version scanner', () => {
   afterEach(teardownMock);
 
-  test('无 CUDA → fail', async () => {
+  test('无 CUDA → unknown', async () => {
     setupMock(new Map([
       ['nvcc --version', { exitCode: 1 }],
       ['nvidia-smi', { exitCode: 1 }],
     ]));
     const scanner = getScannerById('cuda-version')!;
     const result = await scanner.scan();
-    expect(result.status).toBe('fail');
-    expect(result.message).toContain('未安装');
+    expect(result.status).toBe('unknown');
+    expect(result.message).toContain('Toolkit');
   });
 
   test('CUDA Toolkit 已安装 → pass', async () => {
@@ -98,34 +98,59 @@ describe('cuda-version scanner', () => {
 describe('virtualization scanner', () => {
   afterEach(teardownMock);
 
-  test('虚拟化已启用 → pass', async () => {
+  test('WSL2 可用 → pass', async () => {
     setupMock(new Map([
-      ['wmic computersystem get HyperVisorPresent /value', {
-        stdout: 'HyperVisorPresent=TRUE',
+      ['wsl --status', {
+        stdout: '默认版本: 2\n默认分发: Ubuntu-24.04',
         exitCode: 0,
       }],
     ]));
     const scanner = getScannerById('virtualization')!;
     const result = await scanner.scan();
     expect(result.status).toBe('pass');
-    expect(result.message).toContain('已启用');
+    expect(result.message).toContain('WSL2');
   });
 
-  test('虚拟化未启用 → warn', async () => {
+  test('BIOS 未启用虚拟化 → warn', async () => {
     setupMock(new Map([
-      ['wmic computersystem get HyperVisorPresent /value', {
-        stdout: 'HyperVisorPresent=FALSE',
+      ['wsl --status', { exitCode: 1 }],
+      ['systeminfo', {
+        stdout: 'Virtualization Enabled In Firmware: No',
+        exitCode: 0,
+      }],
+      ['powershell -Command "(Get-CimInstance Win32_Processor | Select-Object -ExpandProperty VirtualizationFirmwareEnabled)"', {
+        stdout: 'False',
         exitCode: 0,
       }],
     ]));
     const scanner = getScannerById('virtualization')!;
     const result = await scanner.scan();
     expect(result.status).toBe('warn');
+    expect(result.message).toContain('BIOS');
+  });
+
+  test('固件已启用 → pass', async () => {
+    setupMock(new Map([
+      ['wsl --status', { exitCode: 1 }],
+      ['systeminfo', {
+        stdout: 'Virtualization Enabled In Firmware: Yes',
+        exitCode: 0,
+      }],
+      ['powershell -Command "(Get-CimInstance Win32_Processor | Select-Object -ExpandProperty VirtualizationFirmwareEnabled)"', {
+        stdout: 'True',
+        exitCode: 0,
+      }],
+    ]));
+    const scanner = getScannerById('virtualization')!;
+    const result = await scanner.scan();
+    expect(result.status).toBe('pass');
   });
 
   test('查询失败 → unknown', async () => {
     setupMock(new Map([
-      ['wmic computersystem get HyperVisorPresent /value', { exitCode: 1 }],
+      ['wsl --status', { exitCode: 1 }],
+      ['systeminfo', { exitCode: 1 }],
+      ['powershell -Command "(Get-CimInstance Win32_Processor | Select-Object -ExpandProperty VirtualizationFirmwareEnabled)"', { exitCode: 1 }],
     ]));
     const scanner = getScannerById('virtualization')!;
     const result = await scanner.scan();

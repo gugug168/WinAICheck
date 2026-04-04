@@ -153,7 +153,7 @@ describe('package-managers scanner', () => {
     expect(result.status).toBe('pass');
   });
 
-  test('部分安装 → pass（只要有）', async () => {
+  test('部分安装 → warn（缺少核心包管理器）', async () => {
     setupMock(new Map([
       ['pip --version', { stdout: 'pip 24.0', exitCode: 0 }],
       ['npm --version', { exitCode: 1 }],
@@ -163,7 +163,8 @@ describe('package-managers scanner', () => {
     ]));
     const scanner = getScannerById('package-managers')!;
     const result = await scanner.scan();
-    expect(result.status).toBe('pass');
+    expect(result.status).toBe('warn');
+    expect(result.message).toContain('缺少 npm');
   });
 
   test('全部未安装 → fail', async () => {

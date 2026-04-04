@@ -10,6 +10,7 @@ const scanner: Scanner = {
   id: 'uv-package-manager',
   name: 'uv 包管理器检测',
   category: 'toolchain',
+  affectsScore: false,
 
   async scan(): Promise<ScanResult> {
     if (!commandExists('uv')) {

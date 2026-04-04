@@ -11,26 +11,39 @@ const scanner: Scanner = {
     const pathVar = process.env.PATH || '';
     const length = pathVar.length;
     const entries = pathVar.split(';').filter(Boolean);
-    const MAX_SAFE = 2048;
+    const MAX_WARN = 4096;
+    const MAX_FAIL = 8191;
 
-    if (length > MAX_SAFE) {
-      // 检查重复项
-      const seen = new Map<string, number>();
-      for (const entry of entries) {
-        const normalized = entry.toLowerCase().replace(/\\$/, '');
-        seen.set(normalized, (seen.get(normalized) || 0) + 1);
-      }
-      const duplicates = [...seen.entries()].filter(([, count]) => count > 1);
+    const seen = new Map<string, number>();
+    for (const entry of entries) {
+      const normalized = entry.toLowerCase().replace(/\\$/, '');
+      seen.set(normalized, (seen.get(normalized) || 0) + 1);
+    }
+    const duplicates = [...seen.entries()].filter(([, count]) => count > 1);
 
+    if (length > MAX_FAIL) {
       return {
         id: this.id,
         name: this.name,
         category: this.category,
         status: 'fail',
-        message: `PATH 过长 (${length} 字符，安全上限 ${MAX_SAFE})，含 ${entries.length} 个条目`,
+        message: `PATH 过长 (${length} 字符，接近系统上限 ${MAX_FAIL})`,
         detail: duplicates.length > 0
           ? `重复项:\n${duplicates.map(([p, c]) => `  ${p} (x${c})`).join('\n')}`
-          : undefined,
+          : `PATH 条目数: ${entries.length}`,
+      };
+    }
+
+    if (length > MAX_WARN || duplicates.length > 0) {
+      return {
+        id: this.id,
+        name: this.name,
+        category: this.category,
+        status: 'warn',
+        message: `PATH 偏长或存在冗余 (${length} 字符，${entries.length} 个条目)`,
+        detail: duplicates.length > 0
+          ? `重复项:\n${duplicates.map(([p, c]) => `  ${p} (x${c})`).join('\n')}`
+          : `建议保持在 ${MAX_WARN} 字符以内，避免继续膨胀`,
       };
     }
     return {
@@ -38,7 +51,7 @@ const scanner: Scanner = {
       name: this.name,
       category: this.category,
       status: 'pass',
-      message: `PATH 长度正常 (${length}/${MAX_SAFE} 字符，${entries.length} 个条目)`,
+      message: `PATH 长度正常 (${length}/${MAX_WARN} 字符，${entries.length} 个条目)`,
     };
   },
 };

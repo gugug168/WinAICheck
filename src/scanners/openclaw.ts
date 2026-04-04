@@ -10,6 +10,7 @@ const scanner: Scanner = {
   id: 'openclaw',
   name: 'OpenClaw 检测',
   category: 'toolchain',
+  affectsScore: false,
 
   async scan(): Promise<ScanResult> {
     if (!commandExists('openclaw')) {

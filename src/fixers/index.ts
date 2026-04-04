@@ -98,6 +98,31 @@ function emptyBackup(scannerId: string): BackupData {
   return { scannerId, timestamp: Date.now(), data: {} };
 }
 
+function escapePowerShellSingleQuotedString(value: string): string {
+  return value.replace(/'/g, "''");
+}
+
+function buildGitPathFixCommand(): string {
+  return [
+    '$gitSource=(Get-Command git).Source',
+    '$gitCmdDir=Split-Path -Parent $gitSource',
+    '$gitDir=Split-Path -Parent $gitCmdDir',
+    '$dirs=@("$gitDir\\bin","$gitDir\\usr\\bin")',
+    "$path=[Environment]::GetEnvironmentVariable('Path','User')",
+    '$entries=@()',
+    "if($path){$entries=$path -split ';' | Where-Object { $_ }}",
+    "foreach($d in $dirs){ if(-not ($entries -contains $d)){ $entries += $d } }",
+    "$newPath=($entries | Select-Object -Unique) -join ';'",
+    "[Environment]::SetEnvironmentVariable('Path',$newPath,'User')",
+    'echo $newPath',
+  ].join('; ');
+}
+
+export const _testHelpers = {
+  escapePowerShellSingleQuotedString,
+  buildGitPathFixCommand,
+};
+
 /** 通用执行器：只执行命令，不备份 */
 function simpleExecute(fix: FixSuggestion, _backup: BackupData): Promise<FixResult> {
   const results: string[] = [];
@@ -684,7 +709,7 @@ registerFixer({
       tier: 'green',
       description: '将 Git\\bin、Git\\usr\\bin 添加到用户 PATH 环境变量',
       commands: [
-        'powershell -Command "$gitDir=(Get-Command git).Source | Split-Path | Split-Parent; $dirs=@(\"$gitDir\\bin\",\"$gitDir\\usr\\bin\"); $path=[Environment]::GetEnvironmentVariable(\'Path\',\'User\'); foreach($d in $dirs){ if($path -notlike \"*$d*\"){ $path+=\";$d\" } }; [Environment]::SetEnvironmentVariable(\'Path\',$path,\'User\'); echo $path"',
+        `powershell -Command "${buildGitPathFixCommand()}"`,
       ],
       risk: '低风险：仅添加 Git 子目录到用户 PATH',
     };
@@ -707,7 +732,8 @@ registerFixer({
   },
   async rollback(backup: BackupData): Promise<void> {
     if (backup.data.oldPath) {
-      runCommand(`powershell -Command "[Environment]::SetEnvironmentVariable('Path','${backup.data.oldPath}','User')"`, 10000);
+      const escapedPath = escapePowerShellSingleQuotedString(backup.data.oldPath);
+      runCommand(`powershell -Command "[Environment]::SetEnvironmentVariable('Path','${escapedPath}','User')"`, 10000);
     }
   },
 });

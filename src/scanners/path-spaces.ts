@@ -11,12 +11,14 @@ const scanner: Scanner = {
   async scan(): Promise<ScanResult> {
     const tools = ['git', 'node', 'python'];
     const problems: string[] = [];
+    const safeRoots = [/^C:\\Program Files( \(x86\))?\\/i];
 
     for (const tool of tools) {
       const { stdout, exitCode } = runCommand(`where.exe ${tool}`, 5000);
       if (exitCode === 0 && stdout) {
         const firstPath = stdout.split('\n')[0].trim();
-        if (firstPath.includes(' ')) {
+        const isSafeSpacePath = safeRoots.some(pattern => pattern.test(firstPath));
+        if (firstPath.includes(' ') && !isSafeSpacePath) {
           problems.push(`${tool}: ${firstPath}`);
         }
       }

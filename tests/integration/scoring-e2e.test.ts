@@ -52,7 +52,8 @@ function allPassResponses(): Map<string, MockResponse> {
     // cuda
     ['nvcc --version', { stdout: 'Cuda compilation tools, release 12.1, V12.1.105', exitCode: 0 }],
     // virtualization
-    ['wmic computersystem get HyperVisorPresent /value', { stdout: 'HyperVisorPresent=TRUE', exitCode: 0 }],
+    ['systeminfo', { stdout: 'Virtualization Enabled In Firmware: Yes', exitCode: 0 }],
+    ['powershell -Command "(Get-CimInstance Win32_Processor | Select-Object -ExpandProperty VirtualizationFirmwareEnabled)"', { stdout: 'True', exitCode: 0 }],
     // wsl
     ['wsl --status', { stdout: '默认版本: 2\n默认分发: Ubuntu', exitCode: 0 }],
     // vram
@@ -71,7 +72,40 @@ function allPassResponses(): Map<string, MockResponse> {
       stdout: 'Source: VMIC Provider\nLast Successful Sync Time: 2026-03-31', exitCode: 0,
     }],
     // firewall
-    ['netsh advfirewall', { stdout: '22 443 7860 8888 11434', exitCode: 0 }],
+    ['netsh advfirewall firewall show rule name=all verbose', {
+      stdout: [
+        'Rule Name: SSH',
+        'Direction: In',
+        'Enabled: Yes',
+        'Action: Allow',
+        'LocalPort: 22',
+        '',
+        'Rule Name: HTTPS',
+        'Direction: In',
+        'Enabled: Yes',
+        'Action: Allow',
+        'LocalPort: 443',
+        '',
+        'Rule Name: Gradio',
+        'Direction: In',
+        'Enabled: Yes',
+        'Action: Allow',
+        'LocalPort: 7860',
+        '',
+        'Rule Name: Jupyter',
+        'Direction: In',
+        'Enabled: Yes',
+        'Action: Allow',
+        'LocalPort: 8888',
+        '',
+        'Rule Name: Ollama',
+        'Direction: In',
+        'Enabled: Yes',
+        'Action: Allow',
+        'LocalPort: 11434',
+      ].join('\n'),
+      exitCode: 0,
+    }],
     // ssl
     ['curl -Is --max-time 5 https://pypi.org', { stdout: 'HTTP/2 200', exitCode: 0 }],
     ['curl -Is --max-time 5 https://registry.npmjs.org', { stdout: 'HTTP/2 200', exitCode: 0 }],
@@ -145,6 +179,17 @@ describe('scoring e2e', () => {
     ];
     const score = calculateScore(results);
     // only 1 scorable, 1 pass → 100
+    expect(score.score).toBe(100);
+  });
+
+  test('可选工具未安装不显著拉低总分', () => {
+    const results: ScanResult[] = [
+      { id: 'path-chinese', name: 'Path', category: 'path', status: 'pass', message: 'ok' },
+      { id: 'git', name: 'Git', category: 'toolchain', status: 'pass', message: 'ok' },
+      { id: 'openclaw', name: 'OpenClaw', category: 'toolchain', status: 'warn', message: 'optional' },
+      { id: 'ccswitch', name: 'CCSwitch', category: 'toolchain', status: 'warn', message: 'optional' },
+    ];
+    const score = calculateScore(results);
     expect(score.score).toBe(100);
   });
 

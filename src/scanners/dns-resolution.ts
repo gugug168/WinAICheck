@@ -23,7 +23,15 @@ const scanner: Scanner = {
         `nslookup ${domain}`,
         8000,
       );
-      if (exitCode === 0 && /Address|Addresses/i.test(stdout)) {
+      const failureHints = /Non-existent domain|can't find|timed out|server failed|NXDOMAIN/i;
+      const blocks = stdout
+        .split(/\r?\n\r?\n+/)
+        .map(block => block.trim())
+        .filter(Boolean);
+      const answerSection = blocks.slice(1).join('\n\n');
+      const hasAnswer = !!answerSection && /(?:\b\d{1,3}(?:\.\d{1,3}){3}\b|[a-f0-9:]{2,}:[a-f0-9:]{2,})/i.test(answerSection);
+
+      if (exitCode === 0 && !failureHints.test(stdout) && hasAnswer) {
         ok.push(name);
       } else {
         failed.push(name);

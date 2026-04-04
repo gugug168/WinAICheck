@@ -24,6 +24,7 @@ export interface Scanner {
   id: string;
   name: string;
   category: ScannerCategory;
+  affectsScore?: boolean;
   scan(): Promise<ScanResult>;
 }
 

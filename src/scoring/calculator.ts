@@ -1,5 +1,6 @@
 import type { ScanResult, ScannerCategory, ScoreGrade, ScoreResult } from '../scanners/types';
 import { CATEGORY_WEIGHTS } from '../scanners/types';
+import { getScannerById } from '../scanners/registry';
 
 /** 按类别分组结果 */
 function groupByCategory(results: ScanResult[]): Map<ScannerCategory, ScanResult[]> {
@@ -23,8 +24,11 @@ export function calculateScore(results: ScanResult[]): ScoreResult {
 
   for (const [category, items] of grouped) {
     const weight = CATEGORY_WEIGHTS[category];
-    // "unknown" 不计入分母
-    const scorable = items.filter(r => r.status !== 'unknown');
+    // 仅统计会影响总分的 scanner，且 unknown 不计入分母
+    const scorable = items.filter(r => {
+      if (r.status === 'unknown') return false;
+      return getScannerById(r.id)?.affectsScore !== false;
+    });
     const passed = scorable.filter(r => r.status === 'pass').length;
     const total = scorable.length;
 

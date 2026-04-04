@@ -37,7 +37,11 @@
     "dev": "bun run src/main.ts",
     "dev:cli": "bun run src/main.ts -- --cli",
     "build": "bun run scripts/prebuild.ts && bun build --compile --minify src/main.ts --outfile dist/WinAICheck.exe",
-    "test": "bun test"
+    "test": "bun run scripts/test-all.ts",
+    "test:core": "bun run scripts/test-all.ts core",
+    "test:integration": "bun run scripts/test-all.ts integration",
+    "test:all": "bun run scripts/test-all.ts all",
+    "test:aggregate": "bun test"
   },
   "dependencies": {},
   "devDependencies": {

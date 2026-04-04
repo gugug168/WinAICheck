@@ -2,6 +2,7 @@ import { describe, it, expect } from 'bun:test';
 import { calculateScore } from '../src/scoring/calculator';
 import type { ScanResult } from '../src/scanners/types';
 import { sanitize, detectSensitive } from '../src/privacy/sanitizer';
+import '../src/scanners/index';
 
 // ==================== Scoring Calculator ====================
 
@@ -104,6 +105,18 @@ describe('calculateScore', () => {
     // path pass (1.5), toolchain warn → 不算 pass
     // (1.5 / (1.5 + 1.0)) * 100 = 60
     expect(score).toBe(60);
+  });
+
+  it('可选工具 warn 不进入分母', () => {
+    const results: ScanResult[] = [
+      makeResult({ id: 'path-chinese', category: 'path', status: 'pass' }),
+      makeResult({ id: 'openclaw', category: 'toolchain', status: 'warn' }),
+      makeResult({ id: 'ccswitch', category: 'toolchain', status: 'warn' }),
+    ];
+    const { score, breakdown } = calculateScore(results);
+    expect(score).toBe(100);
+    const tcBreakdown = breakdown.find(b => b.category === 'toolchain');
+    expect(tcBreakdown?.total).toBe(0);
   });
 
   it('breakdown 包含每类统计', () => {

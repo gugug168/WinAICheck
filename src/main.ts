@@ -5,6 +5,7 @@ import { generateJsonReport } from './report/json';
 import { generateHtmlReport } from './report/html';
 import { getConsent, saveConsent } from './privacy/consent';
 import { createPayload, saveLocal } from './privacy/uploader';
+import { loadPreviousReport, loadHistory } from './privacy/uploader';
 import { writeFileSync, mkdirSync, existsSync } from 'fs';
 import { join } from 'path';
 import { execSync } from 'child_process';
@@ -109,7 +110,8 @@ async function webMode(port: number) {
         if (!cached) cached = await runAllScanners(5);
         const score = calculateScore(cached);
         saveLocal(createPayload(cached, score));
-        return new Response(generateWebUI(cached, score), {
+        const prev = loadPreviousReport();
+        return new Response(generateWebUI(cached, score, prev?.score ?? null), {
           headers: { 'Content-Type': 'text/html; charset=utf-8' },
         });
       }
@@ -219,6 +221,45 @@ async function webMode(port: number) {
           return Response.json(remoteData, { status: remoteRes.status });
         } catch (e: any) {
           return Response.json({ error: '无法连接 AIECCOEVO 服务器: ' + e.message }, { status: 502 });
+        }
+      }
+
+      // Solutions: 代理平台社区方案
+      if (url.pathname === '/api/solutions' && req.method === 'GET') {
+        try {
+          const categories = url.searchParams.get('categories') || '';
+          const params = new URLSearchParams();
+          if (categories) params.set('category', categories);
+          params.set('page_size', '20');
+          const remoteUrl = `https://aicoevo.net/api/v1/solutions?${params}`;
+          const remoteRes = await fetch(remoteUrl, { headers: { 'Accept': 'application/json' } });
+          const remoteData = await remoteRes.json();
+          return Response.json(remoteData, { status: remoteRes.status });
+        } catch (e: any) {
+          return Response.json({ solutions: [], error: '无法获取社区方案' }, { status: 502 });
+        }
+      }
+
+      // History: 本地历史报告
+      if (url.pathname === '/api/history' && req.method === 'GET') {
+        const max = parseInt(url.searchParams.get('max') || '10', 10);
+        return Response.json(loadHistory(max));
+      }
+
+      // Version check: 查询 npm registry 最新版本
+      if (url.pathname === '/api/version-check' && req.method === 'GET') {
+        try {
+          const res = await fetch('https://registry.npmjs.org/winaicheck/latest', {
+            headers: { 'Accept': 'application/json' },
+            signal: AbortSignal.timeout(5000),
+          });
+          const data = await res.json() as { version?: string };
+          return Response.json({
+            current: process.env.npm_package_version || '0.1.0',
+            latest: data.version || '0.1.0',
+          });
+        } catch {
+          return Response.json({ current: '0.1.0', latest: '0.1.0' });
         }
       }
 

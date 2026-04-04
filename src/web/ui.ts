@@ -44,6 +44,7 @@ function gradeGradient(score: number): string {
 export function generateWebUI(
   results: ScanResult[],
   score: ScoreResult,
+  prevScore: number | null = null,
 ): string {
   const fixes = getFixSuggestions(results);
   const fixesByTier = { green: fixes.filter(f => f.tier === 'green'), yellow: fixes.filter(f => f.tier === 'yellow'), red: fixes.filter(f => f.tier === 'red'), black: fixes.filter(f => f.tier === 'black') };
@@ -267,12 +268,34 @@ h1{font-family:var(--display);font-size:1.5rem;font-weight:700;letter-spacing:3p
 /* 动画 */
 .fix-updating{animation:pulse .6s ease}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
+/* 版本横幅 */
+.version-banner{display:none;background:linear-gradient(135deg,rgba(0,240,255,.1),rgba(167,139,250,.1));border:1px solid rgba(0,240,255,.2);border-radius:10px;padding:12px 20px;margin-bottom:16px;text-align:center;font-size:.85rem;color:var(--cyan);cursor:pointer;transition:all .2s}
+.version-banner:hover{background:linear-gradient(135deg,rgba(0,240,255,.15),rgba(167,139,250,.15));box-shadow:0 0 20px rgba(0,240,255,.1)}
+/* 分数 delta */
+.score-delta{font-family:var(--display);font-size:.9rem;margin-top:8px;letter-spacing:1px}
+.score-delta.up{color:var(--green)}
+.score-delta.down{color:var(--red)}
+.score-delta.same{color:var(--text-dim)}
+/* 社区方案 */
+.solutions-panel{display:none}
+.solutions-panel.visible{display:block}
+.solution-card{background:var(--bg-card);border:1px solid var(--border);border-radius:10px;padding:14px 16px;margin-bottom:8px;transition:border-color .2s}
+.solution-card:hover{border-color:var(--border-hover)}
+.solution-title{font-weight:600;font-size:.88rem;color:var(--text)}
+.solution-meta{display:flex;gap:8px;margin-top:6px;flex-wrap:wrap}
+.solution-tag{background:rgba(0,240,255,.06);border:1px solid rgba(0,240,255,.1);border-radius:4px;padding:2px 8px;font-size:.7rem;color:var(--text-dim);font-family:var(--mono)}
+.solution-votes{font-size:.75rem;color:var(--amber)}
+.solution-author{font-size:.72rem;color:var(--text-dim)}
+.solution-empty{text-align:center;color:var(--text-dim);font-size:.82rem;padding:20px}
 </style>
 </head>
 <body>
 <div class="container">
   <h1>aicoevo AI 环境诊断</h1>
   <p class="subtitle">扫描时间: ${new Date().toLocaleString('zh-CN')}</p>
+
+  <!-- 版本更新横幅 -->
+  <div id="version-banner" class="version-banner"></div>
 
   <!-- Tab 导航 -->
   <div class="tab-nav">
@@ -290,6 +313,10 @@ h1{font-family:var(--display);font-size:1.5rem;font-weight:700;letter-spacing:3p
       <button class="scan-btn" style="background:linear-gradient(135deg,rgba(0,240,255,.12),rgba(167,139,250,.12));border-color:rgba(167,139,250,.3);color:#c4b5fd" onclick="openCommunity()">查看社区方案</button>
       ${renderFixSection(fixesByTier)}
       ${renderCategoryResults(grouped, score)}
+      <div id="solutions-panel" class="solutions-panel">
+        <div class="section-title" style="margin-top:20px">社区方案 <span class="badge">来自 aicoevo.net</span></div>
+        <div id="solutions-list"></div>
+      </div>
     </div>
 
     <div id="loading">
@@ -838,6 +865,7 @@ function renderScoreCard(score: ScoreResult): string {
   <div class="card score-card" id="score-card">
     <div class="score-number">${score.score}</div>
     <div class="score-label">${score.label}</div>
+    ${prevScore !== null ? renderScoreDelta(score.score, prevScore) : ''}
     <div class="score-detail">
       ${score.breakdown.map(b => `<div class="score-tag">${CATEGORY_LABELS[b.category]}: <span class="pass-count">${b.passed}/${b.total}</span></div>`).join('')}
     </div>
@@ -955,8 +983,73 @@ function renderInstallTab(): string {
   </div>`;
 }
 
+function renderScoreDelta(current: number, prev: number): string {
+  const delta = current - prev;
+  if (delta === 0) return `<div class="score-delta same">与上次持平 (${prev} 分)</div>`;
+  const cls = delta > 0 ? 'up' : 'down';
+  const arrow = delta > 0 ? '↑' : '↓';
+  return `<div class="score-delta ${cls}">${delta > 0 ? '+' : ''}${delta} 分 ${arrow}（上次 ${prev} 分）</div>`;
+}
+
 function esc(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+// --- 版本检查 ---
+(async function checkVersion() {
+  try {
+    const res = await fetch('/api/version-check');
+    const {current, latest} = await res.json();
+    if (latest && latest !== current) {
+      const banner = document.getElementById('version-banner');
+      if (banner) {
+        banner.textContent = '发现新版本 v' + latest + ' → 点击查看更新说明';
+        banner.style.display = 'block';
+        banner.onclick = () => window.open('https://github.com/gugug168/WinAICheck/releases', '_blank');
+      }
+    }
+  } catch {}
+})();
+
+// --- 社区方案拉取 ---
+(async function fetchSolutions() {
+  try {
+    const payload = window.__scanPayload;
+    if (!payload || !payload.results) return;
+    const failCats = [...new Set(
+      payload.results
+        .filter(r => r.status === 'fail' || r.status === 'warn')
+        .map(r => r.category)
+    )];
+    if (failCats.length === 0) return;
+
+    const res = await fetch('/api/solutions?categories=' + failCats.join(','));
+    const data = await res.json();
+    const solutions = data.solutions || data.items || data || [];
+    if (!Array.isArray(solutions) || solutions.length === 0) return;
+
+    const panel = document.getElementById('solutions-panel');
+    const list = document.getElementById('solutions-list');
+    if (!panel || !list) return;
+
+    list.innerHTML = solutions.map(s => {
+      const tags = (s.tags || []).map(t => '<span class="solution-tag">' + escHtml(t) + '</span>').join('');
+      return '<div class="solution-card">'
+        + '<div class="solution-title">' + escHtml(s.title) + '</div>'
+        + '<div class="solution-meta">'
+        + tags
+        + (s.votes !== undefined ? '<span class="solution-votes">▲ ' + s.votes + '</span>' : '')
+        + (s.author_name ? '<span class="solution-author">' + escHtml(s.author_name) + '</span>' : '')
+        + '</div></div>';
+    }).join('');
+    panel.classList.add('visible');
+  } catch {}
+})();
+
+function escHtml(s) {
+  var d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
 }
 
 async function openCommunity() {

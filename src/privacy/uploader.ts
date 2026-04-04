@@ -1,6 +1,7 @@
 import type { ScanResult, ScoreResult } from '../scanners/types';
 import { sanitize } from './sanitizer.js';
-import { existsSync, mkdirSync, writeFileSync } from 'fs';
+import { collectSystemInfo, type SystemInfo } from '../scanners/system-info.js';
+import { existsSync, mkdirSync, writeFileSync, readdirSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
 
@@ -14,6 +15,7 @@ export interface UploadPayload {
     status: string;
     message: string;
   }>;
+  systemInfo: SystemInfo;
 }
 
 /** 生成脱敏后的上传数据 */
@@ -26,6 +28,7 @@ export function createPayload(results: ScanResult[], score: ScoreResult): Upload
       status: r.status,
       message: sanitize(r.message),
     })),
+    systemInfo: collectSystemInfo(),
   };
 }
 
@@ -36,4 +39,38 @@ export function saveLocal(payload: UploadPayload): string {
   const filepath = join(REPORT_DIR, filename);
   writeFileSync(filepath, JSON.stringify(payload, null, 2), 'utf-8');
   return filepath;
+}
+
+/** 读取最近一次扫描报告（不含当前） */
+export function loadPreviousReport(): UploadPayload | null {
+  if (!existsSync(REPORT_DIR)) return null;
+  const files = readdirSync(REPORT_DIR)
+    .filter(f => f.startsWith('scan-') && f.endsWith('.json'))
+    .sort()
+    .reverse();
+  if (files.length < 1) return null;
+  try {
+    const raw = require('fs').readFileSync(join(REPORT_DIR, files[0]), 'utf-8');
+    return JSON.parse(raw) as UploadPayload;
+  } catch {
+    return null;
+  }
+}
+
+/** 读取历史报告列表（最近 max 条） */
+export function loadHistory(max = 10): Array<UploadPayload & { filename: string }> {
+  if (!existsSync(REPORT_DIR)) return [];
+  const files = readdirSync(REPORT_DIR)
+    .filter(f => f.startsWith('scan-') && f.endsWith('.json'))
+    .sort()
+    .reverse()
+    .slice(0, max);
+  const results: Array<UploadPayload & { filename: string }> = [];
+  for (const f of files) {
+    try {
+      const raw = require('fs').readFileSync(join(REPORT_DIR, f), 'utf-8');
+      results.push({ ...JSON.parse(raw), filename: f });
+    } catch { /* skip corrupt */ }
+  }
+  return results;
 }

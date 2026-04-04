@@ -9,12 +9,51 @@ const scanner: Scanner = {
   category: 'gpu',
 
   async scan(): Promise<ScanResult> {
-    const { stdout, exitCode } = runCommand(
-      'wmic computersystem get HyperVisorPresent /value',
+    const wsl = runCommand('wsl --status', 8000);
+    if (wsl.exitCode === 0 && /默认版本:\s*2|default version:\s*2/i.test(wsl.stdout)) {
+      return {
+        id: this.id,
+        name: this.name,
+        category: this.category,
+        status: 'pass',
+        message: '虚拟化可用（WSL2 已正常工作）',
+      };
+    }
+
+    const systemInfo = runCommand('systeminfo', 12000);
+    const firmwareFlag = runCommand(
+      'powershell -Command "(Get-CimInstance Win32_Processor | Select-Object -ExpandProperty VirtualizationFirmwareEnabled)"',
       8000,
     );
 
-    if (exitCode !== 0) {
+    const systemOutput = systemInfo.stdout;
+    const firmwareEnabled = /Virtualization Enabled In Firmware:\s*Yes|固件中已启用虚拟化:\s*是/i.test(systemOutput)
+      || /^true$/i.test(firmwareFlag.stdout.trim());
+    const firmwareDisabled = /Virtualization Enabled In Firmware:\s*No|固件中已启用虚拟化:\s*否/i.test(systemOutput)
+      || /^false$/i.test(firmwareFlag.stdout.trim());
+
+    if (firmwareEnabled) {
+      return {
+        id: this.id,
+        name: this.name,
+        category: this.category,
+        status: 'pass',
+        message: 'CPU/BIOS 虚拟化已启用',
+      };
+    }
+
+    if (firmwareDisabled) {
+      return {
+        id: this.id,
+        name: this.name,
+        category: this.category,
+        status: 'warn',
+        message: 'BIOS/UEFI 中的虚拟化未启用',
+        detail: '请在 BIOS/UEFI 中启用 Intel VT-x / AMD-V；如需 WSL2 或 Docker，再启用对应 Windows 功能。',
+      };
+    }
+
+    if (systemInfo.exitCode !== 0 && firmwareFlag.exitCode !== 0) {
       return {
         id: this.id,
         name: this.name,
@@ -24,25 +63,12 @@ const scanner: Scanner = {
       };
     }
 
-    const enabled = /HyperVisorPresent=TRUE/i.test(stdout);
-
-    if (enabled) {
-      return {
-        id: this.id,
-        name: this.name,
-        category: this.category,
-        status: 'pass',
-        message: 'Hyper-V 虚拟化已启用',
-      };
-    }
-
     return {
       id: this.id,
       name: this.name,
       category: this.category,
-      status: 'warn',
-      message: '虚拟化未启用，WSL2/Docker 需要 Hyper-V 或 WSL2 后端',
-      detail: '请在 BIOS 中启用虚拟化 (Intel VT-x / AMD-V)，并在 Windows 功能中启用 Hyper-V 或 WSL',
+      status: 'unknown',
+      message: '无法确认虚拟化是否已启用',
     };
   },
 };

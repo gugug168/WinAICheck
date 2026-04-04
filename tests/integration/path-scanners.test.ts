@@ -42,15 +42,20 @@ describe('path-spaces scanner', () => {
   afterEach(teardownMock);
 
   test('Git 安装路径有空格 → warn', async () => {
+    setupMock(new Map([
+      ['where.exe git', { stdout: 'C:\\Users\\John Doe\\Git\\cmd\\git.exe', exitCode: 0 }],
+      ['where.exe node', { stdout: 'C:\\node\\node.exe', exitCode: 0 }],
+      ['where.exe python', { stdout: 'C:\\Python311\\python.exe', exitCode: 0 }],
+    ]));
     const scanner = getScannerById('path-spaces')!;
     const result = await scanner.scan();
     expect(result.status).toBe('warn');
     expect(result.message).toContain('空格');
   });
 
-  test('无空格路径 → pass', async () => {
+  test('Program Files 标准路径 → pass', async () => {
     setupMock(new Map([
-      ['where.exe git', { stdout: 'C:\\Git\\cmd\\git.exe', exitCode: 0 }],
+      ['where.exe git', { stdout: 'C:\\Program Files\\Git\\cmd\\git.exe', exitCode: 0 }],
       ['where.exe node', { stdout: 'C:\\node\\node.exe', exitCode: 0 }],
       ['where.exe python', { stdout: 'C:\\Python311\\python.exe', exitCode: 0 }],
     ]));
@@ -86,13 +91,13 @@ describe('long-paths scanner', () => {
 describe('env-path-length scanner', () => {
   afterEach(teardownMock);
 
-  test('超长 PATH → fail', async () => {
-    const longPath = 'C:\\a'.repeat(800); // ~2400 字符
+  test('偏长但未超系统上限 → warn', async () => {
+    const longPath = `${'C:\\VeryLongPathSegment;'.repeat(220)}C:\\Tools;C:\\Tools`;
     await withEnv({ PATH: longPath }, async () => {
       const scanner = getScannerById('env-path-length')!;
       const result = await scanner.scan();
-      expect(result.status).toBe('fail');
-      expect(result.message).toContain('过长');
+      expect(result.status).toBe('warn');
+      expect(result.message).toContain('偏长');
     });
   });
 

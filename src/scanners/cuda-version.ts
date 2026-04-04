@@ -7,6 +7,7 @@ const scanner: Scanner = {
   id: 'cuda-version',
   name: 'CUDA 版本检测',
   category: 'gpu',
+  affectsScore: false,
 
   async scan(): Promise<ScanResult> {
     // 方法1: nvcc
@@ -55,9 +56,9 @@ const scanner: Scanner = {
       id: this.id,
       name: this.name,
       category: this.category,
-      status: 'fail',
-      message: 'CUDA 未安装',
-      detail: '如需 GPU 加速，建议安装 CUDA Toolkit',
+      status: 'unknown',
+      message: '未检测到本地 CUDA Toolkit',
+      detail: '如需本地 NVIDIA GPU 加速，可安装 CUDA Toolkit；纯 CPU 或远程 GPU 场景可忽略。',
     };
   },
 };

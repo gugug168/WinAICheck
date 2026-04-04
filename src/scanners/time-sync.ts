@@ -22,19 +22,19 @@ const scanner: Scanner = {
       };
     }
 
-    // 检查上次同步时间
-    const lastSync = stdout.match(/Last Successful Sync Time:\s*(.+)/i);
-    const source = stdout.match(/Source:\s*(.+)/i);
-    const ntpOk = /VMIC Provider|time.windows.com/i.test(stdout);
+    const sourceValue = stdout.match(/time\.windows\.com[^\r\n]*|VMIC Provider[^\r\n]*|Free-running System Clock[^\r\n]*|Local CMOS Clock[^\r\n]*/i)?.[0]?.trim() || 'unknown';
+    const syncValue = stdout.match(/\d{4}[\/-]\d{1,2}[\/-]\d{1,2}\s+\d{1,2}:\d{2}:\d{2}/)?.[0]?.trim() || 'unknown';
+    const untrustedSource = /Free-running System Clock|Local CMOS Clock|unknown/i.test(sourceValue);
+    const unsynced = syncValue === 'unknown';
 
-    if (!ntpOk) {
+    if (untrustedSource || unsynced) {
       return {
         id: this.id,
         name: this.name,
         category: this.category,
         status: 'warn',
         message: '时间同步源可能不可靠',
-        detail: `源: ${source?.[1] || 'unknown'}\n上次同步: ${lastSync?.[1] || 'unknown'}`,
+        detail: `源: ${sourceValue}\n上次同步: ${syncValue}`,
       };
     }
 
@@ -44,7 +44,7 @@ const scanner: Scanner = {
       category: this.category,
       status: 'pass',
       message: '系统时间同步正常',
-      detail: `源: ${source?.[1] || 'NTP'}\n上次同步: ${lastSync?.[1] || 'unknown'}`,
+      detail: `源: ${sourceValue}\n上次同步: ${syncValue}`,
     };
   },
 };

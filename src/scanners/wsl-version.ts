@@ -7,6 +7,7 @@ const scanner: Scanner = {
   id: 'wsl-version',
   name: 'WSL 版本检测',
   category: 'gpu',
+  affectsScore: false,
 
   async scan(): Promise<ScanResult> {
     const { stdout, exitCode } = runCommand('wsl --status', 8000);

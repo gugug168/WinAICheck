@@ -135,21 +135,42 @@ describe('dns-resolution scanner', () => {
   test('DNS 解析正常 → pass', async () => {
     setupMock(new Map([
       ['nslookup huggingface.co', {
-        stdout: 'Name: huggingface.co\nAddresses: 2606:4700::6810:1f\n 104.18.31.25',
+        stdout: 'Server: dns.local\nAddress: 172.18.0.2\n\nName: huggingface.co\nAddresses: 2606:4700::6810:1f\n 104.18.31.25',
         exitCode: 0,
       }],
       ['nslookup github.com', {
-        stdout: 'Name: github.com\nAddress: 20.205.243.166',
+        stdout: 'Server: dns.local\nAddress: 172.18.0.2\n\nName: github.com\nAddress: 20.205.243.166',
         exitCode: 0,
       }],
       ['nslookup pypi.org', {
-        stdout: 'Name: pypi.org\nAddress: 151.101.0.223',
+        stdout: 'Server: dns.local\nAddress: 172.18.0.2\n\nName: pypi.org\nAddress: 151.101.0.223',
         exitCode: 0,
       }],
     ]));
     const scanner = getScannerById('dns-resolution')!;
     const result = await scanner.scan();
     expect(result.status).toBe('pass');
+  });
+
+  test('NXDOMAIN 不应误判为成功', async () => {
+    setupMock(new Map([
+      ['nslookup huggingface.co', {
+        stdout: 'Server: dns.local\nAddress: 172.18.0.2\n\n*** dns.local can\'t find huggingface.co: Non-existent domain',
+        exitCode: 1,
+      }],
+      ['nslookup github.com', {
+        stdout: 'Server: dns.local\nAddress: 172.18.0.2\n\nName: github.com\nAddress: 20.205.243.166',
+        exitCode: 0,
+      }],
+      ['nslookup pypi.org', {
+        stdout: 'Server: dns.local\nAddress: 172.18.0.2\n\nName: pypi.org\nAddress: 151.101.0.223',
+        exitCode: 0,
+      }],
+    ]));
+    const scanner = getScannerById('dns-resolution')!;
+    const result = await scanner.scan();
+    expect(result.status).toBe('warn');
+    expect(result.message).toContain('HuggingFace');
   });
 
   test('DNS 解析失败 → fail', async () => {
@@ -180,11 +201,11 @@ describe('dns-resolution scanner', () => {
         exitCode: 1,
       }],
       ['nslookup github.com', {
-        stdout: 'Name: github.com\nAddress: 20.205.243.166',
+        stdout: 'Server: dns.local\nAddress: 172.18.0.2\n\nName: github.com\nAddress: 20.205.243.166',
         exitCode: 0,
       }],
       ['nslookup pypi.org', {
-        stdout: 'Name: pypi.org\nAddress: 151.101.0.223',
+        stdout: 'Server: dns.local\nAddress: 172.18.0.2\n\nName: pypi.org\nAddress: 151.101.0.223',
         exitCode: 0,
       }],
     ]));
