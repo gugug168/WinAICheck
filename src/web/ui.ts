@@ -26,6 +26,27 @@ const TIER_CONFIG: Record<string, { label: string; color: string; bg: string; ic
   black: { label: '仅供参考', color: '#94a3b8', bg: '#94a3b815', icon: '⚫' },
 };
 
+type CommunityPayload = {
+  results?: Array<{ status: string; category: string }>;
+  score?: number;
+  system?: Record<string, unknown>;
+  pathEntries?: string[];
+  envKeys?: Record<string, string>;
+};
+
+type CommunitySolution = {
+  title: string;
+  tags?: string[];
+  votes?: number;
+  author_name?: string;
+};
+
+declare global {
+  interface Window {
+    __scanPayload?: CommunityPayload;
+  }
+}
+
 function gradeColor(score: number): string {
   if (score >= 90) return '#22c55e';
   if (score >= 70) return '#3b82f6';
@@ -287,12 +308,154 @@ h1{font-family:var(--display);font-size:1.5rem;font-weight:700;letter-spacing:3p
 .solution-votes{font-size:.75rem;color:var(--amber)}
 .solution-author{font-size:.72rem;color:var(--text-dim)}
 .solution-empty{text-align:center;color:var(--text-dim);font-size:.82rem;padding:20px}
+
+/* ====== Hero 封面区域 ====== */
+:root{
+  --magenta:#ff2d95;
+  --purple:#7c3aed;
+}
+.hero{position:relative;min-height:min(55vh,480px);display:flex;align-items:center;justify-content:center;padding:40px 20px 32px;overflow:hidden;margin:-28px -20px 0;
+  background:radial-gradient(ellipse 50% 50% at 50% 45%,rgba(0,240,255,.04) 0%,transparent 70%);
+  border-bottom:1px solid rgba(0,240,255,.06)}
+.hero-content{position:relative;z-index:2;text-align:center;max-width:640px;width:100%}
+
+/* 矩阵雨背景 */
+.hero-rain{position:absolute;inset:0;z-index:0;opacity:.35;pointer-events:none;
+  background:
+    repeating-linear-gradient(90deg,transparent,transparent 38px,rgba(0,240,255,.025) 38px,rgba(0,240,255,.025) 39px),
+    repeating-linear-gradient(0deg,transparent,transparent 18px,rgba(0,240,255,.012) 18px,rgba(0,240,255,.012) 19px);
+  animation:rainDrift 8s linear infinite;
+  mask-image:radial-gradient(ellipse 60% 60% at 50% 40%,rgba(0,0,0,.6),transparent)}
+@keyframes rainDrift{0%{transform:translateY(0)}100%{transform:translateY(19px)}}
+
+/* HUD 角落装饰 */
+.hud-corner{position:absolute;width:28px;height:28px;opacity:.5;z-index:3;
+  animation:hudPulse 6s ease-in-out infinite}
+.hud-corner.tl{top:16px;left:16px;border-top:1px solid var(--cyan);border-left:1px solid var(--cyan);box-shadow:-2px -2px 6px rgba(0,240,255,.15)}
+.hud-corner.tr{top:16px;right:16px;border-top:1px solid var(--cyan);border-right:1px solid var(--cyan);box-shadow:2px -2px 6px rgba(0,240,255,.15)}
+.hud-corner.bl{bottom:16px;left:16px;border-bottom:1px solid var(--cyan);border-left:1px solid var(--cyan);box-shadow:-2px 2px 6px rgba(0,240,255,.15)}
+.hud-corner.br{bottom:16px;right:16px;border-bottom:1px solid var(--cyan);border-right:1px solid var(--cyan);box-shadow:2px 2px 6px rgba(0,240,255,.15)}
+@keyframes hudPulse{0%,100%{opacity:.35}50%{opacity:.7}}
+
+/* CRT 扫描线叠加 */
+.hero::before{content:'';position:absolute;inset:0;z-index:1;pointer-events:none;
+  background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,240,255,.008) 2px,rgba(0,240,255,.008) 4px)}
+
+/* Glitch 故障标题 */
+.hero-title{font-family:var(--display);font-size:clamp(2.2rem,6vw,3.4rem);font-weight:900;letter-spacing:10px;text-transform:uppercase;position:relative;
+  background:linear-gradient(135deg,var(--cyan),#a78bfa,var(--cyan));
+  background-size:200% 200%;
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;
+  animation:gradShift 4s ease infinite;margin-bottom:6px}
+.hero-title::before,.hero-title::after{content:attr(data-text);position:absolute;top:0;left:0;width:100%;height:100%;
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;
+  background:inherit;background-size:inherit;animation:inherit}
+.hero-title::before{text-shadow:-3px 0 rgba(0,240,255,.5);animation:glitch1 3.5s infinite linear}
+.hero-title::after{text-shadow:3px 0 rgba(255,45,149,.5);animation:glitch2 2.8s infinite linear}
+@keyframes glitch1{
+  0%,87%,100%{clip-path:inset(0 0 100% 0);transform:translate(0)}
+  88%{clip-path:inset(12% 0 68% 0);transform:translate(-5px,1px)}
+  89%{clip-path:inset(45% 0 30% 0);transform:translate(4px,-1px)}
+  90%{clip-path:inset(70% 0 10% 0);transform:translate(-3px,2px)}
+  91%{clip-path:inset(0 0 100% 0);transform:translate(0)}
+}
+@keyframes glitch2{
+  0%,91%,100%{clip-path:inset(0 0 100% 0);transform:translate(0)}
+  92%{clip-path:inset(25% 0 55% 0);transform:translate(5px,-1px)}
+  93%{clip-path:inset(55% 0 20% 0);transform:translate(-4px,2px)}
+  94%{clip-path:inset(80% 0 5% 0);transform:translate(3px,-1px)}
+  95%{clip-path:inset(0 0 100% 0);transform:translate(0)}
+}
+
+/* 副标题 */
+.hero-subtitle{font-family:var(--mono);font-size:.72rem;letter-spacing:4px;text-transform:uppercase;color:var(--text-dim);margin-bottom:36px}
+
+/* SVG 分数环 */
+.hero-score-ring{position:relative;width:200px;height:200px;margin:0 auto 20px}
+.score-svg{width:100%;height:100%;transform:rotate(-90deg);filter:drop-shadow(0 0 12px ${gradeColor(score.score)}40)}
+.score-ring-bg{fill:none;stroke:rgba(0,240,255,.06);stroke-width:3}
+.score-ring-fill{fill:none;stroke:${gradeColor(score.score)};stroke-width:3;stroke-linecap:round;
+  stroke-dasharray:553;stroke-dashoffset:553;transition:stroke-dashoffset 1.8s cubic-bezier(.4,0,.2,1)}
+.score-ring-glow{fill:none;stroke:${gradeColor(score.score)};stroke-width:8;stroke-linecap:round;
+  stroke-dasharray:553;stroke-dashoffset:553;transition:stroke-dashoffset 1.8s cubic-bezier(.4,0,.2,1);opacity:.15;filter:blur(4px)}
+.score-ring-inner{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center}
+.score-number-hero{font-family:var(--display);font-size:4rem;font-weight:900;color:${gradeColor(score.score)};line-height:1;
+  text-shadow:0 0 30px ${gradeColor(score.score)}40,0 0 60px ${gradeColor(score.score)}15;
+  animation:scoreGlow 3s ease-in-out infinite}
+.score-label-hero{font-family:var(--display);font-size:.75rem;letter-spacing:4px;text-transform:uppercase;color:var(--text-mid);margin-top:6px}
+@keyframes scoreGlow{0%,100%{text-shadow:0 0 30px ${gradeColor(score.score)}40,0 0 60px ${gradeColor(score.score)}15}50%{text-shadow:0 0 40px ${gradeColor(score.score)}60,0 0 80px ${gradeColor(score.score)}25}}
+
+/* 分类标签 */
+.hero-tags{display:flex;gap:6px;flex-wrap:wrap;justify-content:center;margin-top:8px}
+.hero-tag{font-family:var(--mono);font-size:.68rem;background:rgba(0,240,255,.05);border:1px solid rgba(0,240,255,.1);border-radius:4px;padding:3px 10px;color:var(--text-dim)}
+.hero-tag em{color:var(--green);font-style:normal;font-weight:600}
+
+/* 分数 delta */
+.hero-delta{font-family:var(--display);font-size:.82rem;margin-top:10px;letter-spacing:1px}
+.hero-delta.up{color:var(--green)}
+.hero-delta.down{color:var(--red)}
+.hero-delta.same{color:var(--text-dim)}
+
+/* Hero 底部扫描线 */
+.hero-scanline{position:absolute;bottom:0;left:0;right:0;height:2px;z-index:3;
+  background:linear-gradient(90deg,transparent,var(--cyan),transparent);
+  animation:scanPulse 3s ease-in-out infinite;opacity:.5}
+@keyframes scanPulse{0%,100%{opacity:.3}50%{opacity:.7}}
+
+/* Hero 呼吸脉冲 */
+.hero::after{content:'';position:absolute;inset:0;z-index:0;pointer-events:none;
+  box-shadow:inset 0 0 80px rgba(0,240,255,.02);
+  animation:heroBreath 5s ease-in-out infinite}
+@keyframes heroBreath{0%,100%{box-shadow:inset 0 0 60px rgba(0,240,255,.02)}50%{box-shadow:inset 0 0 100px rgba(0,240,255,.05),inset 0 0 60px rgba(124,58,237,.02)}}
+
+/* 响应式 */
+@media(max-width:640px){
+  .hero{min-height:55vh;padding:36px 16px 28px}
+  .hero-title{letter-spacing:5px}
+  .hero-score-ring{width:160px;height:160px}
+  .score-number-hero{font-size:3rem}
+  .hud-corner{width:20px;height:20px}
+}
+
+/* 无障碍：减少动画 */
+@media(prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}
+}
 </style>
 </head>
 <body>
 <div class="container">
-  <h1>aicoevo AI 环境诊断</h1>
-  <p class="subtitle">扫描时间: ${new Date().toLocaleString('zh-CN')}</p>
+
+  <!-- Hero 封面 -->
+  <header class="hero">
+    <div class="hero-rain"></div>
+    <div class="hud-corner tl"></div>
+    <div class="hud-corner tr"></div>
+    <div class="hud-corner bl"></div>
+    <div class="hud-corner br"></div>
+    <div class="hero-content">
+      <h1 class="hero-title" data-text="AICOEVO">AICOEVO</h1>
+      <p class="hero-subtitle">AI Environment Diagnostic System &mdash; ${new Date().toLocaleString('zh-CN')}</p>
+      <div class="hero-score-ring">
+        <svg viewBox="0 0 200 200" class="score-svg">
+          <circle cx="100" cy="100" r="88" class="score-ring-bg"/>
+          <circle cx="100" cy="100" r="88" class="score-ring-glow" id="score-ring-glow"
+                  style="stroke-dashoffset:${553 - 553 * score.score / 100}"/>
+          <circle cx="100" cy="100" r="88" class="score-ring-fill" id="score-ring-fill"
+                  style="stroke-dashoffset:${553 - 553 * score.score / 100}"/>
+        </svg>
+        <div class="score-ring-inner">
+          <div class="score-number-hero">${score.score}</div>
+          <div class="score-label-hero">${score.label}</div>
+        </div>
+      </div>
+      ${prevScore !== null ? renderScoreDelta(score.score, prevScore).replace('score-delta', 'hero-delta') : ''}
+      <div class="hero-tags">
+        ${score.breakdown.map(b => `<span class="hero-tag">${CATEGORY_LABELS[b.category]} <em>${b.passed}/${b.total}</em></span>`).join('')}
+      </div>
+    </div>
+    <div class="hero-scanline"></div>
+  </header>
 
   <!-- 版本更新横幅 -->
   <div id="version-banner" class="version-banner"></div>
@@ -308,7 +471,6 @@ h1{font-family:var(--display);font-size:1.5rem;font-weight:700;letter-spacing:3p
   <!-- 诊断结果 Tab -->
   <div id="tab-diag" class="tab-content active">
     <div id="results">
-      ${renderScoreCard(score)}
       <button class="scan-btn" onclick="rescan()">重新扫描</button>
       <button class="scan-btn" style="background:linear-gradient(135deg,rgba(0,240,255,.12),rgba(167,139,250,.12));border-color:rgba(167,139,250,.3);color:#c4b5fd" onclick="openCommunity()">查看社区方案</button>
       ${renderFixSection(fixesByTier)}
@@ -488,8 +650,29 @@ h1{font-family:var(--display);font-size:1.5rem;font-weight:700;letter-spacing:3p
 
 <script>
 window.__scanPayload = {
-  results: ${JSON.stringify(results.map(r => ({id:r.id,name:r.name,category:r.category,status:r.status,message:r.message})))},
+  results: ${JSON.stringify(results.map(r => ({
+    id:r.id, name:r.name, category:r.category, status:r.status,
+    message:r.message, detail:r.detail||null,
+    version:r.version||null, path:r.path||null, fixCommand:r.fixCommand||null,
+    severity:r.severity||null,
+  })))},
   score: ${score.score},
+  label: ${JSON.stringify(score.label)},
+  system: ${JSON.stringify((function(){
+    var si=null;
+    try{ si=require('../scanners/system-info').collectSystemInfo(); }catch(e){}
+    return si||{};
+  })())},
+  pathEntries: ${JSON.stringify((function(){
+    try{ return (process.env.PATH || '').split(';').filter(Boolean); }catch(e){ return []; }
+  })())},
+  envKeys: ${JSON.stringify((function(){
+    var keys=['PYTHONPATH','NODE_PATH','CUDA_PATH','JAVA_HOME','GOPATH','CONDA_PREFIX','HTTP_PROXY','HTTPS_PROXY','NO_PROXY'];
+    var env: Record<string,string>={};
+    keys.forEach(function(k){ var v=process.env[k]; if(v) env[k]=v; });
+    return env;
+  })())},
+  timestamp: ${JSON.stringify(new Date().toISOString())},
 };
 // --- Tab 切换 ---
 function switchTab(tab) {
@@ -855,12 +1038,28 @@ async function rescan() {
     setTimeout(() => location.reload(), 1000);
   } catch(e) { location.reload(); }
 }
+// Hero SVG 分数环入场动画
+(function(){
+  var ring=document.getElementById('score-ring-fill');
+  var glow=document.getElementById('score-ring-glow');
+  if(ring){
+    var target=ring.style.strokeDashoffset;
+    ring.style.strokeDashoffset='553';
+    if(glow) glow.style.strokeDashoffset='553';
+    requestAnimationFrame(function(){
+      requestAnimationFrame(function(){
+        ring.style.strokeDashoffset=target;
+        if(glow) glow.style.strokeDashoffset=target;
+      });
+    });
+  }
+})();
 </script>
 </body>
 </html>`;
 }
 
-function renderScoreCard(score: ScoreResult): string {
+function renderScoreCard(score: ScoreResult, prevScore: number | null): string {
   return `
   <div class="card score-card" id="score-card">
     <div class="score-number">${score.score}</div>
@@ -1032,8 +1231,8 @@ function esc(s: string): string {
     const list = document.getElementById('solutions-list');
     if (!panel || !list) return;
 
-    list.innerHTML = solutions.map(s => {
-      const tags = (s.tags || []).map(t => '<span class="solution-tag">' + escHtml(t) + '</span>').join('');
+    list.innerHTML = (solutions as CommunitySolution[]).map((s) => {
+      const tags = (s.tags || []).map((t) => '<span class="solution-tag">' + escHtml(t) + '</span>').join('');
       return '<div class="solution-card">'
         + '<div class="solution-title">' + escHtml(s.title) + '</div>'
         + '<div class="solution-meta">'
@@ -1046,14 +1245,14 @@ function esc(s: string): string {
   } catch {}
 })();
 
-function escHtml(s) {
+function escHtml(s: string) {
   var d = document.createElement('div');
   d.textContent = s;
   return d.innerHTML;
 }
 
 async function openCommunity() {
-  const btn = document.querySelector('[onclick="openCommunity()"]');
+  const btn = document.querySelector<HTMLButtonElement>('[onclick="openCommunity()"]');
   if (btn) { btn.textContent = '上传中...'; btn.disabled = true; }
 
   try {
@@ -1062,15 +1261,26 @@ async function openCommunity() {
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({
         data: JSON.stringify(window.__scanPayload || {}),
-        fingerprint: JSON.stringify({platform: navigator.platform, userAgent: navigator.userAgent}),
+        fingerprint: JSON.stringify({
+          platform: navigator.platform,
+          userAgent: navigator.userAgent,
+          // 新增：系统摘要供经验匹配用
+          system: window.__scanPayload?.system || {},
+          pathEntries: window.__scanPayload?.pathEntries || [],
+          envKeys: window.__scanPayload?.envKeys || {},
+          score: window.__scanPayload?.score || 0,
+          failCount: (window.__scanPayload?.results || []).filter((r: any) => r.status === 'fail').length,
+          failCategories: [...new Set((window.__scanPayload?.results || []).filter((r: any) => r.status === 'fail').map((r: any) => r.category))],
+        }),
       }),
     });
 
     if (!res.ok) throw new Error('上传失败: ' + res.status);
     const {token} = await res.json();
     window.open('https://aicoevo.net/claim?t=' + token, '_blank');
-  } catch(e) {
-    alert('连接社区失败，请检查网络\\n' + e.message);
+  } catch(e: unknown) {
+    const message = e instanceof Error ? e.message : String(e);
+    alert('连接社区失败，请检查网络\\n' + message);
     if (btn) { btn.textContent = '查看社区方案'; btn.disabled = false; }
   }
 }

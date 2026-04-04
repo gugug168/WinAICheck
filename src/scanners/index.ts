@@ -14,6 +14,12 @@ import './python-versions.js';
 import './node-version.js';
 import './cpp-compiler.js';
 import './package-managers.js';
+import './node-global-bin-path.js';
+import './node-manager-conflict.js';
+import './git-identity-config.js';
+import './git-credential-health.js';
+import './python-project-venv.js';
+import './python-env-alignment.js';
 
 // 显卡与子系统
 import './gpu-driver.js';
@@ -28,12 +34,18 @@ import './powershell-version.js';
 import './firewall-ports.js';
 import './admin-perms.js';
 import './time-sync.js';
+import './shell-encoding-health.js';
+import './terminal-profile-health.js';
 
 // AI 开发工具
 import './uv-package-manager.js';
 import './claude-cli.js';
 import './openclaw.js';
 import './ccswitch.js';
+import './claude-config-health.js';
+import './openclaw-config-health.js';
+import './mcp-config-health.js';
+import './mcp-command-availability.js';
 
 // 网络与镜像
 import './mirror-sources.js';

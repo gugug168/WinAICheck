@@ -17,6 +17,10 @@ export interface ScanResult {
   status: ScanStatus;
   message: string;
   detail?: string;
+  version?: string | null;
+  path?: string | null;
+  fixCommand?: string | null;
+  severity?: string | null;
 }
 
 /** Scanner 接口 */

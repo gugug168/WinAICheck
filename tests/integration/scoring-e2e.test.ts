@@ -7,6 +7,18 @@ import type { ScanResult } from '../../src/scanners/types';
 import '../../src/scanners/index';
 import { getScanners, getScannerById } from '../../src/scanners/registry';
 
+const MOCK_ONLY_SCANNER_EXCLUDES = new Set([
+  'mirror-sources',
+  'mcp-config-health',
+  'mcp-command-availability',
+  'python-project-venv',
+  'python-env-alignment',
+  'git-credential-health',
+  'terminal-profile-health',
+  'claude-config-health',
+  'openclaw-config-health',
+]);
+
 /**
  * 创建"全通过"环境的 mock 响应
  */
@@ -19,11 +31,19 @@ function allPassResponses(): Map<string, MockResponse> {
     // long-paths: 已启用
     ['reg query', { stdout: '    LongPathsEnabled    REG_DWORD    0x1', exitCode: 0 }],
     // temp-space: 空间充足 (100GB)
-    ['powershell', { stdout: '107374182400', exitCode: 0 }],
+    ['powershell -NoProfile -Command "(Get-PSDrive -Name \'C\' -ErrorAction SilentlyContinue).Free"', { stdout: '107374182400', exitCode: 0 }],
     // git
     ['git --version', { stdout: 'git version 2.45.0', exitCode: 0 }],
+    ['git config --global user.name', { stdout: 'Test User', exitCode: 0 }],
+    ['git config --global user.email', { stdout: 'test@example.com', exitCode: 0 }],
+    ['git config --global credential.helper', { stdout: 'manager-core', exitCode: 0 }],
+    ['echo %PATH%', {
+      stdout: 'C:\\Git\\cmd;C:\\Git\\bin;C:\\Git\\usr\\bin;C:\\Windows;C:\\Windows\\System32;C:\\node',
+      exitCode: 0,
+    }],
     // node
     ['node --version', { stdout: 'v22.0.0', exitCode: 0 }],
+    ['npm config get prefix', { stdout: 'C:\\node', exitCode: 0 }],
     // python
     ['python --version', { stdout: 'Python 3.11.5', exitCode: 0 }],
     ['python3 --version', { exitCode: 1 }],
@@ -36,6 +56,7 @@ function allPassResponses(): Map<string, MockResponse> {
     ['bun --version', { stdout: '1.1.0', exitCode: 0 }],
     ['pnpm --version', { stdout: '9.0.0', exitCode: 0 }],
     ['yarn --version', { stdout: '4.1.0', exitCode: 0 }],
+    ['where.exe npx', { stdout: 'C:\\node\\npx.cmd', exitCode: 0 }],
     // unix-commands
     ['where.exe ls', { stdout: 'C:\\Git\\usr\\bin\\ls.exe', exitCode: 0 }],
     ['where.exe grep', { stdout: 'C:\\Git\\usr\\bin\\grep.exe', exitCode: 0 }],
@@ -64,12 +85,15 @@ function allPassResponses(): Map<string, MockResponse> {
       stdout: '', exitCode: 0,
     }],
     // powershell-policy
-    // (被 powershell mock 匹配，但 powershell-policy 用 runPS → runCommand)
+    ['powershell -NoProfile -Command "Get-ExecutionPolicy"', { stdout: 'RemoteSigned', exitCode: 0 }],
+    ['powershell -Command "$PSVersionTable.PSVersion.ToString()"', { stdout: '5.1.22621.2506', exitCode: 0 }],
+    ['pwsh -Command "$PSVersionTable.PSVersion.ToString()"', { stdout: '7.4.2', exitCode: 0 }],
+    ['where.exe pwsh', { stdout: 'C:\\Program Files\\PowerShell\\7\\pwsh.exe', exitCode: 0 }],
     // admin
     ['net session', { stdout: '', exitCode: 0 }],
     // time-sync
     ['w32tm /query /status', {
-      stdout: 'Source: VMIC Provider\nLast Successful Sync Time: 2026-03-31', exitCode: 0,
+      stdout: 'Source: time.windows.com,0x9\nLast Successful Sync Time: 2026-03-31 12:34:56', exitCode: 0,
     }],
     // firewall
     ['netsh advfirewall firewall show rule name=all verbose', {
@@ -114,9 +138,18 @@ function allPassResponses(): Map<string, MockResponse> {
     ['curl -Is --max-time 5 https://github.com', { exitCode: 0 }],
     ['curl -Is --max-time 5 https://api.openai.com', { exitCode: 0 }],
     // dns
-    ['nslookup huggingface.co', { stdout: 'Name: huggingface.co\nAddress: 1.2.3.4', exitCode: 0 }],
-    ['nslookup github.com', { stdout: 'Name: github.com\nAddress: 5.6.7.8', exitCode: 0 }],
-    ['nslookup pypi.org', { stdout: 'Name: pypi.org\nAddress: 9.10.11.12', exitCode: 0 }],
+    ['nslookup huggingface.co', {
+      stdout: 'Server: dns.example\nAddress: 192.168.1.1\n\nNon-authoritative answer:\nName: huggingface.co\nAddress: 1.2.3.4',
+      exitCode: 0,
+    }],
+    ['nslookup github.com', {
+      stdout: 'Server: dns.example\nAddress: 192.168.1.1\n\nNon-authoritative answer:\nName: github.com\nAddress: 5.6.7.8',
+      exitCode: 0,
+    }],
+    ['nslookup pypi.org', {
+      stdout: 'Server: dns.example\nAddress: 192.168.1.1\n\nNon-authoritative answer:\nName: pypi.org\nAddress: 9.10.11.12',
+      exitCode: 0,
+    }],
     // uv-package-manager
     ['where.exe uv', { stdout: 'C:\\Python311\\Scripts\\uv.exe', exitCode: 0 }],
     ['uv --version', { stdout: 'uv 0.4.0', exitCode: 0 }],
@@ -129,6 +162,8 @@ function allPassResponses(): Map<string, MockResponse> {
     // ccswitch
     ['where.exe ccswitch', { stdout: 'C:\\node\\ccswitch.cmd', exitCode: 0 }],
     ['ccswitch --version', { stdout: 'CCSwitch v0.1.0', exitCode: 0 }],
+    // shell
+    ['chcp', { stdout: 'Active code page: 65001', exitCode: 0 }],
   ]);
 }
 
@@ -198,7 +233,7 @@ describe('scoring e2e', () => {
     expect(scanners.length).toBeGreaterThanOrEqual(20);
   });
 
-  test('全通过 mock 环境下所有命令式 scanner 返回 pass', async () => {
+  test('全通过 mock 环境下核心命令式 scanner 返回 pass', async () => {
     const responses = allPassResponses();
     _test.mockExecSync = createCommandMock(responses);
 
@@ -221,13 +256,13 @@ describe('scoring e2e', () => {
         results.push(result);
       }
 
-      // 统计通过率（mirror-sources 等读文件系统的 scanner 可能 warn/fail，不强制）
+      // 仅验证可由命令 mock 稳定满足的核心 scanner。
+      // 依赖真实配置文件、项目目录或用户主目录状态的 scanner 由各自集成测试覆盖。
       const commandScanners = results.filter(
-        r => !['mirror-sources'].includes(r.id),
+        r => !MOCK_ONLY_SCANNER_EXCLUDES.has(r.id),
       );
       const passCount = commandScanners.filter(r => r.status === 'pass').length;
-      // 大部分命令式 scanner 应该 pass
-      expect(passCount).toBeGreaterThan(commandScanners.length * 0.8);
+      expect(passCount).toBe(commandScanners.length);
     });
   });
 });

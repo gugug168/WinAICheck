@@ -6,6 +6,7 @@ const groups = {
     'tests/integration/ccswitch-scanner.test.ts',
   ],
   integration: [
+    'tests/integration/ai-workflow-scanners.test.ts',
     'tests/integration/network-scanners.test.ts',
     'tests/integration/permission-scanners.test.ts',
     'tests/integration/path-scanners.test.ts',
