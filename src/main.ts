@@ -255,6 +255,21 @@ async function webMode(port: number) {
         }
       }
 
+      // Feedback: 代理用户反馈到 AIECCOEVO 平台
+      if (url.pathname === '/api/feedback' && req.method === 'POST') {
+        try {
+          const body = await req.json() as { content?: string; category?: string; email?: string; env_summary?: any };
+          const remote = await requestRemoteJson(`${communityApiBase}/feedback`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+            body: JSON.stringify(body),
+          });
+          return Response.json(remote.data, { status: remote.status });
+        } catch (e: any) {
+          return Response.json({ error: '无法提交反馈: ' + e.message }, { status: 502 });
+        }
+      }
+
       // History: 本地历史报告
       if (url.pathname === '/api/history' && req.method === 'GET') {
         const max = parseInt(url.searchParams.get('max') || '10', 10);

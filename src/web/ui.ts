@@ -320,6 +320,16 @@ h1{font-family:var(--display);font-size:1.5rem;font-weight:700;letter-spacing:3p
 .support-link:hover{border-color:rgba(0,240,255,.18);background:rgba(0,240,255,.04);transform:translateY(-1px)}
 .support-link-title{font-size:.82rem;font-weight:700;margin-bottom:6px}
 .support-link-copy{font-size:.74rem;color:var(--text-dim);line-height:1.55}
+/* 反馈表单 */
+.feedback-card{margin-top:18px;border-color:rgba(0,240,255,.12)}
+.feedback-card .badge{background:rgba(0,240,255,.12);color:var(--cyan);font-size:.65rem;padding:2px 8px;border-radius:4px;margin-left:6px}
+.feedback-form{display:flex;flex-direction:column;gap:10px}
+.feedback-select,.feedback-input,.feedback-textarea{background:rgba(0,0,0,.3);border:1px solid rgba(255,255,255,.1);border-radius:8px;color:var(--text);font-family:var(--mono);font-size:.82rem;padding:10px 12px;outline:none;transition:border-color .2s}
+.feedback-select:focus,.feedback-input:focus,.feedback-textarea:focus{border-color:var(--cyan)}
+.feedback-textarea{resize:vertical;min-height:70px}
+.feedback-row{display:flex;gap:10px;flex-wrap:wrap}
+.feedback-input{flex:1;min-width:180px}
+.feedback-status{font-size:.78rem;min-height:18px;margin-top:2px}
 /* 进度条 */
 .progress-bar{height:4px;background:rgba(0,240,255,.08);border-radius:2px;overflow:hidden;margin:12px 0}
 .progress-fill{height:100%;background:linear-gradient(90deg,var(--cyan),#7c3aed);border-radius:2px;transition:width .3s ease;width:0%;box-shadow:0 0 10px var(--cyan-glow)}
@@ -1392,6 +1402,55 @@ async function openCommunity() {
   }
 }
 
+async function submitFeedback() {
+  const content = (document.getElementById('fb-content') as HTMLTextAreaElement)?.value?.trim() || '';
+  const category = (document.getElementById('fb-category') as HTMLSelectElement)?.value || 'problem';
+  const email = (document.getElementById('fb-email') as HTMLInputElement)?.value?.trim() || '';
+  const statusEl = document.getElementById('fb-status');
+  const btn = document.getElementById('fb-submit-btn') as HTMLButtonElement;
+
+  if (content.length < 5) {
+    if (statusEl) statusEl.innerHTML = '<span style="color:#ff6b6b">请至少输入 5 个字描述你的问题或建议</span>';
+    return;
+  }
+
+  if (btn) { btn.textContent = '发送中...'; btn.disabled = true; }
+  if (statusEl) statusEl.innerHTML = '';
+
+  try {
+    const payload: any = {
+      content,
+      category,
+      env_summary: {
+        score: (window as any).__scanPayload?.score?.score || (window as any).__scanPayload?.score || 0,
+        failCount: ((window as any).__scanPayload?.results || []).filter((r: any) => r.status === 'fail').length,
+        warnCount: ((window as any).__scanPayload?.results || []).filter((r: any) => r.status === 'warn').length,
+        platform: navigator.platform,
+        userAgent: navigator.userAgent.substring(0, 200),
+      },
+    };
+    if (email && email.includes('@')) payload.email = email;
+
+    const res = await fetch('/api/feedback', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+
+    if (!res.ok) throw new Error(data.detail || data.error || '提交失败');
+
+    if (statusEl) statusEl.innerHTML = '<span style="color:#00ff88">反馈已发送，感谢你的意见！我们会尽快处理。</span>';
+    const textarea = document.getElementById('fb-content') as HTMLTextAreaElement;
+    if (textarea) textarea.value = '';
+  } catch(e: any) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (statusEl) statusEl.innerHTML = '<span style="color:#ff6b6b">发送失败: ' + msg + '</span>';
+  } finally {
+    if (btn) { btn.textContent = '发送反馈'; btn.disabled = false; }
+  }
+}
+
 window.__resultFilter = window.__resultFilter || 'all';
 applyResultFilters();
 
@@ -1502,6 +1561,7 @@ export function renderDiagPanel(
       <div id="solutions-list"></div>
     </div>
     ${renderSupportHub()}
+    ${renderFeedbackForm(score, results)}
   </div>`;
 }
 
@@ -1655,6 +1715,34 @@ function renderSupportHub(): string {
         <div class="support-link-title">外部资源</div>
         <div class="support-link-copy">模型套餐、API 平台和镜像站都保留，但不再放在主流程前面。</div>
       </a>
+    </div>
+  </div>`;
+}
+
+function renderFeedbackForm(score: ScoreResult, results: ScanResult[]): string {
+  const failCount = results.filter(r => r.status === 'fail').length;
+  const warnCount = results.filter(r => r.status === 'warn').length;
+  return `
+  <div class="card feedback-card" id="feedback-section">
+    <div class="section-title">反馈与建议 <span class="badge">直达开发者</span></div>
+    <div style="font-size:.82rem;color:#94a3b8;margin-bottom:12px">
+      遇到问题或有改进想法？直接告诉我们，无需注册登录。我们会根据反馈持续优化工具和社区方案。
+    </div>
+    <div class="feedback-form">
+      <div class="feedback-row">
+        <select id="fb-category" class="feedback-select">
+          <option value="problem">遇到问题</option>
+          <option value="suggestion">功能建议</option>
+          <option value="bug">报告 Bug</option>
+          <option value="other">其他</option>
+        </select>
+      </div>
+      <textarea id="fb-content" class="feedback-textarea" rows="3" placeholder="描述你遇到的问题或想法...（至少 5 个字）" maxlength="2000"></textarea>
+      <div class="feedback-row" style="align-items:center;justify-content:space-between">
+        <input id="fb-email" class="feedback-input" type="email" placeholder="邮箱（可选，方便我们回复你）" />
+        <button class="scan-btn" onclick="submitFeedback()" id="fb-submit-btn" style="margin:0;white-space:nowrap">发送反馈</button>
+      </div>
+      <div id="fb-status" class="feedback-status"></div>
     </div>
   </div>`;
 }
