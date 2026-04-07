@@ -1,7 +1,6 @@
 // 批量导入所有 scanner（每个文件会自动 registerScanner）
 // 路径环境
 import './path-chinese.js';
-import './path-spaces.js';
 import './long-paths.js';
 import './env-path-length.js';
 import './temp-space.js';

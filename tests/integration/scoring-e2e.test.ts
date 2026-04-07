@@ -24,7 +24,6 @@ const MOCK_ONLY_SCANNER_EXCLUDES = new Set([
  */
 function allPassResponses(): Map<string, MockResponse> {
   return new Map([
-    // path-spaces: 无空格
     ['where.exe git', { stdout: 'C:\\Git\\cmd\\git.exe', exitCode: 0 }],
     ['where.exe node', { stdout: 'C:\\node\\node.exe', exitCode: 0 }],
     ['where.exe python', { stdout: 'C:\\Python311\\python.exe', exitCode: 0 }],

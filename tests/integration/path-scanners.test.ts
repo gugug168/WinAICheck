@@ -1,4 +1,4 @@
-import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
+import { describe, test, expect, afterEach } from 'bun:test';
 import { _test } from '../../src/executor/index';
 import { createCommandMock, teardownMock, withEnv, type MockResponse } from './mock-helper';
 
@@ -28,40 +28,6 @@ describe('path-chinese scanner', () => {
       const result = await scanner.scan();
       expect(result.status).toBe('pass');
     });
-  });
-});
-
-describe('path-spaces scanner', () => {
-  beforeEach(() => {
-    setupMock(new Map([
-      ['where.exe git', { stdout: 'C:\\Program Files\\Git\\cmd\\git.exe', exitCode: 0 }],
-      ['where.exe node', { stdout: 'C:\\node\\node.exe', exitCode: 0 }],
-      ['where.exe python', { stdout: 'C:\\Python311\\python.exe', exitCode: 0 }],
-    ]));
-  });
-  afterEach(teardownMock);
-
-  test('Git 安装路径有空格 → warn', async () => {
-    setupMock(new Map([
-      ['where.exe git', { stdout: 'C:\\Users\\John Doe\\Git\\cmd\\git.exe', exitCode: 0 }],
-      ['where.exe node', { stdout: 'C:\\node\\node.exe', exitCode: 0 }],
-      ['where.exe python', { stdout: 'C:\\Python311\\python.exe', exitCode: 0 }],
-    ]));
-    const scanner = getScannerById('path-spaces')!;
-    const result = await scanner.scan();
-    expect(result.status).toBe('warn');
-    expect(result.message).toContain('空格');
-  });
-
-  test('Program Files 标准路径 → pass', async () => {
-    setupMock(new Map([
-      ['where.exe git', { stdout: 'C:\\Program Files\\Git\\cmd\\git.exe', exitCode: 0 }],
-      ['where.exe node', { stdout: 'C:\\node\\node.exe', exitCode: 0 }],
-      ['where.exe python', { stdout: 'C:\\Python311\\python.exe', exitCode: 0 }],
-    ]));
-    const scanner = getScannerById('path-spaces')!;
-    const result = await scanner.scan();
-    expect(result.status).toBe('pass');
   });
 });
 

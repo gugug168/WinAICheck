@@ -6,15 +6,16 @@
  * Usage: npx winaicheck
  */
 
-const { execFileSync } = require("child_process");
-const fs = require("fs");
-const path = require("path");
-const https = require("https");
-const http = require("http");
+import { execFileSync } from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
+import https from 'node:https';
+import http from 'node:http';
+import { pathToFileURL } from 'node:url';
 
-const REPO = "gugug168/WinAICheck";
-const EXE_NAME = "WinAICheck.exe";
-const CACHE_DIR = path.join(process.env.USERPROFILE || process.env.HOME, ".winaicheck");
+const REPO = 'gugug168/WinAICheck';
+const EXE_NAME = 'WinAICheck.exe';
+const CACHE_DIR = path.join(process.env.USERPROFILE || process.env.HOME || '.', '.winaicheck');
 
 function fetchJSON(url) {
   return new Promise((resolve, reject) => {
@@ -56,7 +57,9 @@ function downloadFile(url, dest) {
         res.pipe(file);
         file.on("finish", () => { file.close(); resolve(); });
       }).on("error", (e) => {
-        fs.unlinkSync(dest);
+        if (fs.existsSync(dest)) {
+          fs.unlinkSync(dest);
+        }
         reject(e);
       });
     };
@@ -64,7 +67,7 @@ function downloadFile(url, dest) {
   });
 }
 
-async function main() {
+export async function main(argv = process.argv.slice(2)) {
   // Ensure cache dir exists
   if (!fs.existsSync(CACHE_DIR)) {
     fs.mkdirSync(CACHE_DIR, { recursive: true });
@@ -74,7 +77,7 @@ async function main() {
 
   // Get latest release info
   console.log("WinAICheck: 获取最新版本...");
-  const release = await fetchJSON(`https://api.github.com/repos/${REPO}//releases/latest`);
+  const release = await fetchJSON(`https://api.github.com/repos/${REPO}/releases/latest`);
   const version = release.tag_name;
 
   const asset = release.assets.find((a) => a.name === EXE_NAME);
@@ -106,7 +109,7 @@ async function main() {
   // Run the exe
   console.log("");
   try {
-    execFileSync(exePath, process.argv.slice(2), {
+    execFileSync(exePath, argv, {
       stdio: "inherit",
       windowsHide: false,
     });
@@ -117,8 +120,14 @@ async function main() {
   }
 }
 
-main().catch((e) => {
-  console.error("WinAICheck 错误:", e.message);
-  console.error(`请手动下载: https://github.com/${REPO}/releases`);
-  process.exit(1);
-});
+const isDirectExecution = process.argv[1]
+  ? import.meta.url === pathToFileURL(process.argv[1]).href
+  : false;
+
+if (isDirectExecution) {
+  main().catch((e) => {
+    console.error("WinAICheck 错误:", e.message);
+    console.error(`请手动下载: https://github.com/${REPO}/releases`);
+    process.exit(1);
+  });
+}

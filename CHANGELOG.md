@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.3.1] - 2026-04-07
+
+### Fixed
+- 修复 `npx winaicheck` 在 Node.js ESM 环境下因 `require()` 报错后直接崩溃的问题
+- 修复 npm 包包装器的 GitHub Releases 最新版本请求地址，避免下载流程异常
+
+### Changed
+- 移除“安装路径空格检测”与对应修复建议，不再把 `Program Files` 等标准 Windows 安装路径视为问题项
+
 ## [0.1.0] - 2026-04-01
 
 ### 新增

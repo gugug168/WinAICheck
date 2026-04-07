@@ -628,22 +628,6 @@ registerFixer({
   },
 });
 
-// path-spaces → 路径空格指引
-registerFixer({
-  scannerId: 'path-spaces',
-  getFix(result: ScanResult): FixSuggestion {
-    return {
-      id: 'fix-path-spaces',
-      scannerId: 'path-spaces',
-      tier: 'red',
-      description: '部分工具安装在含空格的路径下，可能导致兼容性问题。\n建议：\n1. 将工具重新安装到无空格路径（如 C:\\Tools\\）\n2. 或创建符号链接: mklink /D C:\\Tools\\Git "C:\\Program Files\\Git"\n3. 部分工具可通过配置独立路径绕过',
-      risk: '需手动操作',
-    };
-  },
-  async backup(): Promise<BackupData> { return emptyBackup('path-spaces'); },
-  async execute(): Promise<FixResult> { return { success: false, message: '需手动操作，请参考指引' }; },
-});
-
 // unix-commands → 安装 Unix 命令（通过 Git Bash 或 WSL）
 registerFixer({
   scannerId: 'unix-commands',
