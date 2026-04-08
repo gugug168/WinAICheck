@@ -2,8 +2,8 @@ import { describe, expect, test } from 'bun:test';
 import { _testHelpers, buildCommunityClaimUrl } from '../src/web/community-config';
 
 describe('community-config helper', () => {
-  test('默认使用当前线上可达的 http 地址', () => {
-    expect(buildCommunityClaimUrl('abc123')).toBe('http://aicoevo.net/claim?t=abc123');
+  test('默认使用当前线上可达的 https 地址', () => {
+    expect(buildCommunityClaimUrl('abc123')).toBe('https://aicoevo.net/claim?t=abc123');
   });
 
   test('会清理末尾斜杠并保留协议', () => {
