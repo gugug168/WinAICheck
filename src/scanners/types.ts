@@ -69,6 +69,26 @@ export interface FixResult {
   message: string;
   rolledBack?: boolean;
   newScanResult?: ScanResult;
+  /** 验证闭环：是否通过重扫确认修复生效 */
+  verified?: boolean;
+  /** 部分修复：执行成功但验证仍有警告 */
+  partial?: boolean;
+  /** 验证未通过时的下一步操作指引 */
+  nextSteps?: string[];
+  /** 修复后指导：需要用户做的后续操作（重启终端、验证命令等） */
+  postFixGuidance?: PostFixGuidance;
+}
+
+/** 修复后指导 */
+export interface PostFixGuidance {
+  /** 是否需要重启终端 */
+  needsTerminalRestart?: boolean;
+  /** 是否需要重启电脑 */
+  needsReboot?: boolean;
+  /** 手动验证命令 */
+  verifyCommands?: string[];
+  /** 额外注意事项 */
+  notes?: string[];
 }
 
 /** 类别权重映射 */
