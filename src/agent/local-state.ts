@@ -2,7 +2,7 @@ import { execFileSync } from 'child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
-import { AGENT_LITE_SOURCE } from './embedded-agent-lite-source';
+import { AGENT_LITE_SOURCE, AGENT_LITE_HASH } from './embedded-agent-lite-source';
 
 function getBaseDir(): string {
   return join(homedir(), '.aicoevo');
@@ -50,7 +50,11 @@ function getPaths() {
 }
 
 function today(): string {
-  return new Date().toISOString().slice(0, 10);
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, '0');
+  const d = String(now.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
 }
 
 function quoteCmdArg(value: string): string {
@@ -88,6 +92,13 @@ function installEmbeddedLocalAgent() {
   const paths = getPaths();
   mkdirSync(paths.agentDir, { recursive: true });
   writeFileSync(paths.agentJs, AGENT_LITE_SOURCE, 'utf-8');
+  if (AGENT_LITE_HASH) {
+    writeFileSync(
+      join(paths.agentDir, 'agent-lite.hash.json'),
+      JSON.stringify({ sha256: AGENT_LITE_HASH, source: 'embedded', installedAt: new Date().toISOString() }, null, 2) + '\n',
+      'utf-8',
+    );
+  }
   writeFileSync(
     paths.agentCmd,
     ['@echo off', 'setlocal', 'node "%~dp0agent-lite.js" %*', 'exit /b %ERRORLEVEL%', ''].join('\r\n'),
@@ -140,11 +151,18 @@ export function getAgentLocalStatus() {
 
 export function enableAgentExperience(target = 'all') {
   const localAgent = installEmbeddedLocalAgent();
-  const hook = runAgentCommand(['install-hook', '--target', target]);
+  let hookOutput = '';
+  let hookOk = false;
+  try {
+    hookOutput = runAgentCommand(['install-hook', '--target', target]);
+    hookOk = true;
+  } catch {
+    hookOk = false;
+  }
   return {
-    ok: true,
+    ok: hookOk,
     localAgent,
-    hook,
+    hook: hookOutput,
     status: getAgentLocalStatus(),
   };
 }
@@ -159,10 +177,19 @@ export function pauseAgentUploads(paused: boolean) {
 }
 
 export function syncAgentEvents() {
-  const output = runAgentCommand(['sync']);
-  return {
-    ok: true,
-    output,
-    status: getAgentLocalStatus(),
-  };
+  try {
+    const output = runAgentCommand(['sync']);
+    const parsed = JSON.parse(output);
+    return {
+      ok: parsed.ok !== false && !parsed.error,
+      output,
+      status: getAgentLocalStatus(),
+    };
+  } catch {
+    return {
+      ok: false,
+      output: '',
+      status: getAgentLocalStatus(),
+    };
+  }
 }

@@ -1350,13 +1350,17 @@ async function rescan() {
 
 async function rescanWithoutStreaming() {
   const text = document.getElementById('scan-live-text');
-  if (text) text.textContent = '当前浏览器不支持实时流式进度，正在切换到兼容模式...';
+  if (text) text.textContent = '正在扫描（兼容模式），预计需要 10-30 秒，请耐心等待...';
+
+  const progressFill = document.querySelector('.progress-fill');
+  if (progressFill) progressFill.style.width = '40%';
 
   const res = await fetch('/api/scan-full', { method: 'POST' });
   const data = await res.json();
   if (!res.ok || !data.ok) {
     throw new Error((data && (data.error || data.message)) || '扫描失败');
   }
+  if (progressFill) progressFill.style.width = '100%';
   replaceDiagPanel(data.html, data.results || [], data.score || { score: 0, label: '', breakdown: [] });
 }
 

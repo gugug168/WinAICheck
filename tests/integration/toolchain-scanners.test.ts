@@ -94,11 +94,26 @@ describe('python-versions scanner', () => {
     setupMock(new Map([
       ['python --version', { stdout: 'Python 3.11.5', exitCode: 0 }],
       ['python3 --version', { exitCode: 1 }],
+      ['py -V', { exitCode: 1 }],
       ['where.exe python', { stdout: 'C:\\Python311\\python.exe', exitCode: 0 }],
     ]));
     const scanner = getScannerById('python-versions')!;
     const result = await scanner.scan();
     expect(result.status).toBe('pass');
+  });
+
+  test('仅 py 启动器可用 → pass', async () => {
+    setupMock(new Map([
+      ['python --version', { exitCode: 1 }],
+      ['python3 --version', { exitCode: 1 }],
+      ['py -V', { stdout: 'Python 3.11.5', exitCode: 0 }],
+      ['where.exe py', { stdout: 'C:\\Windows\\py.exe', exitCode: 0 }],
+      ['py -0p', { stdout: ' -V:3.11 * C:\\Python311\\python.exe', exitCode: 0 }],
+    ]));
+    const scanner = getScannerById('python-versions')!;
+    const result = await scanner.scan();
+    expect(result.status).toBe('pass');
+    expect(result.message).toContain('3.11.5');
   });
 });
 

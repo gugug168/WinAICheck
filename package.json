@@ -6,6 +6,10 @@
   "bin": {
     "winaicheck": "./bin/winaicheck.js"
   },
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org/",
+    "access": "public"
+  },
   "files": [
     "bin/"
   ],

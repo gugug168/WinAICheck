@@ -43,6 +43,7 @@ export interface FixSuggestion {
   tier: FixTier;
   description: string;
   commands?: string[];
+  actionLabel?: string;
   risk: string;
 }
 

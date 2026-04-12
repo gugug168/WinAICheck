@@ -118,9 +118,23 @@ function buildGitPathFixCommand(): string {
   ].join('; ');
 }
 
+function buildPythonLocatorMessage(lines: string[]): string {
+  const output = lines.filter(Boolean).join('\n\n');
+  if (!output) {
+    return '未发现可用 Python 入口。\n已检查: python、python3、py 启动器、pip。';
+  }
+  return [
+    '以下是当前 Python 相关入口信息。',
+    '这一步只用于确认默认版本、路径来源和多版本冲突，不会修改你的环境。',
+    '',
+    output,
+  ].join('\n');
+}
+
 export const _testHelpers = {
   escapePowerShellSingleQuotedString,
   buildGitPathFixCommand,
+  buildPythonLocatorMessage,
 };
 
 /** 通用执行器：只执行命令，不备份 */
@@ -272,16 +286,26 @@ registerFixer({
     return {
       id: 'fix-env-path-length',
       scannerId: 'env-path-length',
-      tier: 'green',
-      description: '分析 PATH 中的重复和失效条目',
-      risk: '低风险：仅分析不修改',
+      tier: 'yellow',
+      description: '查看 PATH 重复/冗余条目报告（不会自动修改）',
+      actionLabel: '查看报告',
+      risk: '无风险：只展示诊断信息，需要你手动清理',
     };
   },
   async backup(): Promise<BackupData> {
     return emptyBackup('env-path-length');
   },
   async execute(): Promise<FixResult> {
-    return { success: true, message: '仅分析，无需修改' };
+    const scanner = getScannerById('env-path-length');
+    if (!scanner) return { success: false, message: '未找到 PATH 检测器' };
+    const result = await scanner.scan();
+    const hasIssues = result.status === 'fail' || result.status === 'warn';
+    return {
+      success: hasIssues,
+      message: result.detail
+        ? `${result.message}\n\n${result.detail}\n\n说明：当前不会自动改 PATH，请先确认哪些条目确实可以删除。`
+        : `${result.message}\n\n说明：当前没有可直接自动修复的 PATH 项。`,
+    };
   },
 });
 
@@ -343,16 +367,39 @@ registerFixer({
       id: 'fix-python-versions',
       scannerId: 'python-versions',
       tier: 'yellow',
-      description: '列出所有 Python 版本及路径，建议清理冲突版本',
-      risk: '中风险：需手动选择保留/卸载的版本',
+      description: '查看当前 Python 入口、版本和来源，确认是否存在旧版本或多版本冲突',
+      actionLabel: '查看详情',
+      risk: '无风险：只读取 python/pip/py 路径，不会修改环境',
     };
   },
   async backup(): Promise<BackupData> {
     return emptyBackup('python-versions');
   },
   async execute(): Promise<FixResult> {
-    const r = runCommand('where.exe python', 5000);
-    return { success: true, message: r.exitCode === 0 ? r.stdout : '未找到 Python' };
+    const checks = [
+      { label: 'python --version', command: 'python --version' },
+      { label: 'python3 --version', command: 'python3 --version' },
+      { label: 'where.exe python', command: 'where.exe python' },
+      { label: 'where.exe python3', command: 'where.exe python3' },
+      { label: 'py -0p', command: 'py -0p' },
+      { label: 'pip --version', command: 'pip --version' },
+    ];
+    const lines: string[] = [];
+    let found = false;
+
+    for (const check of checks) {
+      const r = runCommand(check.command, 5000);
+      const text = (r.stdout || r.stderr || '').trim();
+      if (r.exitCode === 0 && text) {
+        found = true;
+        lines.push(`[${check.label}]\n${text}`);
+      }
+    }
+
+    return {
+      success: found,
+      message: buildPythonLocatorMessage(lines),
+    };
   },
 });
 

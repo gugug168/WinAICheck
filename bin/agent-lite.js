@@ -5,7 +5,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-const DEFAULT_ORIGIN = 'http://aicoevo.net';
+const DEFAULT_ORIGIN = 'https://aicoevo.net';
 const MAX_CAPTURE_CHARS = 8000;
 const MAX_UPLOAD_EVENTS = 50;
 const HOOK_START = '# >>> WinAICheck Agent Hook >>>';
@@ -62,9 +62,9 @@ function readJson(file, fallback) {
   }
 }
 
-function writeJson(file, data) {
+function writeJson(file, data, mode = 0o600) {
   ensureParent(file);
-  fs.writeFileSync(file, `${JSON.stringify(data, null, 2)}\n`, 'utf8');
+  fs.writeFileSync(file, `${JSON.stringify(data, null, 2)}\n`, { encoding: 'utf8', mode });
 }
 
 function appendJsonl(file, data) {
@@ -72,20 +72,36 @@ function appendJsonl(file, data) {
   fs.appendFileSync(file, `${JSON.stringify(data)}\n`, 'utf8');
 }
 
-function readJsonl(file) {
+const MAX_JSONL_READ = 5000;
+
+function readJsonl(file, maxRows = MAX_JSONL_READ) {
   if (!fs.existsSync(file)) return [];
-  return fs.readFileSync(file, 'utf8')
-    .split(/\r?\n/)
-    .filter(Boolean)
-    .map(line => {
-      try { return JSON.parse(line); } catch { return null; }
-    })
-    .filter(Boolean);
+  const content = fs.readFileSync(file, 'utf8');
+  const lines = content.split(/\r?\n/);
+  const result = [];
+  // Read from the end to get the most recent entries
+  for (let i = lines.length - 1; i >= 0 && result.length < maxRows; i--) {
+    if (!lines[i]) continue;
+    try { result.push(JSON.parse(lines[i])); } catch { /* skip */ }
+  }
+  return result.reverse();
 }
 
 function writeJsonl(file, rows) {
   ensureParent(file);
   fs.writeFileSync(file, rows.map(row => JSON.stringify(row)).join('\n') + (rows.length ? '\n' : ''), 'utf8');
+}
+
+const MAX_LEDGER_ENTRIES = 500;
+
+function appendJsonlWithRotation(file, data) {
+  appendJsonl(file, data);
+  try {
+    const lines = fs.readFileSync(file, 'utf8').split(/\r?\n/).filter(Boolean);
+    if (lines.length > MAX_LEDGER_ENTRIES) {
+      writeJsonl(file, lines.slice(-MAX_LEDGER_ENTRIES).map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean));
+    }
+  } catch { /* rotation failure is non-critical */ }
 }
 
 export function sanitizeText(text) {
@@ -120,12 +136,24 @@ function today(deps = {}) {
 
 function loadConfig(deps = {}) {
   const p = paths(deps);
+  const hadExisting = fs.existsSync(p.config);
+  let oldIds = null;
+  if (hadExisting) {
+    try { const raw = JSON.parse(fs.readFileSync(p.config, 'utf8')); oldIds = { clientId: raw.clientId, deviceId: raw.deviceId }; } catch { /* corrupt */ }
+  }
   const config = readJson(p.config, {});
   if (!config.clientId) config.clientId = `client_${crypto.randomUUID()}`;
   if (!config.deviceId) config.deviceId = `device_${crypto.randomUUID()}`;
   if (config.shareData === undefined) config.shareData = false;
   if (config.autoSync === undefined) config.autoSync = false;
   if (config.paused === undefined) config.paused = false;
+  // If IDs were regenerated, back up old config
+  if (oldIds && (oldIds.clientId && oldIds.clientId !== config.clientId)) {
+    try {
+      const backupPath = `${p.config}.lost-${Date.now()}.bak`;
+      fs.copyFileSync(p.config, backupPath);
+    } catch { /* non-critical */ }
+  }
   writeJson(p.config, config);
   return config;
 }
@@ -192,37 +220,48 @@ export function createEvent(input, deps = {}) {
   };
 }
 
-function updateDaily(event, deps = {}) {
-  const p = paths(deps);
-  const date = event.occurredAt.slice(0, 10);
-  const file = path.join(p.dailyDir, `${date}.json`);
-  const pack = readJson(file, {
-    date,
-    totalEvents: 0,
-    uniqueFingerprints: 0,
-    repeatedEvents: 0,
-    fixedEvents: 0,
-    topProblems: [],
-  });
+let _dailyMutex = Promise.resolve();
 
-  pack.totalEvents += 1;
-  const problem = pack.topProblems.find(item => item.fingerprint === event.fingerprint);
-  if (problem) {
-    problem.count += 1;
-    problem.status = 'repeated';
-    pack.repeatedEvents += 1;
-  } else {
-    pack.topProblems.push({
-      fingerprint: event.fingerprint,
-      title: event.sanitizedMessage.split(/\r?\n/)[0].slice(0, 120) || event.eventType,
-      count: 1,
-      status: 'new',
+function updateDaily(event, deps = {}) {
+  const prev = _dailyMutex;
+  let resolve;
+  _dailyMutex = new Promise(r => { resolve = r; });
+  // Synchronous mutex: queue writes
+  // Since this is sync file I/O, we just serialize calls
+  try {
+    const p = paths(deps);
+    const date = event.occurredAt.slice(0, 10);
+    const file = path.join(p.dailyDir, `${date}.json`);
+    const pack = readJson(file, {
+      date,
+      totalEvents: 0,
+      uniqueFingerprints: 0,
+      repeatedEvents: 0,
+      fixedEvents: 0,
+      topProblems: [],
     });
+
+    pack.totalEvents += 1;
+    const problem = pack.topProblems.find(item => item.fingerprint === event.fingerprint);
+    if (problem) {
+      problem.count += 1;
+      problem.status = 'repeated';
+      pack.repeatedEvents += 1;
+    } else {
+      pack.topProblems.push({
+        fingerprint: event.fingerprint,
+        title: event.sanitizedMessage.split(/\r?\n/)[0].slice(0, 120) || event.eventType,
+        count: 1,
+        status: 'new',
+      });
+    }
+    pack.uniqueFingerprints = pack.topProblems.length;
+    pack.topProblems.sort((a, b) => b.count - a.count);
+    writeJson(file, pack);
+    return pack;
+  } finally {
+    resolve();
   }
-  pack.uniqueFingerprints = pack.topProblems.length;
-  pack.topProblems.sort((a, b) => b.count - a.count);
-  writeJson(file, pack);
-  return pack;
 }
 
 export function storeEvent(event, deps = {}) {
@@ -256,6 +295,15 @@ function parseArgs(argv) {
   return result;
 }
 
+let _syncMutex = Promise.resolve();
+
+function withMutex(fn) {
+  const prev = _syncMutex;
+  let resolve;
+  _syncMutex = new Promise(r => { resolve = r; });
+  return prev.then(() => fn()).finally(resolve);
+}
+
 async function readStdin() {
   if (process.stdin.isTTY) return '';
   const chunks = [];
@@ -265,13 +313,25 @@ async function readStdin() {
 
 async function messageFromCaptureArgs(args) {
   if (args.message) return String(args.message);
-  if (args.log) return fs.readFileSync(String(args.log), 'utf8');
+  if (args.log) {
+    const logPath = path.resolve(String(args.log));
+    const home = getHome();
+    const cwd = process.cwd();
+    const allowed = [home, cwd, path.join(os.tmpdir(), 'winaicheck')];
+    const isAllowed = allowed.some(prefix => logPath.startsWith(prefix));
+    if (!isAllowed) throw new Error(`--log 只允许读取 HOME、当前目录或临时目录下的文件`);
+    return fs.readFileSync(logPath, 'utf8');
+  }
   return readStdin();
 }
 
 function apiBase() {
-  const origin = (process.env.AICOEVO_API_BASE || process.env.AICOEVO_BASE_URL || process.env.AICOEVO_WEB_ORIGIN || DEFAULT_ORIGIN).replace(/\/+$/, '');
-  return origin.endsWith('/api/v1') ? origin : `${origin}/api/v1`;
+  const raw = (process.env.AICOEVO_API_BASE || process.env.AICOEVO_BASE_URL || process.env.AICOEVO_WEB_ORIGIN || DEFAULT_ORIGIN).replace(/\/+$/, '');
+  if (!raw.startsWith('https://') && process.env.NODE_ENV !== 'development' && !process.env.WINAICHECK_ALLOW_HTTP) {
+    const safe = raw.replace(/^http:\/\//, 'https://');
+    return safe.endsWith('/api/v1') ? safe : `${safe}/api/v1`;
+  }
+  return raw.endsWith('/api/v1') ? raw : `${raw}/api/v1`;
 }
 
 async function requestJson(url, init = {}, deps = {}) {
@@ -287,9 +347,13 @@ async function requestJson(url, init = {}, deps = {}) {
     signal: AbortSignal.timeout(init.timeoutMs || 5000),
   });
   const text = await response.text();
+  let data = {};
+  if (text) {
+    try { data = JSON.parse(text); } catch { data = { _raw: text.slice(0, 200) }; }
+  }
   return {
     status: response.status,
-    data: text ? JSON.parse(text) : {},
+    data,
   };
 }
 
@@ -298,56 +362,58 @@ function authHeaders(config) {
 }
 
 async function syncEvents(deps = {}) {
-  const p = paths(deps);
-  const config = loadConfig(deps);
-  if (config.paused) return { ok: false, skipped: true, reason: 'paused' };
-  if (!config.shareData) return { ok: false, skipped: true, reason: 'not_authorized' };
+  return withMutex(async () => {
+    const p = paths(deps);
+    const config = loadConfig(deps);
+    if (config.paused) return { ok: false, skipped: true, reason: 'paused' };
+    if (!config.shareData) return { ok: false, skipped: true, reason: 'not_authorized' };
 
-  const all = readJsonl(p.outbox);
-  const pending = all.filter(event => event.syncStatus !== 'synced').slice(0, MAX_UPLOAD_EVENTS);
-  if (pending.length === 0) return { ok: true, uploaded: 0 };
+    const all = readJsonl(p.outbox);
+    const pending = all.filter(event => event.syncStatus !== 'synced').slice(0, MAX_UPLOAD_EVENTS);
+    if (pending.length === 0) return { ok: true, uploaded: 0 };
 
-  const remote = await requestJson(`${apiBase()}/agent-events/batch`, {
-    method: 'POST',
-    headers: authHeaders(config),
-    body: {
-      clientId: config.clientId,
-      deviceId: config.deviceId,
-      events: pending.map(({ syncStatus, ...event }) => event),
-    },
-  }, deps);
+    const remote = await requestJson(`${apiBase()}/agent-events/batch`, {
+      method: 'POST',
+      headers: authHeaders(config),
+      body: {
+        clientId: config.clientId,
+        deviceId: config.deviceId,
+        events: pending.map(({ syncStatus, ...event }) => event),
+      },
+    }, deps);
 
-  if (remote.status < 200 || remote.status >= 300) {
+    if (remote.status < 200 || remote.status >= 300) {
+      for (const event of pending) {
+        appendJsonlWithRotation(p.ledger, {
+          uploadedAt: nowIso(deps),
+          eventId: event.eventId,
+          fingerprint: event.fingerprint,
+          status: 'failed',
+          remoteStatus: remote.status,
+        });
+      }
+      return { ok: false, uploaded: 0, status: remote.status, data: remote.data };
+    }
+
+    const pendingIds = new Set(pending.map(event => event.eventId));
+    const updated = all.map(event => pendingIds.has(event.eventId) ? { ...event, syncStatus: 'synced', syncedAt: nowIso(deps) } : event);
+    writeJsonl(p.outbox, updated);
     for (const event of pending) {
-      appendJsonl(p.ledger, {
+      appendJsonlWithRotation(p.ledger, {
         uploadedAt: nowIso(deps),
         eventId: event.eventId,
         fingerprint: event.fingerprint,
-        status: 'failed',
+        status: 'synced',
         remoteStatus: remote.status,
       });
     }
-    return { ok: false, uploaded: 0, status: remote.status, data: remote.data };
-  }
 
-  const pendingIds = new Set(pending.map(event => event.eventId));
-  const updated = all.map(event => pendingIds.has(event.eventId) ? { ...event, syncStatus: 'synced', syncedAt: nowIso(deps) } : event);
-  writeJsonl(p.outbox, updated);
-  for (const event of pending) {
-    appendJsonl(p.ledger, {
-      uploadedAt: nowIso(deps),
-      eventId: event.eventId,
-      fingerprint: event.fingerprint,
-      status: 'synced',
-      remoteStatus: remote.status,
-    });
-  }
+    if (remote.data?.advice) {
+      writeAdvice(remote.data.advice, deps);
+    }
 
-  if (remote.data?.advice) {
-    writeAdvice(remote.data.advice, deps);
-  }
-
-  return { ok: true, uploaded: pending.length, data: remote.data };
+    return { ok: true, uploaded: pending.length, data: remote.data };
+  });
 }
 
 async function bestEffortSync(deps = {}) {
@@ -379,18 +445,25 @@ function writeAdvice(advice, deps = {}) {
     `置信度: ${Math.round(normalized.confidence * 100)}%`,
     '',
   ];
-  if (normalized.steps.length) {
+  const SAFE_COMMAND_RE = /^[a-zA-Z0-9._\-\/\\: ]+$/;
+  const SAFE_URL_RE = /^https?:\/\/[^\s<>"{}|\\^`]+$/;
+  const cleanSteps = normalized.steps.map(step => ({
+    ...step,
+    command: (step.command && SAFE_COMMAND_RE.test(step.command)) ? step.command : undefined,
+  }));
+  const cleanLinks = normalized.links.filter(link => link.url && SAFE_URL_RE.test(link.url));
+  if (cleanSteps.length) {
     lines.push('## 建议步骤', '');
-    normalized.steps.forEach((step, index) => {
+    cleanSteps.forEach((step, index) => {
       lines.push(`${index + 1}. ${step.title}`);
       if (step.detail) lines.push(`   ${step.detail}`);
       if (step.command) lines.push(`   命令: \`${step.command}\``);
     });
     lines.push('');
   }
-  if (normalized.links.length) {
+  if (cleanLinks.length) {
     lines.push('## 参考链接', '');
-    for (const link of normalized.links) lines.push(`- [${link.title}](${link.url})`);
+    for (const link of cleanLinks) lines.push(`- [${link.title}](${link.url})`);
     lines.push('');
   }
   ensureParent(p.adviceMd);
@@ -452,17 +525,21 @@ function buildHookBlock(agents) {
     lines.push(`  } else {`);
     lines.push(`    & npx winaicheck agent run --agent ${agent.target} --original '${original}' -- @args`);
     lines.push(`  }`);
-  lines.push('}');
+    lines.push('}');
   }
   lines.push(HOOK_END);
   return lines.join('\n');
 }
 
 function stripHookBlock(text) {
-  const start = text.indexOf(HOOK_START);
-  const end = text.indexOf(HOOK_END);
-  if (start === -1 || end === -1 || end < start) return text;
-  return `${text.slice(0, start).trimEnd()}\n${text.slice(end + HOOK_END.length).trimStart()}`.trim() + '\n';
+  let result = text;
+  while (true) {
+    const start = result.indexOf(HOOK_START);
+    const end = result.indexOf(HOOK_END);
+    if (start === -1 || end === -1 || end < start) break;
+    result = `${result.slice(0, start).trimEnd()}\n${result.slice(end + HOOK_END.length).trimStart()}`;
+  }
+  return result.trim() + '\n';
 }
 
 function installHook(args, deps = {}) {
@@ -501,11 +578,18 @@ function uninstallHook(args, deps = {}) {
   return { profiles };
 }
 
+function computeFileHash(filepath) {
+  const content = fs.readFileSync(filepath);
+  return crypto.createHash('sha256').update(content).digest('hex');
+}
+
 function installLocalAgent(deps = {}) {
   const p = paths(deps);
   ensureDir(p.agentDir);
   const selfPath = fileURLToPath(import.meta.url);
   fs.copyFileSync(selfPath, p.agentJs);
+  const hash = computeFileHash(p.agentJs);
+  writeJson(path.join(p.agentDir, 'agent-lite.hash.json'), { sha256: hash, installedAt: nowIso(deps) });
   const cmd = [
     '@echo off',
     'setlocal',
@@ -521,9 +605,22 @@ function installLocalAgent(deps = {}) {
   };
 }
 
+function verifyAgentIntegrity(deps = {}) {
+  const p = paths(deps);
+  const hashFile = path.join(p.agentDir, 'agent-lite.hash.json');
+  if (!fs.existsSync(p.agentJs) || !fs.existsSync(hashFile)) return false;
+  const expected = readJson(hashFile, {}).sha256;
+  if (!expected) return false;
+  return computeFileHash(p.agentJs) === expected;
+}
+
 async function runOriginalAgent(args, deps = {}) {
   const original = args.original;
   if (!original) throw new Error('缺少 --original');
+  if (!verifyAgentIntegrity(deps)) {
+    process.stderr.write('WinAICheck: Agent runner 完整性校验失败，正在重新安装...\n');
+    installLocalAgent(deps);
+  }
   const passthrough = args._ || [];
   const stderrChunks = [];
   const child = spawn(original, passthrough, {
@@ -602,7 +699,7 @@ async function authStart(args, deps = {}, io = {}) {
   config.email = args.email;
   saveConfig(config, deps);
   (io.stdout || process.stdout).write('验证码已发送。\n');
-  if (remote.data?.debug_code) {
+  if (remote.data?.debug_code && (process.env.NODE_ENV === 'development' || process.env.WINAICHECK_DEV || deps.fetchImpl)) {
     (io.stdout || process.stdout).write(`本地调试验证码: ${remote.data.debug_code}\n`);
   }
   return remote;
@@ -727,9 +824,12 @@ export const _testHelpers = {
   updateDaily,
 };
 
-const isDirectExecution = process.argv[1]
-  ? import.meta.url === pathToFileURL(process.argv[1]).href
-  : false;
+let isDirectExecution = false;
+try {
+  isDirectExecution = process.argv[1]
+    ? import.meta.url === pathToFileURL(process.argv[1]).href
+    : false;
+} catch { /* invalid argv[1] path */ }
 if (isDirectExecution) {
   main().then(code => {
     process.exitCode = code;
