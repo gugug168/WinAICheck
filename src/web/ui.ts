@@ -1235,8 +1235,8 @@ async function confirmFix() {
       }
     }
 
-    // 验证通过或部分修复时重扫更新 UI；验证未通过也重扫让用户看到当前状态
-    if (fix.scannerId) {
+    // 修复成功时重扫更新 UI（服务端验证已有重扫结果，这里刷新诊断面板）
+    if (data.success && fix.scannerId) {
       await rescanOne(fix.scannerId);
     }
   } catch(e) {

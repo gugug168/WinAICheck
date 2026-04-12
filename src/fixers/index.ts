@@ -383,8 +383,6 @@ export async function executeFix(fix: FixSuggestion): Promise<FixResult> {
   }
 
   try {
-    // 等待一小段时间让环境变量/注册表等变更生效
-    await new Promise(resolve => setTimeout(resolve, 1000));
     const newScan = await scanner.scan();
     result.newScanResult = newScan;
 
