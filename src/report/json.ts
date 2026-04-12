@@ -1,6 +1,7 @@
 import type { ScanResult, ScoreResult } from '../scanners/types';
 import { CATEGORY_WEIGHTS } from '../scanners/types';
 import { sanitize } from '../privacy/sanitizer';
+import { VERSION } from '../constants';
 
 export interface JsonReport {
   version: string;
@@ -12,7 +13,7 @@ export interface JsonReport {
 /** 生成 JSON 报告 */
 export function generateJsonReport(results: ScanResult[], score: ScoreResult): string {
   const report: JsonReport = {
-    version: '0.1.0',
+    version: VERSION,
     timestamp: new Date().toISOString(),
     score,
     results: results.map(r => ({

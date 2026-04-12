@@ -76,19 +76,23 @@ export interface UploadPayload {
   score: number;
   results: Array<{
     id: string;
+    name: string;
+    category: string;
     status: string;
     message: string;
   }>;
   systemInfo: SystemInfo;
 }
 
-/** 生成脱敏后的上传数据 */
+/** 生成脱敏后的上传数据（与后端 claim 页校验对齐） */
 export function createPayload(results: ScanResult[], score: ScoreResult): UploadPayload {
   return {
     timestamp: new Date().toISOString(),
     score: score.score,
     results: results.map(r => ({
       id: r.id,
+      name: r.name,
+      category: r.category,
       status: r.status,
       message: sanitize(r.message),
     })),

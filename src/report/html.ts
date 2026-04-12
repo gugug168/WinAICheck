@@ -1,5 +1,6 @@
 import type { ScanResult, ScoreResult, ScannerCategory } from '../scanners/types';
 import { sanitize } from '../privacy/sanitizer';
+import { VERSION } from '../constants';
 
 const CATEGORY_LABELS: Record<ScannerCategory, string> = {
   path: '路径与系统环境',
@@ -103,7 +104,7 @@ export function generateHtmlReport(results: ScanResult[], score: ScoreResult): s
 
   ${categoriesHtml}
 
-  <div class="footer">aicoevo v0.1.0 — AI 环境诊断工具</div>
+  <div class="footer">WinAICheck v${VERSION} — AI 环境诊断工具</div>
 </div>
 </body>
 </html>`;
