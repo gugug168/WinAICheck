@@ -12,6 +12,7 @@ import path from 'node:path';
 import https from 'node:https';
 import http from 'node:http';
 import { pathToFileURL } from 'node:url';
+import { main as agentMain } from './agent-lite.js';
 
 const REPO = 'gugug168/WinAICheck';
 const EXE_NAME = 'WinAICheck.exe';
@@ -68,6 +69,12 @@ function downloadFile(url, dest) {
 }
 
 export async function main(argv = process.argv.slice(2)) {
+  if (argv[0] === 'agent') {
+    const code = await agentMain(argv.slice(1));
+    if (code) process.exit(code);
+    return;
+  }
+
   // Ensure cache dir exists
   if (!fs.existsSync(CACHE_DIR)) {
     fs.mkdirSync(CACHE_DIR, { recursive: true });

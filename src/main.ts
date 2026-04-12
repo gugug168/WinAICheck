@@ -11,6 +11,8 @@ import { join } from 'path';
 import { execSync } from 'child_process';
 import { requestRemoteJson } from './web/remote-json';
 import { getCommunityApiBase } from './web/community-config';
+import { enableAgentExperience, getAgentLocalStatus, pauseAgentUploads, syncAgentEvents } from './agent/local-state';
+import type { ScoreResult } from './scanners/types';
 
 // 导入所有 scanner（触发注册）
 import './scanners/index';
@@ -110,13 +112,28 @@ async function webMode(port: number) {
       const url = new URL(req.url);
 
       if (url.pathname === '/') {
-        if (!cached) cached = await runAllScanners(5);
+        if (!cached) {
+          const initialScore: ScoreResult = {
+            score: 0,
+            grade: 'fair',
+            label: '准备扫描',
+            breakdown: [],
+          };
+          const prev = loadPreviousReport();
+          return new Response(generateWebUI([], initialScore, prev?.score ?? null, true), {
+            headers: { 'Content-Type': 'text/html; charset=utf-8' },
+          });
+        }
         const score = calculateScore(cached);
         saveLocal(createPayload(cached, score));
         const prev = loadPreviousReport();
         return new Response(generateWebUI(cached, score, prev?.score ?? null), {
           headers: { 'Content-Type': 'text/html; charset=utf-8' },
         });
+      }
+
+      if (url.pathname === '/favicon.ico') {
+        return new Response(null, { status: 204 });
       }
 
       if (url.pathname === '/api/fix' && req.method === 'POST') {
@@ -166,6 +183,20 @@ async function webMode(port: number) {
             'Cache-Control': 'no-cache',
             'Connection': 'keep-alive',
           },
+        });
+      }
+
+      if (url.pathname === '/api/scan-full' && req.method === 'POST') {
+        const results = await runAllScanners(5);
+        cached = results;
+        const score = calculateScore(cached);
+        saveLocal(createPayload(cached, score));
+        const prev = loadPreviousReport();
+        return Response.json({
+          ok: true,
+          results: cached,
+          score,
+          html: renderDiagPanel(cached, score, prev?.score ?? null),
         });
       }
 
@@ -274,6 +305,47 @@ async function webMode(port: number) {
       if (url.pathname === '/api/history' && req.method === 'GET') {
         const max = parseInt(url.searchParams.get('max') || '10', 10);
         return Response.json(loadHistory(max));
+      }
+
+      // Agent Lite: 本地错误探索状态
+      if (url.pathname === '/api/agent/status' && req.method === 'GET') {
+        return Response.json(getAgentLocalStatus());
+      }
+
+      // Agent Lite: 安装本地轻量 runner + Claude/OpenClaw Hook
+      if (url.pathname === '/api/agent/enable' && req.method === 'POST') {
+        try {
+          const body = await req.json().catch(() => ({})) as { target?: string };
+          return Response.json(enableAgentExperience(body.target || 'all'));
+        } catch (e: any) {
+          return Response.json({ ok: false, error: e.message }, { status: 500 });
+        }
+      }
+
+      // Agent Lite: 暂停/恢复自动上传
+      if (url.pathname === '/api/agent/pause' && req.method === 'POST') {
+        try {
+          return Response.json(pauseAgentUploads(true));
+        } catch (e: any) {
+          return Response.json({ ok: false, error: e.message }, { status: 500 });
+        }
+      }
+
+      if (url.pathname === '/api/agent/resume' && req.method === 'POST') {
+        try {
+          return Response.json(pauseAgentUploads(false));
+        } catch (e: any) {
+          return Response.json({ ok: false, error: e.message }, { status: 500 });
+        }
+      }
+
+      // Agent Lite: 手动同步一次
+      if (url.pathname === '/api/agent/sync' && req.method === 'POST') {
+        try {
+          return Response.json(syncAgentEvents());
+        } catch (e: any) {
+          return Response.json({ ok: false, error: e.message }, { status: 500 });
+        }
       }
 
       // Version check: 查询 npm registry 最新版本
