@@ -144,6 +144,35 @@ bun run src/main.ts -- --cli --json    # 仅输出 JSON
 bun run src/main.ts -- --help          # 查看帮助
 ```
 
+## Agent Lite 轻量探针
+
+第一次可以用完整 WinAICheck.exe 完成环境诊断、工具安装和授权。启用 Agent 错误探索后，WinAICheck 会把轻量 runner 安装到 `~/.aicoevo/agent/`，后续 Claude Code / OpenClaw 运行时只调用这个轻量 runner，不再启动完整 100MB 程序。
+
+```bash
+# 安装本地轻量 runner
+npx winaicheck agent install-local-agent
+
+# 安装 Claude Code + OpenClaw 的 PowerShell Hook（优先调用本地 runner，找不到才 fallback 到 npx）
+npx winaicheck agent install-hook --target all
+
+# 手动记录一次 Agent 错误
+npx winaicheck agent capture --agent claude-code --message "MCP config JSON parse error"
+
+# 查看本地上传清单与每日问题包
+npx winaicheck agent uploads --local
+npx winaicheck agent summary --date today
+
+# 同步到 AICOEVO 并读取最新建议
+npx winaicheck agent sync
+npx winaicheck agent advice --format markdown
+
+# 暂停或恢复自动上传
+npx winaicheck agent pause
+npx winaicheck agent resume
+```
+
+轻量探针只上传脱敏后的错误摘要、错误指纹、Agent 类型、时间和粗粒度环境信息；不会上传源码、完整日志、完整路径或 API Key。所有事件会先写入 `~/.aicoevo/outbox/events.jsonl`，上传账本保存在 `~/.aicoevo/uploads/ledger.jsonl`，每日趋势保存在 `~/.aicoevo/daily/`。
+
 ## 诊断覆盖范围
 
 | 类别 | 检查项 | 权重 |

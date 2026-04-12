@@ -52,6 +52,7 @@ declare global {
     __scanPayload?: CommunityPayload;
     __prevScore?: number | null;
     __resultFilter?: string;
+    __autoStartScan?: boolean;
   }
 }
 
@@ -148,6 +149,7 @@ export function generateWebUI(
   results: ScanResult[],
   score: ScoreResult,
   prevScore: number | null = null,
+  autoStartScan = false,
 ): string {
   const fixes = getFixSuggestions(results);
   const fixesByTier = {
@@ -163,8 +165,6 @@ export function generateWebUI(
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>aicoevo - AI 环境诊断</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
 <style>
 :root{
   --bg-deep:#050810;
@@ -182,8 +182,8 @@ export function generateWebUI(
   --text:#e0f0ff;
   --text-dim:#5a7a9a;
   --text-mid:#8aa8c8;
-  --mono:'JetBrains Mono','Cascadia Code','Consolas',monospace;
-  --display:'Orbitron','Segoe UI',sans-serif;
+  --mono:'Cascadia Mono','Cascadia Code','Consolas',monospace;
+  --display:'Bahnschrift','Segoe UI Variable Display','Segoe UI',sans-serif;
   --body:'Segoe UI',-apple-system,'Microsoft YaHei',sans-serif;
 }
 *{margin:0;padding:0;box-sizing:border-box}
@@ -330,6 +330,20 @@ h1{font-family:var(--display);font-size:1.5rem;font-weight:700;letter-spacing:3p
 .feedback-row{display:flex;gap:10px;flex-wrap:wrap}
 .feedback-input{flex:1;min-width:180px}
 .feedback-status{font-size:.78rem;min-height:18px;margin-top:2px}
+/* Agent 进化 */
+.agent-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px}
+.agent-stat{padding:14px;border-radius:12px;border:1px solid var(--border);background:rgba(7,11,24,.55)}
+.agent-stat-value{font-family:var(--display);font-size:1.45rem;font-weight:800;color:var(--cyan)}
+.agent-stat-label{font-size:.72rem;color:var(--text-dim);font-family:var(--mono);margin-top:4px}
+.agent-actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:14px}
+.agent-list{display:grid;gap:10px}
+.agent-event{padding:12px;border-radius:12px;border:1px solid var(--border);background:rgba(0,0,0,.18)}
+.agent-event-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:6px}
+.agent-event-title{font-size:.82rem;font-weight:700;color:var(--text)}
+.agent-event-meta{font-size:.68rem;color:var(--text-dim);font-family:var(--mono)}
+.agent-event-msg{font-size:.76rem;color:var(--text-mid);line-height:1.55;white-space:pre-wrap}
+.agent-status-line{font-size:.78rem;color:var(--text-mid);line-height:1.7}
+.agent-status-line strong{color:var(--text)}
 /* 进度条 */
 .progress-bar{height:4px;background:rgba(0,240,255,.08);border-radius:2px;overflow:hidden;margin:12px 0}
 .progress-fill{height:100%;background:linear-gradient(90deg,var(--cyan),#7c3aed);border-radius:2px;transition:width .3s ease;width:0%;box-shadow:0 0 10px var(--cyan-glow)}
@@ -573,7 +587,7 @@ h1{font-family:var(--display);font-size:1.5rem;font-weight:700;letter-spacing:3p
   .score-number-hero{font-size:3rem}
   .hud-corner{width:20px;height:20px}
   .container{padding:20px 14px}
-  .diag-grid,.two-col,.flow-strip,.support-grid{grid-template-columns:1fr}
+  .diag-grid,.two-col,.flow-strip,.support-grid,.agent-grid{grid-template-columns:1fr}
   .tab-nav{gap:10px;padding:0;flex-wrap:wrap}
   .tab-btn{flex:1 1 calc(50% - 8px);padding:12px 16px;font-size:.92rem}
   .tab-btn.secondary-tab{flex:1 1 calc(50% - 8px);border-radius:12px}
@@ -633,6 +647,7 @@ h1{font-family:var(--display);font-size:1.5rem;font-weight:700;letter-spacing:3p
   <div class="tab-nav">
     <button class="tab-btn active" onclick="switchTab('diag')">诊断结果</button>
     <button class="tab-btn" onclick="switchTab('install')">AI 工具安装</button>
+    <button class="tab-btn secondary-tab" onclick="switchTab('agent')">Agent 进化</button>
     <button class="tab-btn secondary-tab" onclick="switchTab('learn')">教学中心</button>
     <button class="tab-btn secondary-tab" onclick="switchTab('resources')">AI 资源</button>
     <div class="tab-note">先处理诊断结果，再决定是否安装工具或查看外部资源</div>
@@ -640,7 +655,7 @@ h1{font-family:var(--display);font-size:1.5rem;font-weight:700;letter-spacing:3p
 
   <!-- 诊断结果 Tab -->
   <div id="tab-diag" class="tab-content active">
-    ${renderDiagPanel(results, score, prevScore)}
+    ${autoStartScan ? renderPendingDiagPanel() : renderDiagPanel(results, score, prevScore)}
 
     <div id="loading">
       <div class="spinner"></div>
@@ -654,6 +669,11 @@ h1{font-family:var(--display);font-size:1.5rem;font-weight:700;letter-spacing:3p
   <!-- AI 工具安装 Tab -->
   <div id="tab-install" class="tab-content">
     ${renderInstallTab()}
+  </div>
+
+  <!-- Agent 进化 Tab -->
+  <div id="tab-agent" class="tab-content">
+    ${renderAgentTab()}
   </div>
 
   <!-- 教学中心 Tab -->
@@ -810,6 +830,7 @@ h1{font-family:var(--display);font-size:1.5rem;font-weight:700;letter-spacing:3p
 </div>
 
 <script>
+window.__autoStartScan = ${JSON.stringify(autoStartScan)};
 window.__prevScore = ${JSON.stringify(prevScore)};
 window.__scanPayload = {
   results: ${JSON.stringify(results.map(r => ({
@@ -825,12 +846,40 @@ window.__scanPayload = {
   })())},
   timestamp: ${JSON.stringify(new Date().toISOString())},
 };
+window.__scanState = window.__scanState || { running: false };
 // --- Tab 切换 ---
 function switchTab(tab) {
+  const btn = document.querySelector('.tab-btn[onclick*="' + tab + '"]');
+  const panel = document.getElementById('tab-' + tab);
+  if (!btn || !panel) return;
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
   document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
-  document.querySelector('.tab-btn[onclick*="' + tab + '"]').classList.add('active');
-  document.getElementById('tab-' + tab).classList.add('active');
+  btn.classList.add('active');
+  panel.classList.add('active');
+  if (tab === 'agent') loadAgentStatus();
+}
+
+function setScanRunning(running) {
+  window.__scanState = window.__scanState || {};
+  window.__scanState.running = running;
+  const btn = document.querySelector('.diag-actions .scan-btn');
+  if (!btn) return;
+  btn.disabled = running;
+  btn.textContent = running ? '扫描中...' : '重新扫描';
+}
+
+function getScoreValue(scoreLike) {
+  if (scoreLike && typeof scoreLike === 'object' && scoreLike.score !== undefined && scoreLike.score !== null) {
+    return scoreLike.score;
+  }
+  return scoreLike || 0;
+}
+
+function getStreamReader(response) {
+  if (!response || !response.body || typeof response.body.getReader !== 'function') {
+    return null;
+  }
+  return response.body.getReader();
 }
 
 function escapeHtml(text) {
@@ -1176,8 +1225,8 @@ async function rescanOne(scannerId) {
 
 async function rescan() {
   const results = document.getElementById('results');
-  const btn = document.querySelector('.diag-actions .scan-btn');
-  if (btn) btn.disabled = true;
+  let scanEndedWithDone = false;
+  setScanRunning(true);
 
   // 清空结果区域，插入进度条
   const STATUS_CONFIG = ${JSON.stringify(STATUS_CONFIG)};
@@ -1193,7 +1242,12 @@ async function rescan() {
 
   try {
     const res = await fetch('/api/scan', {method:'POST'});
-    const reader = res.body.getReader();
+    const reader = getStreamReader(res);
+    if (!reader) {
+      await rescanWithoutStreaming();
+      scanEndedWithDone = true;
+      return;
+    }
     const decoder = new TextDecoder();
     let buffer = '';
 
@@ -1267,9 +1321,6 @@ async function rescan() {
             card.appendChild(iconDiv);
             card.appendChild(bodyDiv);
             container.appendChild(card);
-
-            // 自动滚动到底部
-            card.scrollIntoView({behavior:'smooth',block:'end'});
           }
 
           // 扫描完成，局部刷新诊断区和 Hero
@@ -1279,15 +1330,38 @@ async function rescan() {
             } else if (data.error) {
               throw new Error(data.error);
             }
+            scanEndedWithDone = true;
             return;
           }
         } catch {}
       }
     }
+    if (!scanEndedWithDone) {
+      await rescanWithoutStreaming();
+      scanEndedWithDone = true;
+    }
   } catch(e) {
     console.error(e);
-    location.reload();
+    alert('扫描失败，请重试\\n' + (e && e.message ? e.message : String(e)));
+  } finally {
+    setScanRunning(false);
   }
+}
+
+async function rescanWithoutStreaming() {
+  const text = document.getElementById('scan-live-text');
+  if (text) text.textContent = '正在扫描（兼容模式），预计需要 10-30 秒，请耐心等待...';
+
+  const progressFill = document.querySelector('.progress-fill');
+  if (progressFill) progressFill.style.width = '40%';
+
+  const res = await fetch('/api/scan-full', { method: 'POST' });
+  const data = await res.json();
+  if (!res.ok || !data.ok) {
+    throw new Error((data && (data.error || data.message)) || '扫描失败');
+  }
+  if (progressFill) progressFill.style.width = '100%';
+  replaceDiagPanel(data.html, data.results || [], data.score || { score: 0, label: '', breakdown: [] });
 }
 
 // --- 版本检查 ---
@@ -1384,7 +1458,7 @@ async function openCommunity() {
           platform: navigator.platform,
           userAgent: navigator.userAgent,
           system: payload.system || {},
-          score: payload.score?.score || payload.score || 0,
+          score: getScoreValue(payload.score),
           failCount: (payload.results || []).filter(r => r.status === 'fail').length,
           failCategories: [...new Set((payload.results || []).filter(r => r.status === 'fail').map(r => r.category))],
         }),
@@ -1403,11 +1477,16 @@ async function openCommunity() {
 }
 
 async function submitFeedback() {
-  const content = (document.getElementById('fb-content') as HTMLTextAreaElement)?.value?.trim() || '';
-  const category = (document.getElementById('fb-category') as HTMLSelectElement)?.value || 'problem';
-  const email = (document.getElementById('fb-email') as HTMLInputElement)?.value?.trim() || '';
+  const contentEl = document.getElementById('fb-content');
+  const categoryEl = document.getElementById('fb-category');
+  const emailEl = document.getElementById('fb-email');
+  const contentValue = contentEl && 'value' in contentEl ? contentEl.value : '';
+  const content = (contentValue || '').trim();
+  const category = (categoryEl && 'value' in categoryEl ? categoryEl.value : '') || 'problem';
+  const emailValue = emailEl && 'value' in emailEl ? emailEl.value : '';
+  const email = (emailValue || '').trim();
   const statusEl = document.getElementById('fb-status');
-  const btn = document.getElementById('fb-submit-btn') as HTMLButtonElement;
+  const btn = document.getElementById('fb-submit-btn');
 
   if (content.length < 5) {
     if (statusEl) statusEl.innerHTML = '<span style="color:#ff6b6b">请至少输入 5 个字描述你的问题或建议</span>';
@@ -1418,13 +1497,15 @@ async function submitFeedback() {
   if (statusEl) statusEl.innerHTML = '';
 
   try {
-    const payload: any = {
+    const scanPayload = window.__scanPayload || {};
+    const scanResults = Array.isArray(scanPayload.results) ? scanPayload.results : [];
+    const payload = {
       content,
       category,
       env_summary: {
-        score: (window as any).__scanPayload?.score?.score || (window as any).__scanPayload?.score || 0,
-        failCount: ((window as any).__scanPayload?.results || []).filter((r: any) => r.status === 'fail').length,
-        warnCount: ((window as any).__scanPayload?.results || []).filter((r: any) => r.status === 'warn').length,
+        score: getScoreValue(scanPayload.score),
+        failCount: scanResults.filter(function(r) { return r && r.status === 'fail'; }).length,
+        warnCount: scanResults.filter(function(r) { return r && r.status === 'warn'; }).length,
         platform: navigator.platform,
         userAgent: navigator.userAgent.substring(0, 200),
       },
@@ -1441,9 +1522,9 @@ async function submitFeedback() {
     if (!res.ok) throw new Error(data.detail || data.error || '提交失败');
 
     if (statusEl) statusEl.innerHTML = '<span style="color:#00ff88">反馈已发送，感谢你的意见！我们会尽快处理。</span>';
-    const textarea = document.getElementById('fb-content') as HTMLTextAreaElement;
+    const textarea = document.getElementById('fb-content');
     if (textarea) textarea.value = '';
-  } catch(e: any) {
+  } catch(e) {
     const msg = e instanceof Error ? e.message : String(e);
     if (statusEl) statusEl.innerHTML = '<span style="color:#ff6b6b">发送失败: ' + msg + '</span>';
   } finally {
@@ -1451,16 +1532,132 @@ async function submitFeedback() {
   }
 }
 
+function scrollToFeedback() {
+  const el = document.getElementById('feedback-section');
+  if (el && typeof el.scrollIntoView === 'function') {
+    el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+}
+
+function setAgentStatus(text, ok) {
+  var el = document.getElementById('agent-action-status');
+  if (!el) return;
+  el.innerHTML = '<span style="color:' + (ok ? '#00ff88' : '#ff6b6b') + '">' + escapeHtml(text) + '</span>';
+}
+
+function renderAgentStatus(data) {
+  var root = document.getElementById('agent-status-root');
+  if (!root || !data) return;
+  var today = data.today || {};
+  var totals = data.totals || {};
+  var events = Array.isArray(data.latestEvents) ? data.latestEvents : [];
+  var advice = data.advice || {};
+  var topProblems = Array.isArray(today.topProblems) ? today.topProblems : [];
+  root.innerHTML = [
+    '<div class="agent-grid">',
+      '<div class="agent-stat"><div class="agent-stat-value">' + (today.totalEvents || 0) + '</div><div class="agent-stat-label">今日错误</div></div>',
+      '<div class="agent-stat"><div class="agent-stat-value">' + (today.repeatedEvents || 0) + '</div><div class="agent-stat-label">重复错误</div></div>',
+      '<div class="agent-stat"><div class="agent-stat-value">' + (totals.pending || 0) + '</div><div class="agent-stat-label">待同步</div></div>',
+      '<div class="agent-stat"><div class="agent-stat-value">' + (totals.synced || 0) + '</div><div class="agent-stat-label">已同步</div></div>',
+    '</div>',
+    '<div class="card">',
+      '<div class="section-title">运行状态 <span class="badge">' + (data.enabled ? '已启用' : '未启用') + '</span></div>',
+      '<div class="agent-status-line">本地 runner: <strong>' + (data.localRunnerInstalled ? '已安装' : '未安装') + '</strong></div>',
+      '<div class="agent-status-line">自动上传: <strong>' + (data.paused ? '已暂停' : (data.autoSync ? '已开启' : '未开启')) + '</strong></div>',
+      '<div class="agent-status-line">本地路径: <strong>' + escapeHtml(data.agentCmd || '-') + '</strong></div>',
+    '</div>',
+    '<div class="card">',
+      '<div class="section-title">最新建议 <span class="badge">AICOEVO</span></div>',
+      '<div class="agent-event-msg">' + escapeHtml(advice.summary || '暂无建议。启用后，Agent 运行错误会在这里沉淀成优化建议。') + '</div>',
+    '</div>',
+    '<div class="two-col">',
+      '<div class="card"><div class="section-title">Top 问题 <span class="badge">' + topProblems.length + '</span></div><div class="agent-list">' +
+        (topProblems.length ? topProblems.slice(0, 6).map(function(item) {
+          return '<div class="agent-event"><div class="agent-event-head"><div class="agent-event-title">' + escapeHtml(item.title || item.fingerprint) + '</div><div class="agent-event-meta">x' + item.count + '</div></div><div class="agent-event-meta">' + escapeHtml(item.status || 'new') + ' · ' + escapeHtml(item.fingerprint || '') + '</div></div>';
+        }).join('') : '<div class="agent-event-msg">今天还没有问题包。</div>') +
+      '</div></div>',
+      '<div class="card"><div class="section-title">最近上传清单 <span class="badge">' + events.length + '</span></div><div class="agent-list">' +
+        (events.length ? events.slice(0, 8).map(function(event) {
+          return '<div class="agent-event"><div class="agent-event-head"><div class="agent-event-title">' + escapeHtml(event.agent || 'agent') + '</div><div class="agent-event-meta">' + escapeHtml(event.syncStatus || 'pending') + '</div></div><div class="agent-event-msg">' + escapeHtml(event.sanitizedMessage || '') + '</div><div class="agent-event-meta">' + escapeHtml(event.occurredAt || '') + '</div></div>';
+        }).join('') : '<div class="agent-event-msg">还没有捕获到 Agent 错误。</div>') +
+      '</div></div>',
+    '</div>',
+  ].join('');
+}
+
+async function loadAgentStatus() {
+  try {
+    var res = await fetch('/api/agent/status');
+    var data = await res.json();
+    renderAgentStatus(data);
+  } catch(e) {
+    setAgentStatus('读取 Agent 状态失败: ' + e.message, false);
+  }
+}
+
+async function enableAgentProbe() {
+  var btn = document.getElementById('agent-enable-btn');
+  if (btn) { btn.textContent = '启用中...'; btn.disabled = true; }
+  try {
+    var res = await fetch('/api/agent/enable', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ target: 'all' }),
+    });
+    var data = await res.json();
+    if (!res.ok || !data.ok) throw new Error(data.error || '启用失败');
+    setAgentStatus('已启用 Agent 错误探索。重启 PowerShell 后生效。', true);
+    renderAgentStatus(data.status);
+  } catch(e) {
+    setAgentStatus('启用失败: ' + e.message, false);
+  } finally {
+    if (btn) { btn.textContent = '启用 Agent 错误探索'; btn.disabled = false; }
+  }
+}
+
+async function syncAgentNow() {
+  try {
+    var res = await fetch('/api/agent/sync', { method: 'POST' });
+    var data = await res.json();
+    if (!res.ok || !data.ok) throw new Error(data.error || '同步失败');
+    setAgentStatus('同步完成。', true);
+    renderAgentStatus(data.status);
+  } catch(e) {
+    setAgentStatus('同步失败: ' + e.message, false);
+  }
+}
+
+async function setAgentPause(paused) {
+  try {
+    var res = await fetch(paused ? '/api/agent/pause' : '/api/agent/resume', { method: 'POST' });
+    var data = await res.json();
+    if (!res.ok || !data.ok) throw new Error(data.error || '操作失败');
+    setAgentStatus(paused ? '已暂停自动上传。' : '已恢复自动上传。', true);
+    renderAgentStatus(data.status);
+  } catch(e) {
+    setAgentStatus('操作失败: ' + e.message, false);
+  }
+}
+
 window.__resultFilter = window.__resultFilter || 'all';
 applyResultFilters();
+loadAgentStatus();
 
 document.addEventListener('keydown', function(event) {
   if (event.key === 'Escape') closeModal();
 });
 
-document.getElementById('modal-overlay')?.addEventListener('click', function(event) {
-  if (event.target === this) closeModal();
-});
+var modalOverlay = document.getElementById('modal-overlay');
+if (modalOverlay) {
+  modalOverlay.addEventListener('click', function(event) {
+    if (event.target === this) closeModal();
+  });
+}
+if (window.__autoStartScan) {
+  setTimeout(function() {
+    rescan();
+  }, 0);
+}
 // Hero SVG 分数环入场动画
 (function(){
   var ring=document.getElementById('score-ring-fill');
@@ -1510,6 +1707,7 @@ export function renderDiagPanel(
     <div class="diag-actions">
       <button class="scan-btn" onclick="rescan()">重新扫描</button>
       <button class="scan-btn secondary" onclick="openCommunity()">查看社区方案</button>
+      <button class="scan-btn secondary" onclick="scrollToFeedback()">反馈问题</button>
     </div>
 
     <div class="diag-grid">
@@ -1537,6 +1735,7 @@ export function renderDiagPanel(
       </div>
     </div>
 
+    ${renderFeedbackForm(score, results)}
     <div class="card toolbar-card">
       <div class="toolbar-row">
         <div class="filter-group">
@@ -1561,7 +1760,32 @@ export function renderDiagPanel(
       <div id="solutions-list"></div>
     </div>
     ${renderSupportHub()}
-    ${renderFeedbackForm(score, results)}
+  </div>`;
+}
+
+function renderPendingDiagPanel(): string {
+  return `
+  <div id="results" class="diag-panel">
+    <div class="flow-strip">
+      <div class="flow-card active" data-step="1">
+        <div class="flow-title">准备扫描</div>
+        <div class="flow-copy">页面已打开，正在连接本地扫描流程。</div>
+      </div>
+      <div class="flow-card active" data-step="2">
+        <div class="flow-title">实时检测</div>
+        <div class="flow-copy">首屏先展示进度，不再等全部检测完成才返回页面。</div>
+      </div>
+      <div class="flow-card" data-step="3">
+        <div class="flow-title">生成结果</div>
+        <div class="flow-copy">扫描完成后会自动替换成完整诊断面板。</div>
+      </div>
+    </div>
+    <div class="card outcome-card medium">
+      <div class="eyebrow">正在初始化</div>
+      <div class="outcome-title">页面已加载，环境扫描马上开始</div>
+      <div class="outcome-copy">如果机器上工具较多，扫描可能需要几十秒，但现在不会再出现长时间白屏。</div>
+      <div class="outcome-next">保持当前页面即可，结果会自动刷新。</div>
+    </div>
   </div>`;
 }
 
@@ -1685,7 +1909,7 @@ function renderFixSection(fixesByTier: Record<string, FixSuggestion[]>): string 
           <div id="fix-result-${f._idx}"></div>
         </div>
         ${(section.tier === 'green' || section.tier === 'yellow')
-          ? `<button id="fix-btn-${f._idx}" class="fix-btn ${section.tier}" onclick="openModal(${f._idx})">${section.buttonLabel}</button>`
+          ? `<button id="fix-btn-${f._idx}" class="fix-btn ${section.tier}" onclick="openModal(${f._idx})">${esc(f.actionLabel || section.buttonLabel)}</button>`
           : ''}
       </div>`).join('')}
     </div>`);
@@ -1743,6 +1967,29 @@ function renderFeedbackForm(score: ScoreResult, results: ScanResult[]): string {
         <button class="scan-btn" onclick="submitFeedback()" id="fb-submit-btn" style="margin:0;white-space:nowrap">发送反馈</button>
       </div>
       <div id="fb-status" class="feedback-status"></div>
+    </div>
+  </div>`;
+}
+
+function renderAgentTab(): string {
+  return `
+  <div class="card">
+    <div class="section-title">Agent 错误探索 <span class="badge">轻量运行</span></div>
+    <div style="font-size:.84rem;color:var(--text-mid);line-height:1.7">
+      第一次用完整 WinAICheck 完成环境诊断和工具安装后，可以启用轻量探针。后续 Claude Code / OpenClaw 运行时会自动记录脱敏错误摘要、重复问题和每日趋势，不再启动完整 100MB 程序。
+    </div>
+    <div class="agent-actions">
+      <button class="scan-btn" id="agent-enable-btn" onclick="enableAgentProbe()" style="margin:0">启用 Agent 错误探索</button>
+      <button class="scan-btn secondary" onclick="syncAgentNow()" style="margin:0">立即同步</button>
+      <button class="scan-btn secondary" onclick="setAgentPause(true)" style="margin:0">暂停上传</button>
+      <button class="scan-btn secondary" onclick="setAgentPause(false)" style="margin:0">恢复上传</button>
+    </div>
+    <div id="agent-action-status" class="feedback-status"></div>
+  </div>
+  <div id="agent-status-root">
+    <div class="card">
+      <div class="section-title">正在读取 <span class="badge">本地</span></div>
+      <div class="agent-event-msg">正在读取本地 Agent 问题包、上传清单和最新建议。</div>
     </div>
   </div>`;
 }
