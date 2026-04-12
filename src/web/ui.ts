@@ -386,6 +386,15 @@ h1{font-family:var(--display);font-size:1.5rem;font-weight:700;letter-spacing:3p
 .tab-btn.active[onclick*="install"]::after{background:#a78bfa;box-shadow:0 0 15px rgba(167,139,250,.35),0 0 30px rgba(124,58,237,.2)}
 .tab-btn.active[onclick*="install"]::before{content:'';position:absolute;inset:0;border-radius:12px;
   background:linear-gradient(135deg,rgba(124,58,237,.03),transparent 50%,rgba(124,58,237,.02));pointer-events:none}
+/* 持续优化Tab - 品红霓虹 */
+.tab-btn.active[onclick*="agent"]{
+  background:rgba(236,72,153,.05);border-color:rgba(236,72,153,.25);
+  box-shadow:0 0 30px rgba(236,72,153,.12),0 0 60px rgba(236,72,153,.06),inset 0 0 20px rgba(236,72,153,.04);
+  color:#f9a8d4;
+  text-shadow:0 0 8px rgba(236,72,153,.6),0 0 20px rgba(236,72,153,.3)}
+.tab-btn.active[onclick*="agent"]::after{background:#ec4899;box-shadow:0 0 15px rgba(236,72,153,.35),0 0 30px rgba(236,72,153,.2)}
+.tab-btn.active[onclick*="agent"]::before{content:'';position:absolute;inset:0;border-radius:12px;
+  background:linear-gradient(135deg,rgba(236,72,153,.03),transparent 50%,rgba(236,72,153,.02));pointer-events:none}
 /* 教学Tab - 绿色霓虹 */
 .tab-btn.active[onclick*="learn"]{
   background:rgba(0,255,136,.05);border-color:rgba(0,255,136,.25);
@@ -649,7 +658,7 @@ h1{font-family:var(--display);font-size:1.5rem;font-weight:700;letter-spacing:3p
   <div class="tab-nav">
     <button class="tab-btn active" onclick="switchTab('diag')">诊断结果</button>
     <button class="tab-btn" onclick="switchTab('install')">AI 工具安装</button>
-    <button class="tab-btn secondary-tab" onclick="switchTab('agent')">Agent 进化</button>
+    <button class="tab-btn" onclick="switchTab('agent')">持续优化</button>
     <button class="tab-btn secondary-tab" onclick="switchTab('learn')">教学中心</button>
     <button class="tab-btn secondary-tab" onclick="switchTab('resources')">AI 资源</button>
     <div class="tab-note">先处理诊断结果，再决定是否安装工具或查看外部资源</div>
@@ -2012,18 +2021,37 @@ function renderFeedbackForm(score: ScoreResult, results: ScanResult[]): string {
 
 function renderAgentTab(): string {
   return `
-  <div class="card">
-    <div class="section-title">Agent 错误探索 <span class="badge">轻量运行</span></div>
-    <div style="font-size:.84rem;color:var(--text-mid);line-height:1.7">
-      第一次用完整 WinAICheck 完成环境诊断和工具安装后，可以启用轻量探针。后续 Claude Code / OpenClaw 运行时会自动记录脱敏错误摘要、重复问题和每日趋势，不再启动完整 100MB 程序。
+  <div class="card" style="border-color:rgba(236,72,153,.2)">
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">
+      <div style="width:48px;height:48px;border-radius:14px;background:linear-gradient(135deg,rgba(236,72,153,.15),rgba(236,72,153,.05));display:flex;align-items:center;justify-content:center;font-size:1.5rem;border:1px solid rgba(236,72,153,.2)">&#9889;</div>
+      <div>
+        <div style="font-family:var(--display);font-size:1.1rem;font-weight:700;color:#f9a8d4;text-shadow:0 0 12px rgba(236,72,153,.3)">持续优化插件</div>
+        <div style="font-size:.78rem;color:var(--text-dim)">后台守护你的 AI 开发环境，社区帮你持续优化</div>
+      </div>
+    </div>
+    <div style="font-size:.84rem;color:var(--text-mid);line-height:1.8;margin-bottom:18px">
+      安装后，插件会在后台实时工作：<br>
+      <span style="color:#f9a8d4">1.</span> 自动捕获 Claude Code / OpenClaw 运行时的错误和异常<br>
+      <span style="color:#f9a8d4">2.</span> 脱敏后安全上传到 <a href="https://aicoevo.net" target="_blank" rel="noopener" style="color:#ec4899;text-decoration:none;border-bottom:1px solid rgba(236,72,153,.3)">aicoevo.net</a> 云端<br>
+      <span style="color:#f9a8d4">3.</span> 社区和 AI 分析你的问题，给出针对性优化建议
     </div>
     <div class="agent-actions">
-      <button class="scan-btn" id="agent-enable-btn" onclick="enableAgentProbe()" style="margin:0">启用 Agent 错误探索</button>
+      <button class="scan-btn" id="agent-enable-btn" onclick="enableAgentProbe()" style="margin:0;background:linear-gradient(135deg,rgba(236,72,153,.2),rgba(236,72,153,.08));border-color:rgba(236,72,153,.3);color:#f9a8d4">安装插件</button>
       <button class="scan-btn secondary" onclick="syncAgentNow()" style="margin:0">立即同步</button>
       <button class="scan-btn secondary" onclick="setAgentPause(true)" style="margin:0">暂停上传</button>
       <button class="scan-btn secondary" onclick="setAgentPause(false)" style="margin:0">恢复上传</button>
     </div>
     <div id="agent-action-status" class="feedback-status"></div>
+  </div>
+  <div style="display:flex;gap:12px;margin-bottom:16px">
+    <a href="https://aicoevo.net" target="_blank" rel="noopener" style="flex:1;padding:16px;border-radius:12px;border:1px solid rgba(236,72,153,.15);background:rgba(236,72,153,.03);text-decoration:none;transition:all .2s" onmouseover="this.style.borderColor='rgba(236,72,153,.3)';this.style.background='rgba(236,72,153,.06)'" onmouseout="this.style.borderColor='rgba(236,72,153,.15)';this.style.background='rgba(236,72,153,.03)'">
+      <div style="font-size:.82rem;font-weight:700;color:#f9a8d4;margin-bottom:4px">aicoevo.net 社区</div>
+      <div style="font-size:.74rem;color:var(--text-dim)">查看优化建议、社区方案、实时更新</div>
+    </a>
+    <div style="flex:1;padding:16px;border-radius:12px;border:1px solid var(--border);background:rgba(7,11,24,.55)">
+      <div style="font-size:.82rem;font-weight:700;color:var(--text-mid);margin-bottom:4px">插件原理</div>
+      <div style="font-size:.74rem;color:var(--text-dim)">纯 Node.js，29KB，零依赖。安装到 ~/.aicoevo/agent/，通过 PowerShell hook 自动运行。</div>
+    </div>
   </div>
   <div id="agent-status-root">
     <div class="card">

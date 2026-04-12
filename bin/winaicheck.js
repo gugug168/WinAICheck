@@ -11,7 +11,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import https from 'node:https';
 import http from 'node:http';
-import { pathToFileURL } from 'node:url';
+import { pathToFileURL, fileURLToPath } from 'node:url';
 import { main as agentMain } from './agent-lite.js';
 
 const REPO = 'gugug168/WinAICheck';
@@ -75,9 +75,31 @@ export async function main(argv = process.argv.slice(2)) {
     return;
   }
 
-  // Ensure cache dir exists
-  if (!fs.existsSync(CACHE_DIR)) {
-    fs.mkdirSync(CACHE_DIR, { recursive: true });
+  // 检测 Bun 是否可用 + 源码是否存在 → 直接运行，无需下载 exe
+  const srcMain = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src', 'main.ts');
+  if (fs.existsSync(srcMain)) {
+    let bunAvailable = false;
+    try {
+      execFileSync('where.exe', ['bun'], { timeout: 3000, windowsHide: true });
+      bunAvailable = true;
+    } catch {
+      // Bun 不可用，继续走 exe 下载流程
+    }
+    if (bunAvailable) {
+      console.log('WinAICheck: 检测到 Bun，直接从源码启动...');
+      try {
+        execFileSync('bun', ['run', srcMain, ...argv], {
+          stdio: 'inherit',
+          windowsHide: false,
+        });
+        return; // Bun 成功启动，退出
+      } catch (e) {
+        // Bun 启动失败，继续走 exe 下载流程
+        if (e.status !== undefined) {
+          console.error(`WinAICheck: Bun 启动失败 (${e.status})，回退到 exe...`);
+        }
+      }
+    }
   }
 
   const exePath = path.join(CACHE_DIR, EXE_NAME);
