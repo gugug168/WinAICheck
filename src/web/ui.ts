@@ -258,6 +258,8 @@ h1{font-family:var(--display);font-size:1.5rem;font-weight:700;letter-spacing:3p
 .fix-result{font-size:.78rem;margin-top:8px;padding:6px 10px;border-radius:6px}
 .fix-result.success{background:rgba(0,255,136,.08);color:var(--green)}
 .fix-result.fail{background:rgba(255,51,85,.08);color:var(--red)}
+.fix-result.warn{background:rgba(255,193,7,.08);color:var(--yellow)}
+.fix-btn.red{background:rgba(255,51,85,.08);color:var(--red);border-color:rgba(255,51,85,.2)}.fix-btn.red:hover{background:rgba(255,51,85,.15);box-shadow:0 0 20px rgba(255,51,85,.15)}
 .fix-section-block{margin-bottom:18px}
 .fix-section-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:10px}
 .fix-section-title{font-size:.88rem;font-weight:700}
@@ -1183,21 +1185,58 @@ async function confirmFix() {
     fix.executed = true;
     fix.result = data;
 
-    // 显示执行结果
+    // 显示执行结果（含验证闭环状态）
     const el = document.getElementById('fix-result-' + idx);
     if (el) {
-      el.className = 'fix-result ' + (data.success ? 'success' : 'fail');
-      el.textContent = (data.success ? '✓ ' : '✗ ') + data.message;
+      if (data.verified && data.success && !data.partial) {
+        el.className = 'fix-result success';
+        el.textContent = '✓ ' + data.message;
+      } else if (data.partial) {
+        el.className = 'fix-result warn';
+        el.textContent = '⚠ ' + data.message;
+      } else if (data.verified && !data.success) {
+        el.className = 'fix-result fail';
+        el.textContent = '✗ ' + data.message;
+      } else if (data.rolledBack) {
+        el.className = 'fix-result fail';
+        el.textContent = '✗ ' + data.message;
+      } else if (data.success && !data.verified) {
+        el.className = 'fix-result success';
+        el.textContent = '✓ ' + data.message;
+      } else {
+        el.className = 'fix-result fail';
+        el.textContent = '✗ ' + data.message;
+      }
     }
 
     if (btn) {
-      btn.textContent = data.success ? '已修复' : (data.rolledBack ? '已回滚' : '重试');
-      btn.className = 'fix-btn ' + (data.success ? 'green' : 'yellow');
-      if (!data.success) btn.disabled = false;
+      if (data.verified && data.success && !data.partial) {
+        btn.textContent = '已修复';
+        btn.className = 'fix-btn green';
+      } else if (data.partial) {
+        btn.textContent = '部分修复';
+        btn.className = 'fix-btn yellow';
+        btn.disabled = false;
+      } else if (data.verified && !data.success) {
+        btn.textContent = '未生效';
+        btn.className = 'fix-btn red';
+        btn.disabled = false;
+      } else if (data.rolledBack) {
+        btn.textContent = '已回滚';
+        btn.className = 'fix-btn yellow';
+        btn.disabled = false;
+      } else if (data.success && !data.verified) {
+        btn.textContent = '已执行';
+        btn.className = 'fix-btn green';
+      } else {
+        btn.textContent = '重试';
+        btn.className = 'fix-btn yellow';
+        btn.disabled = false;
+      }
     }
 
-    // 修复成功后，自动重扫对应 scanner 并更新 UI
-    if (data.success && fix.scannerId) {
+    // 验证通过或部分修复时重扫更新 UI；验证未通过也重扫让用户看到当前状态
+    if (fix.scannerId) {
       await rescanOne(fix.scannerId);
     }
   } catch(e) {

@@ -1,5 +1,5 @@
-import type { Fixer, FixSuggestion, FixResult, ScanResult, BackupData } from '../scanners/types';
-import { runCommand, isAdmin } from '../executor/index';
+import type { Fixer, FixSuggestion, FixResult, ScanResult, BackupData, FixTier, PostFixGuidance } from '../scanners/types';
+import { runCommand, isAdmin, classifyCommandError, commandExists } from '../executor/index';
 import { getScannerById } from '../scanners/registry';
 
 /**
@@ -40,11 +40,288 @@ export function getFixSuggestions(results: ScanResult[]): FixSuggestion[] {
   return suggestions;
 }
 
-/** 三阶段执行修复：backup → execute → verify，失败时 rollback */
+/** 根据修复类型生成修复后指导 */
+function generatePostFixGuidance(scannerId: string, _tier: FixTier): PostFixGuidance | undefined {
+  const guidance: PostFixGuidance = {};
+
+  // 需要重启终端的修复（PATH、环境变量、全局 npm 包安装）
+  const terminalRestartIds = [
+    'git-path', 'claude-cli', 'openclaw', 'ccswitch', 'git', 'node-version',
+    'package-managers', 'unix-commands', 'powershell-version', 'uv-package-manager',
+    'mirror-sources',
+  ];
+  if (terminalRestartIds.includes(scannerId)) {
+    guidance.needsTerminalRestart = true;
+  }
+
+  // 需要重启电脑的修复
+  const rebootIds = ['wsl-version', 'long-paths', 'virtualization'];
+  if (rebootIds.includes(scannerId)) {
+    guidance.needsReboot = true;
+  }
+
+  // 手动验证命令
+  const verifyCommands: Record<string, string[]> = {
+    'mirror-sources': ['pip config get global.index-url', 'npm config get registry'],
+    'powershell-policy': ['powershell -Command "Get-ExecutionPolicy"'],
+    'long-paths': ['reg query "HKLM\\SYSTEM\\CurrentControlSet\\Control\\FileSystem" /v LongPathsEnabled'],
+    'time-sync': ['w32tm /query /status'],
+    'git': ['git --version'],
+    'node-version': ['nvm version', 'node --version'],
+    'git-path': ['where.exe git', 'where.exe ssh'],
+    'wsl-version': ['wsl --status'],
+    'package-managers': ['bun --version', 'pip --version', 'npm --version'],
+    'unix-commands': ['where.exe ls', 'where.exe curl'],
+    'uv-package-manager': ['uv --version'],
+    'claude-cli': ['claude --version'],
+    'openclaw': ['openclaw --version'],
+    'ccswitch': ['ccswitch --version'],
+    'powershell-version': ['pwsh --version'],
+    'temp-space': ['powershell -Command "(Get-ChildItem $env:TEMP | Measure-Object).Count"'],
+    'firewall-ports': ['netsh advfirewall firewall show rule name="Gradio"'],
+  };
+  const cmds = verifyCommands[scannerId];
+  if (cmds) {
+    guidance.verifyCommands = cmds;
+  }
+
+  // 额外注意事项
+  const notes: Record<string, string[]> = {
+    'claude-cli': ['首次运行 claude 需要登录 Anthropic 账号'],
+    'powershell-version': ['PowerShell 7 (pwsh) 和 Windows PowerShell 5 是两个独立程序，互不影响'],
+    'git-path': ['PATH 修改只影响新打开的终端，当前终端不会自动更新'],
+    'mirror-sources': ['如果后续安装包仍然很慢，检查网络或尝试其他镜像源'],
+    'wsl-version': ['WSL 安装后需要重启电脑才能使用。重启后运行 wsl --status 确认'],
+    'long-paths': ['长路径支持需要重启后对所有程序生效'],
+  };
+  const noteList = notes[scannerId];
+  if (noteList) {
+    guidance.notes = noteList;
+  }
+
+  // 如果没有任何指导内容，不返回
+  if (!guidance.needsTerminalRestart && !guidance.needsReboot && !guidance.verifyCommands && !guidance.notes) {
+    return undefined;
+  }
+
+  return guidance;
+}
+
+/** 将修复后指导格式化为用户可读文本 */
+function formatPostFixGuidance(guidance: PostFixGuidance): string {
+  const lines: string[] = [];
+
+  if (guidance.needsReboot) {
+    lines.push('需要重启电脑才能生效');
+  } else if (guidance.needsTerminalRestart) {
+    lines.push('需要重新打开终端窗口才能生效');
+  }
+
+  if (guidance.verifyCommands && guidance.verifyCommands.length > 0) {
+    lines.push('手动验证命令:');
+    for (const cmd of guidance.verifyCommands) {
+      lines.push(`  > ${cmd}`);
+    }
+  }
+
+  if (guidance.notes && guidance.notes.length > 0) {
+    for (const note of guidance.notes) {
+      lines.push(`注意: ${note}`);
+    }
+  }
+
+  return lines.join('\n');
+}
+
+/** 根据验证失败的扫描结果生成下一步操作指引 */
+function generateNextSteps(scannerId: string, scanResult: ScanResult, tier: FixTier): string[] {
+  const steps: string[] = [];
+
+  // 通用：重启终端（PATH 类修复最常见的原因）
+  if (['path', 'toolchain'].includes(scanResult.category)) {
+    steps.push('关闭当前终端，重新打开一个新终端窗口（环境变量修改需要新终端生效）');
+  }
+
+  // 根据 scannerId 给出针对性指引
+  const specificSteps: Record<string, string[]> = {
+    'mirror-sources': [
+      '手动验证: pip config get global.index-url',
+      '手动验证: npm config get registry',
+    ],
+    'powershell-policy': [
+      '手动验证: powershell -Command "Get-ExecutionPolicy"',
+      '如果仍为 Restricted，请以管理员身份运行: Set-ExecutionPolicy RemoteSigned -Scope CurrentUser',
+    ],
+    'long-paths': [
+      '需要管理员权限才能修改此注册表项',
+      '手动验证: reg query "HKLM\\SYSTEM\\CurrentControlSet\\Control\\FileSystem" /v LongPathsEnabled',
+    ],
+    'time-sync': [
+      '需要管理员权限',
+      '手动验证: w32tm /query /status',
+    ],
+    'git': [
+      '安装完成后需要重启终端',
+      '手动验证: git --version',
+      '如果 winget 安装失败，尝试从 https://git-scm.com 下载安装',
+    ],
+    'node-version': [
+      'nvm-windows 安装后需要重启终端',
+      '手动验证: nvm version',
+      '然后安装 Node: nvm install lts',
+    ],
+    'python-versions': [
+      '多版本冲突需要手动处理，建议保留一个主版本',
+      '可通过 py -0p 查看所有已安装版本',
+    ],
+    'firewall-ports': [
+      '需要管理员权限',
+      '手动验证: netsh advfirewall firewall show rule name="Gradio"',
+    ],
+    'temp-space': [
+      '手动清理: 打开运行(Win+R)，输入 %TEMP%，删除不需要的文件',
+      '或使用磁盘清理工具: cleanmgr',
+    ],
+    'git-path': [
+      '修复已完成，但需要重启终端才能在新终端中生效',
+      '手动验证: 在新终端运行 where.exe git',
+    ],
+    'wsl-version': [
+      'WSL 安装后需要重启电脑',
+      '手动验证: wsl --status',
+    ],
+    'package-managers': [
+      '安装完成后重启终端',
+      '手动验证: bun --version',
+    ],
+    'unix-commands': [
+      'Git 安装后需要重启终端',
+      '手动验证: where.exe ls',
+    ],
+    'uv-package-manager': [
+      '安装后重启终端',
+      '手动验证: uv --version',
+      '如果 pip 不可用，尝试: powershell -Command "irm https://astral.sh/uv/install.ps1 | iex"',
+    ],
+    'claude-cli': [
+      '安装后重启终端',
+      '手动验证: claude --version',
+      '首次运行 claude 需要登录 Anthropic 账号',
+    ],
+    'openclaw': [
+      '安装后重启终端',
+      '手动验证: openclaw --version',
+    ],
+    'ccswitch': [
+      '安装后重启终端',
+      '手动验证: ccswitch --version',
+    ],
+    'powershell-version': [
+      '安装后需要重启终端',
+      '手动验证: pwsh --version',
+      'PowerShell 7 安装为独立程序，不影响 Windows PowerShell 5',
+    ],
+  };
+
+  const specific = specificSteps[scannerId];
+  if (specific) {
+    steps.push(...specific);
+  }
+
+  // 兜底
+  if (steps.length === 0) {
+    steps.push(`手动验证: 该项检测结果仍为 ${scanResult.status}`);
+    if (tier === 'green' || tier === 'yellow') {
+      steps.push('尝试重启终端或重启电脑后再重新检测');
+    }
+  }
+
+  return steps;
+}
+
+/** 预检规则：每个 fixer 执行前需要满足的前置条件 */
+interface PreflightRule {
+  /** 检查是否通过 */
+  check: () => boolean;
+  /** 不通过时的提示 */
+  failMessage: string;
+}
+
+const PREFLIGHT_RULES: Record<string, PreflightRule[]> = {
+  'mirror-sources': [
+    { check: () => commandExists('pip') || commandExists('npm'), failMessage: 'pip 和 npm 都不可用。请先安装 Python 或 Node.js。' },
+  ],
+  'powershell-policy': [
+    { check: () => commandExists('powershell'), failMessage: 'PowerShell 不可用。这是 Windows 系统组件，可能被禁用。' },
+  ],
+  'long-paths': [
+    { check: () => isAdmin(), failMessage: '修改注册表需要管理员权限。请右键本工具，选择"以管理员身份运行"。' },
+  ],
+  'time-sync': [
+    { check: () => isAdmin(), failMessage: '时间同步需要管理员权限。请右键本工具，选择"以管理员身份运行"。' },
+  ],
+  'git': [
+    { check: () => commandExists('winget'), failMessage: 'winget 不可用。请先安装 App Installer（Microsoft Store 搜索"应用安装程序"）。' },
+  ],
+  'node-version': [
+    { check: () => commandExists('winget'), failMessage: 'winget 不可用。请先安装 App Installer（Microsoft Store 搜索"应用安装程序"）。' },
+  ],
+  'python-versions': [], // 只读诊断，无需预检
+  'firewall-ports': [
+    { check: () => isAdmin(), failMessage: '修改防火墙规则需要管理员权限。请右键本工具，选择"以管理员身份运行"。' },
+  ],
+  'temp-space': [], // 清理临时文件无需特殊预检
+  'git-path': [
+    { check: () => commandExists('git'), failMessage: 'Git 未安装。请先安装 Git（可在修复建议中选择安装）。' },
+  ],
+  'wsl-version': [
+    { check: () => isAdmin(), failMessage: '安装 WSL 需要管理员权限。请右键本工具，选择"以管理员身份运行"。' },
+  ],
+  'package-managers': [
+    { check: () => commandExists('winget'), failMessage: 'winget 不可用。请先安装 App Installer。' },
+  ],
+  'unix-commands': [
+    { check: () => commandExists('winget'), failMessage: 'winget 不可用。请先安装 App Installer。' },
+  ],
+  'uv-package-manager': [
+    { check: () => commandExists('pip') || commandExists('powershell'), failMessage: 'pip 和 PowerShell 都不可用，无法安装 uv。请先安装 Python。' },
+  ],
+  'claude-cli': [
+    { check: () => commandExists('npm'), failMessage: 'npm 不可用。请先安装 Node.js（可在修复建议中选择安装 nvm-windows）。' },
+  ],
+  'openclaw': [
+    { check: () => commandExists('npm'), failMessage: 'npm 不可用。请先安装 Node.js。' },
+  ],
+  'ccswitch': [
+    { check: () => commandExists('npm'), failMessage: 'npm 不可用。请先安装 Node.js。' },
+  ],
+  'powershell-version': [
+    { check: () => commandExists('winget'), failMessage: 'winget 不可用。请先安装 App Installer。' },
+  ],
+  'env-path-length': [], // 只读诊断
+};
+
+/** 执行预检，返回第一条失败信息，全部通过返回 null */
+function runPreflight(scannerId: string): string | null {
+  const rules = PREFLIGHT_RULES[scannerId];
+  if (!rules || rules.length === 0) return null;
+  for (const rule of rules) {
+    if (!rule.check()) return rule.failMessage;
+  }
+  return null;
+}
+
+/** 三阶段执行修复：preflight → backup → execute → verify，失败时 rollback */
 export async function executeFix(fix: FixSuggestion): Promise<FixResult> {
   const fixer = getFixerByScannerId(fix.scannerId);
   if (!fixer) {
     return { success: false, message: `未找到 scanner ${fix.scannerId} 对应的 fixer` };
+  }
+
+  // Phase 0: Preflight（预检）
+  const preflightFail = runPreflight(fix.scannerId);
+  if (preflightFail) {
+    return { success: false, message: `前置条件不满足: ${preflightFail}` };
   }
 
   // Phase 1: Backup
@@ -56,21 +333,9 @@ export async function executeFix(fix: FixSuggestion): Promise<FixResult> {
   }
 
   // Phase 2: Execute
+  let result: FixResult;
   try {
-    const result = await fixer.execute(fix, backup);
-
-    // Phase 3: Verify（重扫对应 scanner）
-    const scanner = getScannerById(fix.scannerId);
-    if (scanner) {
-      try {
-        const newScan = await scanner.scan();
-        result.newScanResult = newScan;
-      } catch {
-        // 重扫失败不影响修复结果
-      }
-    }
-
-    return result;
+    result = await fixer.execute(fix, backup);
   } catch (err) {
     // Execute 失败 → 尝试 rollback
     if (fixer.rollback) {
@@ -91,6 +356,72 @@ export async function executeFix(fix: FixSuggestion): Promise<FixResult> {
     }
     return { success: false, message: `修复失败: ${err instanceof Error ? err.message : String(err)}` };
   }
+
+  // Execute 本身就失败了，直接返回，不需要验证
+  if (!result.success) {
+    // 即使失败也给出修复后指导（下一步建议）
+    const guidance = generatePostFixGuidance(fix.scannerId, fix.tier);
+    if (guidance && guidance.verifyCommands) {
+      result.postFixGuidance = guidance;
+      result.message += `\n\n手动验证:\n${guidance.verifyCommands.map(c => `  > ${c}`).join('\n')}`;
+    }
+    return result;
+  }
+
+  // Phase 3: Verify（重扫对应 scanner，验证修复是否真正生效）
+  const scanner = getScannerById(fix.scannerId);
+  if (!scanner) {
+    // 没有 scanner 可验证，返回执行结果但标记为未验证，附加指导
+    result.verified = false;
+    const guidance = generatePostFixGuidance(fix.scannerId, fix.tier);
+    if (guidance) {
+      result.postFixGuidance = guidance;
+      const guidanceText = formatPostFixGuidance(guidance);
+      if (guidanceText) result.message += `\n\n${guidanceText}`;
+    }
+    return result;
+  }
+
+  try {
+    // 等待一小段时间让环境变量/注册表等变更生效
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    const newScan = await scanner.scan();
+    result.newScanResult = newScan;
+
+    if (newScan.status === 'pass') {
+      // 验证通过：修复真正生效
+      result.verified = true;
+    } else if (newScan.status === 'warn') {
+      // 部分修复：执行成功但仍有警告
+      result.verified = true;
+      result.partial = true;
+      result.nextSteps = generateNextSteps(fix.scannerId, newScan, fix.tier);
+      result.message += `\n\n验证结果: ${newScan.message}${result.nextSteps.length > 0 ? '\n建议操作:\n' + result.nextSteps.map((s, i) => `${i + 1}. ${s}`).join('\n') : ''}`;
+    } else {
+      // 验证未通过：执行成功但问题仍然存在
+      result.verified = true;
+      result.success = false;
+      result.nextSteps = generateNextSteps(fix.scannerId, newScan, fix.tier);
+      result.message = `修复已执行，但验证未通过: ${newScan.message}\n\n可能原因和下一步:\n${result.nextSteps.map((s, i) => `${i + 1}. ${s}`).join('\n')}`;
+    }
+  } catch {
+    // 重扫异常 → 标记为未验证，不覆盖执行结果
+    result.verified = false;
+    result.message += '\n\n(无法自动验证修复结果，请手动确认)';
+  }
+
+  // Phase 4: 修复后指导
+  const guidance = generatePostFixGuidance(fix.scannerId, fix.tier);
+  if (guidance) {
+    result.postFixGuidance = guidance;
+    // 将关键指导附加到消息中，确保 UI 一定能显示
+    const guidanceText = formatPostFixGuidance(guidance);
+    if (guidanceText && !result.message.includes(guidanceText)) {
+      result.message += `\n\n${guidanceText}`;
+    }
+  }
+
+  return result;
 }
 
 /** 空 backup（无需备份的 fixer 使用） */
@@ -137,15 +468,28 @@ export const _testHelpers = {
   buildPythonLocatorMessage,
 };
 
-/** 通用执行器：只执行命令，不备份 */
-function simpleExecute(fix: FixSuggestion, _backup: BackupData): Promise<FixResult> {
+/** 将失败的命令结果转为带分类的用户友好消息 */
+function commandFailedMessage(r: { exitCode: number; stderr: string; stdout: string; errorHint?: string }, context: string): string {
+  if (r.errorHint) return `${context}失败: ${r.errorHint}`;
+  const classified = classifyCommandError(r);
+  return `${context}失败: ${classified.hint}`;
+}
+
+/** 通用执行器：执行命令并分类失败原因 */
+function simpleExecute(fix: FixSuggestion, _backup: BackupData, timeout = 15000): Promise<FixResult> {
   const results: string[] = [];
   for (const cmd of fix.commands || []) {
-    const r = runCommand(cmd, 15000);
-    results.push(`${cmd}: ${r.exitCode === 0 ? '成功' : '失败'}`);
+    const r = runCommand(cmd, timeout);
     if (r.exitCode !== 0) {
-      return Promise.resolve({ success: false, message: results.join('\n') });
+      const hint = r.errorHint || classifyCommandError(r, timeout).hint;
+      return Promise.resolve({
+        success: false,
+        message: results.length > 0
+          ? `${results.join('\n')}\n${cmd}: 失败\n${hint}`
+          : `${cmd}: 失败\n${hint}`,
+      });
     }
+    results.push(`${cmd}: 成功`);
   }
   return Promise.resolve({ success: true, message: results.join('\n') || '执行完成' });
 }
@@ -215,7 +559,7 @@ registerFixer({
   },
   async execute(fix: FixSuggestion, _backup: BackupData): Promise<FixResult> {
     const r = runCommand(fix.commands![0], 10000);
-    return { success: r.exitCode === 0, message: r.exitCode === 0 ? '执行策略已更新' : r.stderr };
+    return { success: r.exitCode === 0, message: r.exitCode === 0 ? '执行策略已更新' : commandFailedMessage(r, '设置执行策略') };
   },
   async rollback(backup: BackupData): Promise<void> {
     runCommand(`powershell -Command "Set-ExecutionPolicy ${backup.data.oldPolicy} -Scope CurrentUser -Force"`, 10000);
@@ -243,7 +587,7 @@ registerFixer({
   },
   async execute(fix: FixSuggestion, _backup: BackupData): Promise<FixResult> {
     const r = runCommand(fix.commands![0], 10000);
-    return { success: r.exitCode === 0, message: r.exitCode === 0 ? '长路径支持已启用' : r.stderr };
+    return { success: r.exitCode === 0, message: r.exitCode === 0 ? '长路径支持已启用' : commandFailedMessage(r, '启用长路径') };
   },
   async rollback(backup: BackupData): Promise<void> {
     const oldVal = backup.data.LongPathsEnabled?.includes('0x1') ? '1' : '0';
@@ -274,7 +618,7 @@ registerFixer({
     // 先启动时间服务
     runCommand('net start w32time', 5000);
     const r = runCommand(fix.commands![0], 15000);
-    return { success: r.exitCode === 0, message: r.exitCode === 0 ? '时间同步成功' : `同步失败: ${r.stderr || r.stdout}` };
+    return { success: r.exitCode === 0, message: r.exitCode === 0 ? '时间同步成功' : commandFailedMessage(r, '时间同步') };
   },
   // 幂等操作，无需 rollback
 });
@@ -329,7 +673,7 @@ registerFixer({
   },
   async execute(fix: FixSuggestion, _backup: BackupData): Promise<FixResult> {
     const r = runCommand(fix.commands![0], 60000);
-    return { success: r.exitCode === 0, message: r.exitCode === 0 ? 'Git 安装/升级成功' : r.stderr };
+    return { success: r.exitCode === 0, message: r.exitCode === 0 ? 'Git 安装/升级成功' : commandFailedMessage(r, 'Git 安装') };
   },
   async rollback(backup: BackupData): Promise<void> {
     if (backup.data.gitVersion === 'not-installed') {
@@ -356,7 +700,7 @@ registerFixer({
   },
   async execute(fix: FixSuggestion, _backup: BackupData): Promise<FixResult> {
     const r = runCommand(fix.commands![0], 60000);
-    return { success: r.exitCode === 0, message: r.exitCode === 0 ? 'nvm-windows 安装成功' : r.stderr };
+    return { success: r.exitCode === 0, message: r.exitCode === 0 ? 'nvm-windows 安装成功' : commandFailedMessage(r, 'nvm-windows 安装') };
   },
 });
 
@@ -720,7 +1064,7 @@ registerFixer({
   },
   async execute(fix: FixSuggestion, _backup: BackupData): Promise<FixResult> {
     const r = runCommand(fix.commands![0], 60000);
-    return { success: r.exitCode === 0, message: r.exitCode === 0 ? 'WSL2 安装成功，可能需要重启' : r.stderr };
+    return { success: r.exitCode === 0, message: r.exitCode === 0 ? 'WSL2 安装成功，可能需要重启' : commandFailedMessage(r, 'WSL2 安装') };
   },
   async rollback(backup: BackupData): Promise<void> {
     if (backup.data.status === 'not-installed') {
@@ -752,7 +1096,7 @@ registerFixer({
   async execute(fix: FixSuggestion, _backup: BackupData): Promise<FixResult> {
     const r = runCommand(fix.commands![0], 15000);
     if (r.exitCode !== 0) {
-      return { success: false, message: `添加 PATH 失败: ${r.stderr}` };
+      return { success: false, message: commandFailedMessage(r, '添加 Git PATH') };
     }
     // 同时更新当前进程的 PATH，让后续检测立即生效
     const newPath = r.stdout.trim();
@@ -794,7 +1138,7 @@ registerFixer({
       // pip 失败时尝试 PowerShell 安装
       const r2 = runCommand('powershell -Command "irm https://astral.sh/uv/install.ps1 | iex"', 60000);
       if (r2.exitCode !== 0) {
-        return { success: false, message: `pip 安装失败: ${r.stderr}\nPowerShell 安装也失败: ${r2.stderr}` };
+        return { success: false, message: `pip 安装失败: ${commandFailedMessage(r, '')}\nPowerShell 安装也失败: ${commandFailedMessage(r2, '')}` };
       }
       return { success: true, message: 'uv 安装成功（via PowerShell）' };
     }
@@ -827,7 +1171,7 @@ registerFixer({
   async execute(fix: FixSuggestion, _backup: BackupData): Promise<FixResult> {
     const r = runCommand(fix.commands![0], 120000);
     if (r.exitCode !== 0) {
-      return { success: false, message: `安装失败: ${r.stderr || r.stdout}` };
+      return { success: false, message: commandFailedMessage(r, 'Claude Code 安装') };
     }
     return { success: true, message: 'Claude Code 安装成功。运行 claude 命令启动。' };
   },
@@ -858,7 +1202,7 @@ registerFixer({
   async execute(fix: FixSuggestion, _backup: BackupData): Promise<FixResult> {
     const r = runCommand(fix.commands![0], 120000);
     if (r.exitCode !== 0) {
-      return { success: false, message: `安装失败: ${r.stderr || r.stdout}` };
+      return { success: false, message: commandFailedMessage(r, 'OpenClaw 安装') };
     }
     return { success: true, message: 'OpenClaw 安装成功。运行 openclaw 命令启动。' };
   },
@@ -889,7 +1233,7 @@ registerFixer({
   async execute(fix: FixSuggestion, _backup: BackupData): Promise<FixResult> {
     const r = runCommand(fix.commands![0], 120000);
     if (r.exitCode !== 0) {
-      return { success: false, message: `安装失败: ${r.stderr || r.stdout}` };
+      return { success: false, message: commandFailedMessage(r, 'CCSwitch 安装') };
     }
     return { success: true, message: 'CCSwitch 安装成功。运行 ccswitch 命令管理账号。' };
   },
@@ -921,7 +1265,7 @@ registerFixer({
   async execute(fix: FixSuggestion, _backup: BackupData): Promise<FixResult> {
     const r = runCommand(fix.commands![0], 120000);
     if (r.exitCode !== 0) {
-      return { success: false, message: `安装失败: ${r.stderr || r.stdout}` };
+      return { success: false, message: commandFailedMessage(r, 'PowerShell 7 安装') };
     }
 
     // 安装完成后，把 pwsh 设为 Windows Terminal 默认 profile（如果 Windows Terminal 存在）
