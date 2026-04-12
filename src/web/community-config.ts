@@ -1,4 +1,4 @@
-const DEFAULT_COMMUNITY_ORIGIN = 'http://aicoevo.net';
+const DEFAULT_COMMUNITY_ORIGIN = 'https://aicoevo.net';
 
 function normalizeOrigin(value?: string | null): string {
   if (!value) return DEFAULT_COMMUNITY_ORIGIN;
