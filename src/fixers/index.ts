@@ -271,9 +271,7 @@ const PREFLIGHT_RULES: Record<string, PreflightRule[]> = {
     { check: () => isAdmin(), failMessage: '修改防火墙规则需要管理员权限。请右键本工具，选择"以管理员身份运行"。' },
   ],
   'temp-space': [], // 清理临时文件无需特殊预检
-  'git-path': [
-    { check: () => commandExists('git'), failMessage: 'Git 未安装。请先安装 Git（可在修复建议中选择安装）。' },
-  ],
+  'git-path': [], // Git PATH 修复不需要额外前置检查，scanner 已确认 git 存在
   'wsl-version': [
     { check: () => isAdmin(), failMessage: '安装 WSL 需要管理员权限。请右键本工具，选择"以管理员身份运行"。' },
   ],
@@ -357,9 +355,10 @@ export async function executeFix(fix: FixSuggestion): Promise<FixResult> {
     return { success: false, message: `修复失败: ${err instanceof Error ? err.message : String(err)}` };
   }
 
-  // Execute 本身就失败了，直接返回，不需要验证
+  // Execute 失败：标记未验证 + 附加手动指导后返回
+  // 注意：partial (部分成功) 场景也要走这里，不要跳过了 guidance
   if (!result.success) {
-    // 即使失败也给出修复后指导（下一步建议）
+    result.verified = false;
     const guidance = generatePostFixGuidance(fix.scannerId, fix.tier);
     if (guidance && guidance.verifyCommands) {
       result.postFixGuidance = guidance;
@@ -475,21 +474,51 @@ function commandFailedMessage(r: { exitCode: number; stderr: string; stdout: str
 
 /** 通用执行器：执行命令并分类失败原因 */
 function simpleExecute(fix: FixSuggestion, _backup: BackupData, timeout = 15000): Promise<FixResult> {
-  const results: string[] = [];
+  if (!fix.commands || fix.commands.length === 0) {
+    return Promise.resolve({ success: false, message: '无执行命令' });
+  }
+  const results: { cmd: string; success: boolean; hint?: string }[] = [];
+  let allSuccess = true;
+
   for (const cmd of fix.commands || []) {
     const r = runCommand(cmd, timeout);
     if (r.exitCode !== 0) {
-      const hint = r.errorHint || classifyCommandError(r, timeout).hint;
-      return Promise.resolve({
-        success: false,
-        message: results.length > 0
-          ? `${results.join('\n')}\n${cmd}: 失败\n${hint}`
-          : `${cmd}: 失败\n${hint}`,
-      });
+      allSuccess = false;
+      let hint: string;
+      try { hint = classifyCommandError(r, timeout).hint; }
+      catch { hint = r.errorHint || '未知错误'; }
+      results.push({ cmd, success: false, hint });
+    } else {
+      results.push({ cmd, success: true });
     }
-    results.push(`${cmd}: 成功`);
   }
-  return Promise.resolve({ success: true, message: results.join('\n') || '执行完成' });
+
+  // 格式化消息，让成功/失败更清晰
+  const successCount = results.filter(r => r.success).length;
+  const failCount = results.length - successCount;
+
+  const lines: string[] = [];
+  for (const r of results) {
+    // 提取命令名（pip config... → pip）
+    const cmdName = r.cmd.split(' ')[0];
+    if (r.success) {
+      lines.push(`✓ ${cmdName}: 配置成功`);
+    } else {
+      lines.push(`✗ ${cmdName}: 配置失败 - ${r.hint || '未知错误'}`);
+    }
+  }
+
+  const summary = failCount === 0
+    ? '全部配置成功'
+    : successCount === 0
+      ? '全部配置失败'
+      : `部分成功: ${successCount}/${results.length}`;
+
+  return Promise.resolve({
+    success: allSuccess,
+    partial: successCount > 0 && failCount > 0,
+    message: `${summary}\n${lines.join('\n')}`,
+  });
 }
 
 /** 创建恢复点（简单版：导出当前注册表/配置状态） */

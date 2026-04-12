@@ -449,6 +449,21 @@ h1{font-family:var(--display);font-size:1.5rem;font-weight:700;letter-spacing:3p
 .install-result{margin-top:12px;padding:10px 14px;border-radius:8px;font-size:.85rem;font-weight:500;display:none}
 .install-result.success{display:block;background:rgba(0,255,136,.06);color:var(--green);border:1px solid rgba(0,255,136,.15)}
 .install-result.fail{display:block;background:rgba(255,51,85,.06);color:var(--red);border:1px solid rgba(255,51,85,.15)}
+/* ====== 修复执行中遮罩 ====== */
+.fix-executing-overlay{position:fixed;inset:0;background:rgba(5,8,16,.85);backdrop-filter:blur(6px);display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:200;opacity:0;pointer-events:none;transition:opacity .2s}
+.fix-executing-overlay.active{opacity:1;pointer-events:auto}
+.fix-exe-spinner{width:48px;height:48px;border:3px solid rgba(0,240,255,.15);border-top-color:var(--cyan);border-radius:50%;animation:spin .8s linear infinite;margin-bottom:16px}
+@keyframes spin{to{transform:rotate(360deg)}}
+.fix-exe-text{font-family:var(--display);font-size:1.1rem;color:var(--cyan);letter-spacing:2px;text-shadow:0 0 20px rgba(0,240,255,.4)}
+
+/* ====== 修复结果通知 ====== */
+.fix-toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(120px);padding:14px 24px;border-radius:12px;font-size:.9rem;font-weight:600;z-index:300;transition:transform .3s cubic-bezier(.34,1.56,.64,1);box-shadow:0 8px 32px rgba(0,0,0,.5)}
+.fix-toast.show{transform:translateX(-50%) translateY(0)}
+.fix-toast.success{background:rgba(0,255,136,.12);border:1px solid rgba(0,255,136,.3);color:var(--green)}
+.fix-toast.warn{background:rgba(255,193,7,.12);border:1px solid rgba(255,193,7,.3);color:var(--yellow)}
+.fix-toast.fail{background:rgba(255,51,85,.12);border:1px solid rgba(255,51,85,.3);color:var(--red)}
+.fix-toast.info{background:rgba(0,240,255,.12);border:1px solid rgba(0,240,255,.3);color:var(--cyan)}
+
 /* ====== 弹窗 ====== */
 .modal-overlay{position:fixed;inset:0;background:rgba(5,8,16,.8);backdrop-filter:blur(4px);display:flex;align-items:center;justify-content:center;z-index:100;opacity:0;pointer-events:none;transition:opacity .25s}
 .modal-overlay.active{opacity:1;pointer-events:auto}
@@ -822,6 +837,15 @@ h1{font-family:var(--display);font-size:1.5rem;font-weight:700;letter-spacing:3p
   <div class="footer">aicoevo v0.1.0 — AI 环境诊断工具</div>
 </div>
 
+<!-- 修复执行中遮罩 -->
+<div id="fix-exe-overlay" class="fix-executing-overlay">
+  <div class="fix-exe-spinner"></div>
+  <div id="fix-exe-text" class="fix-exe-text">正在执行修复...</div>
+</div>
+
+<!-- 修复结果通知 -->
+<div id="fix-toast" class="fix-toast"></div>
+
 <!-- 确认弹窗 -->
 <div id="modal-overlay" class="modal-overlay">
   <div class="modal">
@@ -1120,6 +1144,7 @@ const fixes = ${JSON.stringify(
 )};
 
 let pendingFixIdx = null;
+let fixInProgress = false;
 
 function openModal(idx) {
   const fix = fixes[idx];
@@ -1175,14 +1200,27 @@ function toggleConfirmBtn() {
   document.getElementById('modal-confirm').disabled = !checked;
 }
 
+function showToast(msg, type='info', duration=4000) {
+  const t = document.getElementById('fix-toast');
+  t.textContent = msg;
+  t.className = 'fix-toast ' + type;
+  void t.offsetWidth; // reflow to restart transition
+  t.classList.add('show');
+  setTimeout(() => { t.classList.remove('show'); }, duration);
+}
+
 async function confirmFix() {
-  if (pendingFixIdx === null) return;
+  if (pendingFixIdx === null || fixInProgress) return;
+  fixInProgress = true;
   const idx = pendingFixIdx;
   const fix = fixes[idx];
   closeModal();
 
-  const btn = document.getElementById('fix-btn-' + idx);
-  if (btn) { btn.disabled = true; btn.textContent = '执行中...'; }
+  // 全屏遮罩显示执行中
+  const overlay = document.getElementById('fix-exe-overlay');
+  const exeText = document.getElementById('fix-exe-text');
+  exeText.textContent = '正在执行修复...';
+  overlay.classList.add('active');
 
   try {
     const res = await fetch('/api/fix', {
@@ -1193,6 +1231,32 @@ async function confirmFix() {
     const data = await res.json();
     fix.executed = true;
     fix.result = data;
+
+    // 关闭执行中遮罩
+    overlay.classList.remove('active');
+
+    // 显示结果通知
+    let toastType = 'success', toastMsg = '';
+    if (data.verified && data.success && !data.partial) {
+      toastMsg = '修复成功';
+      toastType = 'success';
+    } else if (data.partial) {
+      toastMsg = '部分修复';
+      toastType = 'warn';
+    } else if (data.verified && !data.success) {
+      toastMsg = '修复未生效';
+      toastType = 'fail';
+    } else if (data.rolledBack) {
+      toastMsg = '修复失败，已自动回滚';
+      toastType = 'fail';
+    } else if (data.success && !data.verified) {
+      toastMsg = '执行成功，等待验证';
+      toastType = 'success';
+    } else {
+      toastMsg = '修复失败，请重试';
+      toastType = 'fail';
+    }
+    showToast(toastMsg, toastType);
 
     // 显示执行结果（含验证闭环状态）
     const el = document.getElementById('fix-result-' + idx);
@@ -1218,6 +1282,7 @@ async function confirmFix() {
       }
     }
 
+    const btn = document.getElementById('fix-btn-' + idx);
     if (btn) {
       if (data.verified && data.success && !data.partial) {
         btn.textContent = '已修复';
@@ -1248,10 +1313,15 @@ async function confirmFix() {
     if (data.success && fix.scannerId) {
       await rescanOne(fix.scannerId);
     }
+    fixInProgress = false;
   } catch(e) {
+    overlay.classList.remove('active');
+    showToast('网络错误: ' + e.message, 'fail');
     const el = document.getElementById('fix-result-' + idx);
     if (el) { el.className = 'fix-result fail'; el.textContent = '✗ 网络错误: ' + e.message; }
+    const btn = document.getElementById('fix-btn-' + idx);
     if (btn) { btn.textContent = '重试'; btn.disabled = false; }
+    fixInProgress = false;
   }
 }
 
@@ -1567,7 +1637,22 @@ async function submitFeedback() {
     });
     const data = await res.json();
 
-    if (!res.ok) throw new Error(data.detail || data.error || '提交失败');
+    if (!res.ok) {
+      // 提取人类可读的错误信息，处理各种嵌套格式
+      let errMsg = '提交失败 (HTTP ' + res.status + ')';
+      if (typeof data.detail === 'string') errMsg = data.detail;
+      else if (typeof data.error === 'string') errMsg = data.error;
+      else if (typeof data.message === 'string') errMsg = data.message;
+      else if (data.detail && typeof data.detail === 'object') {
+        // detail 是嵌套对象（如 {msg: "...", code: "..."}），尝试提取第一个字符串字段
+        const vals = Object.values(data.detail).filter(v => typeof v === 'string');
+        if (vals.length > 0) errMsg = vals[0] as string;
+        else errMsg = JSON.stringify(data.detail); // 兜底：序列化整个对象
+      } else if (typeof data.detail === 'object' && data.detail !== null) {
+        errMsg = JSON.stringify(data.detail);
+      }
+      throw new Error(errMsg);
+    }
 
     if (statusEl) statusEl.innerHTML = '<span style="color:#00ff88">反馈已发送，感谢你的意见！我们会尽快处理。</span>';
     const textarea = document.getElementById('fb-content');
