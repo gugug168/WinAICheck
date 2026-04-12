@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.3.2] - 2026-04-12
+
+### Added
+- npm 包 `npx winaicheck` 智能入口：检测到 Bun + 源码时直接运行，无需下载 exe
+- 新增 `winaicheck-agent` bin 入口，可直接 `npx winaicheck-agent` 启动轻量 agent 插件
+
+### Changed
+- npm 包包含 `src/` 源码目录（~200KB），开发者可直接从源码运行
+- Web UI "Agent 进化" tab 升级为 "持续优化插件"（主导航栏），品红霓虹主题，三步价值展示
+- build 脚本集成 UPX 压缩并区分未安装/压缩失败两种错误状态
+
 ## [0.3.1] - 2026-04-07
 
 ### Fixed
