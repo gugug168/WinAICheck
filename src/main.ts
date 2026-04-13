@@ -13,15 +13,16 @@ import { requestRemoteJson } from './web/remote-json';
 import { getCommunityApiBase } from './web/community-config';
 import { enableAgentExperience, getAgentLocalStatus, pauseAgentUploads, syncAgentEvents } from './agent/local-state';
 import type { ScoreResult } from './scanners/types';
+import { VERSION } from './constants';
 
 // 导入所有 scanner（触发注册）
 import './scanners/index';
 
 function showHelp() {
   console.log(`
-aicoevo - AI 环境诊断工具 v0.1.0
+${APP_NAME} - AI 环境诊断工具 v${VERSION}
 
-用法: aicoevo [选项]
+用法: ${APP_NAME} [选项]
 
   （默认）启动 Web UI，自动打开浏览器查看诊断结果
 
@@ -57,7 +58,7 @@ async function main() {
 // ==================== CLI 模式 ====================
 
 async function cliMode(wantJson: boolean, wantHtml: boolean) {
-  console.log('aicoevo v0.1.0 — 开始扫描...\n');
+  console.log(`${APP_NAME} v${VERSION} — 开始扫描...\n`);
 
   const results = await runAllScanners(5);
   console.log('\n扫描完成！\n');
@@ -120,14 +121,14 @@ async function webMode(port: number) {
             breakdown: [],
           };
           const prev = loadPreviousReport();
-          return new Response(generateWebUI([], initialScore, prev?.score ?? null, true), {
+          return new Response(generateWebUI([], initialScore, prev?.score ?? null, true, VERSION), {
             headers: { 'Content-Type': 'text/html; charset=utf-8' },
           });
         }
         const score = calculateScore(cached);
         saveLocal(createPayload(cached, score));
         const prev = loadPreviousReport();
-        return new Response(generateWebUI(cached, score, prev?.score ?? null), {
+        return new Response(generateWebUI(cached, score, prev?.score ?? null, false, VERSION), {
           headers: { 'Content-Type': 'text/html; charset=utf-8' },
         });
       }
@@ -357,11 +358,11 @@ async function webMode(port: number) {
           });
           const data = await res.json() as { version?: string };
           return Response.json({
-            current: process.env.npm_package_version || '0.1.0',
-            latest: data.version || '0.1.0',
+            current: process.env.npm_package_version || VERSION,
+            latest: data.version || VERSION,
           });
         } catch {
-          return Response.json({ current: '0.1.0', latest: '0.1.0' });
+          return Response.json({ current: VERSION, latest: VERSION });
         }
       }
 
@@ -369,7 +370,7 @@ async function webMode(port: number) {
     },
   });
 
-  console.log(`\n  aicoevo Web UI 已启动`);
+  console.log(`\n  ${APP_NAME} Web UI v${VERSION} 已启动`);
   console.log(`  浏览器访问: \x1b[36mhttp://localhost:${port}\x1b[0m\n`);
 
   try { execSync(`start http://localhost:${port}`, { windowsHide: true, timeout: 3000 }); } catch {}

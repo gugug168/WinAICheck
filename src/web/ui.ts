@@ -144,12 +144,14 @@ function getWorkflowState(results: ScanResult[]): {
 
 /**
  * 生成完整的 Web UI HTML 页面
+ * @param version 从 package.json 注入，确保 Web UI 与 CLI 版本一致
  */
 export function generateWebUI(
   results: ScanResult[],
   score: ScoreResult,
   prevScore: number | null = null,
   autoStartScan = false,
+  version = "0.3.3",
 ): string {
   const fixes = getFixSuggestions(results);
   const fixesByTier = {
@@ -834,7 +836,7 @@ h1{font-family:var(--display);font-size:1.5rem;font-weight:700;letter-spacing:3p
     </div>
   </div>
 
-  <div class="footer">aicoevo v0.1.0 — AI 环境诊断工具</div>
+  <div class="footer">WinAICheck v${version} — AI 环境诊断工具</div>
 </div>
 
 <!-- 修复执行中遮罩 -->
@@ -1575,7 +1577,7 @@ async function openCommunity() {
         fingerprint: JSON.stringify({
           platform: navigator.platform,
           userAgent: navigator.userAgent,
-          system: payload.system || {},
+          system: payload.systemInfo || {},
           score: getScoreValue(payload.score),
           failCount: (payload.results || []).filter(r => r.status === 'fail').length,
           failCategories: [...new Set((payload.results || []).filter(r => r.status === 'fail').map(r => r.category))],
@@ -1583,13 +1585,26 @@ async function openCommunity() {
       }),
     });
 
-    if (!res.ok) throw new Error('上传失败: ' + res.status);
+    if (!res.ok) {
+      let detail = '';
+      try {
+        const err = JSON.parse(await res.text());
+        detail = err.detail || '';
+      } catch {}
+      if (res.status === 413) {
+        throw new Error('扫描数据过大，请减少检测项后重试');
+      } else if (res.status === 400 && detail) {
+        throw new Error(detail);
+      } else {
+        throw new Error('上传失败 (' + res.status + ')' + (detail ? ': ' + detail : ''));
+      }
+    }
     const {token} = await res.json();
     if (btn) { btn.textContent = '查看社区方案'; btn.disabled = false; }
     window.open(${JSON.stringify(buildCommunityClaimUrl('__TOKEN__'))}.replace('__TOKEN__', encodeURIComponent(token)), '_blank');
   } catch(e) {
     const message = e instanceof Error ? e.message : String(e);
-    alert('连接社区失败，请检查网络\\n' + message);
+    alert('连接社区失败，请检查网络\n' + message);
     if (btn) { btn.textContent = '查看社区方案'; btn.disabled = false; }
   }
 }
