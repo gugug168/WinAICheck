@@ -1674,7 +1674,7 @@ async function submitFeedback() {
     if (textarea) textarea.value = '';
   } catch(e) {
     const msg = e instanceof Error ? e.message : String(e);
-    if (statusEl) statusEl.innerHTML = '<span style="color:#ff6b6b">发送失败: ' + msg + '</span>';
+    if (statusEl) statusEl.innerHTML = '<span style="color:#ff6b6b">发送失败: ' + escapeHtml(msg) + '</span>';
   } finally {
     if (btn) { btn.textContent = '发送反馈'; btn.disabled = false; }
   }
