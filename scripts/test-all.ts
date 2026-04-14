@@ -1,3 +1,7 @@
+import { readdirSync, statSync } from 'fs';
+import { join } from 'path';
+import { spawnSync } from 'child_process';
+
 const groups = {
   core: [
     'tests/calculator-sanitizer.test.ts',
@@ -18,12 +22,31 @@ const groups = {
   ],
 } as const;
 
-type GroupName = keyof typeof groups;
+function toRepoPath(filepath: string): string {
+  return filepath.replace(/\\/g, '/');
+}
+
+function listTestFiles(dir: string): string[] {
+  const files: string[] = [];
+  for (const entry of readdirSync(dir)) {
+    const full = join(dir, entry);
+    const stat = statSync(full);
+    if (stat.isDirectory()) {
+      files.push(...listTestFiles(full));
+    } else if (entry.endsWith('.test.ts')) {
+      files.push(toRepoPath(full));
+    }
+  }
+  return files.sort();
+}
 
 function getTargets(mode: string): string[] {
-  if (mode === 'core') return [...groups.core];
-  if (mode === 'integration') return [...groups.integration];
-  return [...groups.core, ...groups.integration];
+  const allTests = listTestFiles('tests');
+  if (mode === 'core') return allTests.filter(file => !file.startsWith('tests/integration/'));
+  if (mode === 'integration') return allTests.filter(file => file.startsWith('tests/integration/'));
+  if (mode === 'legacy-core') return [...groups.core];
+  if (mode === 'legacy-integration') return [...groups.integration];
+  return allTests;
 }
 
 const mode = process.argv[2] ?? 'all';
@@ -36,15 +59,13 @@ if (targets.length === 0) {
 
 for (const target of targets) {
   console.log(`\n==> Running ${target}`);
-  const result = Bun.spawnSync([process.execPath, 'test', target], {
+  const result = spawnSync(process.execPath, ['test', target], {
     cwd: process.cwd(),
-    stdout: 'inherit',
-    stderr: 'inherit',
-    stdin: 'inherit',
+    stdio: 'inherit',
   });
 
-  if (result.exitCode !== 0) {
-    process.exit(result.exitCode ?? 1);
+  if (result.status !== 0) {
+    process.exit(result.status ?? 1);
   }
 }
 

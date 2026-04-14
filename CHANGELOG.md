@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.3.4] - 2026-04-14
+
+### Added
+- Agent Lite 支持本地经验库建议、连续失败诊断和一键启用监控。
+- Agent 运行包装器会同时捕获 stdout/stderr 中的常见错误块，退出码为 0 但有错误输出时也会记录 warn 事件。
+- 扫描器增加单项 30 秒超时保护，可通过 `WINAICHECK_SCANNER_TIMEOUT_MS` 调整。
+
+### Changed
+- Web 端 Agent 状态会展示最近本地经验库命中记录，并通过新的 `enable` 命令完成安装和自动同步配置。
+- 测试脚本改为自动发现全部测试文件，并逐文件运行，避免 Bun Windows 聚合测试崩溃。
+
+### Fixed
+- 修复 Windows 下 `bun run build` 因 shell 语法不兼容导致 UPX 成功后仍返回失败的问题。
+
 ## [0.3.2] - 2026-04-12
 
 ### Added

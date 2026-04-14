@@ -43,6 +43,7 @@ function getPaths() {
     adviceJson: join(base, 'advice', 'latest.json'),
     adviceMd: join(base, 'advice', 'latest.md'),
     dailyDir: join(base, 'daily'),
+    experience: join(base, 'experience.jsonl'),
     agentDir: join(base, 'agent'),
     agentJs: join(base, 'agent', 'agent-lite.js'),
     agentCmd: join(base, 'agent', 'winaicheck-agent.cmd'),
@@ -123,9 +124,13 @@ export function getAgentLocalStatus() {
     uniqueFingerprints: 0,
     repeatedEvents: 0,
     fixedEvents: 0,
+    consecutiveFailures: 0,
+    lastFailureFingerprint: null,
+    lastEventAt: null,
     topProblems: [],
   });
   const advice = readJson<Record<string, any>>(paths.adviceJson, {});
+  const experience = readJsonl(paths.experience);
 
   return {
     enabled: existsSync(paths.agentCmd) && Array.isArray(hooks.agents) && hooks.agents.length > 0,
@@ -145,6 +150,7 @@ export function getAgentLocalStatus() {
     today: todayPack,
     latestEvents: events.slice(-20).reverse(),
     latestUploads: ledger.slice(-20).reverse(),
+    latestExperience: experience.slice(-20).reverse(),
     advice,
   };
 }
@@ -154,7 +160,7 @@ export function enableAgentExperience(target = 'all') {
   let hookOutput = '';
   let hookOk = false;
   try {
-    hookOutput = runAgentCommand(['install-hook', '--target', target]);
+    hookOutput = runAgentCommand(['enable', '--target', target]);
     hookOk = true;
   } catch {
     hookOk = false;

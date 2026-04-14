@@ -57,6 +57,26 @@ describe('agent-lite', () => {
     expect(daily.uniqueFingerprints).toBe(1);
   });
 
+  test('capture 命中本地经验库并记录建议', async () => {
+    const root = createTempRoot();
+    roots.push(root);
+
+    await agentMain([
+      'capture',
+      '--agent', 'claude-code',
+      '--message', 'ModuleNotFoundError: No module named alembic',
+    ], {
+      baseDir: root,
+      now: () => new Date('2026-04-12T08:30:00.000Z'),
+    }, createIo().io as any);
+
+    const p = _testHelpers.paths({ baseDir: root });
+    const experience = _testHelpers.readJsonl(p.experience);
+    expect(experience.length).toBe(1);
+    expect(experience[0].title).toBe('Python 模块缺失');
+    expect(experience[0].commands[0]).toContain('pip install');
+  });
+
   test('重复 fingerprint 会计入 repeatedEvents', async () => {
     const root = createTempRoot();
     roots.push(root);
@@ -77,7 +97,34 @@ describe('agent-lite', () => {
     expect(daily.totalEvents).toBe(2);
     expect(daily.uniqueFingerprints).toBe(1);
     expect(daily.repeatedEvents).toBe(1);
+    expect(daily.consecutiveFailures).toBe(2);
     expect(daily.topProblems[0].status).toBe('repeated');
+  });
+
+  test('diagnose 会展示 failure loop 和 Top 问题', async () => {
+    const root = createTempRoot();
+    roots.push(root);
+    const p = _testHelpers.paths({ baseDir: root });
+
+    _testHelpers.writeJson(join(p.dailyDir, '2026-04-12.json'), {
+      date: '2026-04-12',
+      totalEvents: 5,
+      uniqueFingerprints: 1,
+      repeatedEvents: 4,
+      fixedEvents: 0,
+      consecutiveFailures: 5,
+      lastFailureFingerprint: 'abc',
+      lastEventAt: new Date().toISOString(),
+      topProblems: [{ fingerprint: 'abc', title: 'MCP server error: config failed', count: 5, status: 'looping' }],
+    });
+
+    const io = createIo();
+    await agentMain(['diagnose'], {
+      baseDir: root,
+      now: () => new Date('2026-04-12T10:00:00.000Z'),
+    }, io.io as any);
+    expect(io.output).toContain('Failure Loop');
+    expect(io.output).toContain('MCP server error');
   });
 
   test('sync 授权后上传 pending 事件并写 ledger 和 advice', async () => {
@@ -159,6 +206,48 @@ describe('agent-lite', () => {
     expect(existsSync(result.agentJs)).toBe(true);
     expect(existsSync(result.agentCmd)).toBe(true);
     expect(readFileSync(result.agentCmd, 'utf-8')).toContain('agent-lite.js');
+  });
+
+  test('enable 会安装 hook 并启用自动同步配置', async () => {
+    const root = createTempRoot();
+    roots.push(root);
+    const profile = join(root, 'profile.ps1');
+
+    await agentMain(['enable', '--target', 'claude-code'], {
+      baseDir: root,
+      profilePaths: [profile],
+      now: () => new Date('2026-04-12T11:30:00.000Z'),
+    }, createIo().io as any);
+
+    const p = _testHelpers.paths({ baseDir: root });
+    const config = _testHelpers.readJson(p.config, {});
+    expect(config.shareData).toBe(true);
+    expect(config.autoSync).toBe(true);
+    expect(config.paused).toBe(false);
+    expect(readFileSync(profile, 'utf-8')).toContain('function claude');
+  });
+
+  test('run 会捕获 stdout 中的 Error 块', async () => {
+    const root = createTempRoot();
+    roots.push(root);
+    const script = join(root, 'fake-agent.cmd');
+    writeFileSync(script, '@echo off\r\necho normal output\r\necho Error: Exit code 1 from tool\r\nexit /b 0\r\n', 'utf-8');
+
+    const code = await agentMain([
+      'run',
+      '--agent', 'claude-code',
+      '--original', script,
+    ], {
+      baseDir: root,
+      now: () => new Date('2026-04-12T11:45:00.000Z'),
+    }, createIo().io as any);
+
+    expect(code).toBe(0);
+    const p = _testHelpers.paths({ baseDir: root });
+    const events = _testHelpers.readJsonl(p.outbox);
+    expect(events.length).toBe(1);
+    expect(events[0].sanitizedMessage).toContain('Error: Exit code 1');
+    expect(events[0].severity).toBe('warn');
   });
 
   test('npm agent 子命令不下载 exe，直接走轻量入口', () => {

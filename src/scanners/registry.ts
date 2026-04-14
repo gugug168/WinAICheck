@@ -1,6 +1,7 @@
 import type { Scanner, ScanResult } from './types';
 
 const scanners: Scanner[] = [];
+const DEFAULT_SCANNER_TIMEOUT_MS = 30000;
 
 function isDefaultEnabled(scanner: Scanner): boolean {
   return scanner.defaultEnabled !== false;
@@ -22,6 +23,33 @@ export function getScannerById(id: string): Scanner | undefined {
   return scanners.find(s => s.id === id);
 }
 
+function scannerTimeoutMs(): number {
+  const raw = Number(process.env.WINAICHECK_SCANNER_TIMEOUT_MS);
+  if (Number.isFinite(raw) && raw > 0) return raw;
+  return DEFAULT_SCANNER_TIMEOUT_MS;
+}
+
+async function scanWithTimeout(scanner: Scanner, timeoutMs: number): Promise<ScanResult> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<ScanResult>((resolve) => {
+    timer = setTimeout(() => {
+      resolve({
+        id: scanner.id,
+        name: scanner.name,
+        category: scanner.category,
+        status: 'unknown',
+        message: `扫描超时（超过 ${Math.round(timeoutMs / 1000)} 秒）`,
+      });
+    }, timeoutMs);
+  });
+
+  try {
+    return await Promise.race([scanner.scan(), timeout]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 /** 并发执行所有 scanner，限制并发数 */
 export async function runAllScanners(
   limit = 5,
@@ -39,7 +67,7 @@ export async function runAllScanners(
       const scanner = activeScanners[idx];
 
       try {
-        results[idx] = await scanner.scan();
+        results[idx] = await scanWithTimeout(scanner, scannerTimeoutMs());
       } catch (err) {
         results[idx] = {
           id: scanner.id,
@@ -60,3 +88,7 @@ export async function runAllScanners(
 
   return results;
 }
+
+export const _testHelpers = {
+  scanWithTimeout,
+};

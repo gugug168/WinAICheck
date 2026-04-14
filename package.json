@@ -1,6 +1,6 @@
 {
   "name": "winaicheck",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "description": "Windows AI 开发环境一键诊断与修复工具 - 扫描 37 个维度，反馈收集，社区悬赏，经验值系统",
   "type": "module",
   "bin": {
@@ -42,7 +42,7 @@
   "scripts": {
     "dev": "bun run src/main.ts",
     "dev:cli": "bun run src/main.ts -- --cli",
-    "build": "bun run scripts/prebuild.ts && bun build --compile --minify src/main.ts --outfile dist/WinAICheck.exe && upx --best dist/WinAICheck.exe || { code=$?; if [ $code -eq 127 ]; then echo 'UPX not found, exe uncompressed. Install: winget install UPX.UPX'; else echo 'UPX failed (code '$code'), exe may be larger than optimal'; fi; }",
+    "build": "bun run scripts/build.ts",
     "test": "bun run scripts/test-all.ts",
     "test:core": "bun run scripts/test-all.ts core",
     "test:integration": "bun run scripts/test-all.ts integration",
