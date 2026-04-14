@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.5] - 2026-04-15
+
+### Fixed
+- 修复 Windows 上 Claude Code 同时存在 extensionless shim 和 `.cmd` shim 时，Agent Hook 误选 extensionless 路径导致 `spawn ENOENT` 的问题。
+- 本地经验库现在能识别 Claude Code 的 `unknown option` 参数错误。
+
 ## [0.3.4] - 2026-04-14
 
 ### Added

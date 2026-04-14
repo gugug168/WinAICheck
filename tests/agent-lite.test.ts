@@ -77,6 +77,12 @@ describe('agent-lite', () => {
     expect(experience[0].commands[0]).toContain('pip install');
   });
 
+  test('经验库识别 Claude unknown option 参数错误', () => {
+    const experience = _testHelpers.lookupExperience("error: unknown option '--bad-flag'");
+
+    expect(experience?.title).toBe('命令参数错误');
+  });
+
   test('重复 fingerprint 会计入 repeatedEvents', async () => {
     const root = createTempRoot();
     roots.push(root);
@@ -206,6 +212,15 @@ describe('agent-lite', () => {
     expect(existsSync(result.agentJs)).toBe(true);
     expect(existsSync(result.agentCmd)).toBe(true);
     expect(readFileSync(result.agentCmd, 'utf-8')).toContain('agent-lite.js');
+  });
+
+  test('resolveCommand 在 Windows 优先选择 .cmd shim', () => {
+    const resolved = _testHelpers.selectResolvedCommand([
+      'C:\\nvm4w\\nodejs\\claude',
+      'C:\\nvm4w\\nodejs\\claude.cmd',
+    ], 'claude', 'win32');
+
+    expect(resolved).toBe('C:\\nvm4w\\nodejs\\claude.cmd');
   });
 
   test('enable 会安装 hook 并启用自动同步配置', async () => {
