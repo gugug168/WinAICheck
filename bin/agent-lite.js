@@ -180,7 +180,7 @@ const EXPERIENCE_PATTERNS = [
     commands: ['claude mcp list'],
   },
   {
-    patterns: ['unknown flag:', 'invalid option', 'Unknown skill:'],
+    patterns: ['unknown flag:', 'unknown option', 'invalid option', 'Unknown skill:'],
     title: '命令参数错误',
     advice: '当前命令参数不被支持，先查看该命令的帮助输出。',
     commands: ['<cmd> --help'],
@@ -632,12 +632,20 @@ function printHelp(io = {}) {
     `  winaicheck agent advice --format json|markdown\n`);
 }
 
+function selectResolvedCommand(matches, command, platform = process.platform) {
+  if (platform === 'win32') {
+    return matches.find(match => /\.(cmd|bat|exe)$/i.test(match)) || matches[0] || command;
+  }
+  return matches[0] || command;
+}
+
 function resolveCommand(command) {
   try {
     const exe = process.platform === 'win32' ? 'where.exe' : 'command';
     const args = process.platform === 'win32' ? [command] : ['-v', command];
     const stdout = execFileSync(exe, args, { encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
-    return stdout.split(/\r?\n/).map(line => line.trim()).filter(Boolean)[0] || command;
+    const matches = stdout.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+    return selectResolvedCommand(matches, command);
   } catch {
     return command;
   }
@@ -1066,6 +1074,8 @@ export const _testHelpers = {
   installHook,
   uninstallHook,
   installLocalAgent,
+  resolveCommand,
+  selectResolvedCommand,
   readJsonl,
   readJson,
   writeJson,
