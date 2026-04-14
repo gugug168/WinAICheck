@@ -8,12 +8,23 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const DEFAULT_ORIGIN = 'https://aicoevo.net';
 const MAX_CAPTURE_CHARS = 8000;
 const MAX_UPLOAD_EVENTS = 50;
+const FAILURE_LOOP_THRESHOLD = 5;
 const HOOK_START = '# >>> WinAICheck Agent Hook >>>';
 const HOOK_END = '# <<< WinAICheck Agent Hook <<<';
 
 const SENSITIVE_PATTERNS = [
   { regex: /(?:sk-|api[_-]?key[_-]?)([a-zA-Z0-9_-]{20,})/gi, replacement: '<API_KEY>' },
+  { regex: /sk-proj-[A-Za-z0-9\-_]{20,}/g, replacement: '<API_KEY>' },
+  { regex: /sk-ant-[A-Za-z0-9\-_]{20,}/g, replacement: '<API_KEY>' },
   { regex: /Bearer\s+[a-zA-Z0-9._-]+/gi, replacement: 'Bearer <TOKEN>' },
+  { regex: /gh[pous]_[A-Za-z0-9]{30,}/g, replacement: '<GITHUB_TOKEN>' },
+  { regex: /github_pat_[A-Za-z0-9_]{22,}/g, replacement: '<GITHUB_TOKEN>' },
+  { regex: /npm_[A-Za-z0-9]{30,}/g, replacement: '<NPM_TOKEN>' },
+  { regex: /AKIA[0-9A-Z]{16}/g, replacement: '<AWS_ACCESS_KEY>' },
+  { regex: /-----BEGIN\s+(?:RSA\s+|EC\s+|DSA\s+|OPENSSH\s+)?PRIVATE\s+KEY-----[\s\S]*?-----END\s+(?:RSA\s+|EC\s+|DSA\s+|OPENSSH\s+)?PRIVATE\s+KEY-----/g, replacement: '<PRIVATE_KEY>' },
+  { regex: /https:\/\/[^@\s]+:[^@\s]+@/g, replacement: 'https://<BASIC_AUTH>@' },
+  { regex: /http:\/\/[^@\s]+:[^@\s]+@/g, replacement: 'http://<BASIC_AUTH>@' },
+  { regex: /(?:mongodb|postgres|postgresql|mysql|redis|amqp):\/\/[^\s"',;)}\]]{10,}/gi, replacement: '<DATABASE_URL>' },
   { regex: /C:\\Users\\([^\\\/\s]+)/gi, replacement: 'C:\\Users\\<USER>' },
   { regex: /\b(\d{1,3}\.){3}\d{1,3}\b/g, replacement: '<IP>' },
   { regex: /[\w.-]+@[\w.-]+\.\w+/g, replacement: '<EMAIL>' },
@@ -42,6 +53,7 @@ function paths(deps = {}) {
     agentDir: path.join(base, 'agent'),
     agentJs: path.join(base, 'agent', 'agent-lite.js'),
     agentCmd: path.join(base, 'agent', 'winaicheck-agent.cmd'),
+    experience: path.join(base, 'experience.jsonl'),
   };
 }
 
@@ -116,6 +128,119 @@ function trimForCapture(text) {
   const sanitized = sanitizeText(text);
   if (sanitized.length <= MAX_CAPTURE_CHARS) return sanitized;
   return `${sanitized.slice(0, MAX_CAPTURE_CHARS)}\n<TRUNCATED>`;
+}
+
+const EXPERIENCE_PATTERNS = [
+  {
+    patterns: ['ModuleNotFoundError', 'No module named', 'ImportError'],
+    title: 'Python 模块缺失',
+    advice: '安装缺失的 Python 依赖后重试。',
+    commands: ['pip install <module>', 'pip3 install <module>'],
+  },
+  {
+    patterns: ['SyntaxError:', 'IndentationError', 'TabError'],
+    title: 'Python 语法错误',
+    advice: '检查报错文件附近的缩进、括号和语法。',
+    commands: ['python -m py_compile <file>'],
+  },
+  {
+    patterns: ['TypeError:', 'AttributeError:', 'KeyError:', 'ValueError:'],
+    title: 'Python 运行时错误',
+    advice: '检查变量类型、空值、字典键和对象属性是否符合预期。',
+    commands: [],
+  },
+  {
+    patterns: ['alembic'],
+    title: 'Alembic 数据库迁移工具缺失',
+    advice: '当前环境缺少 alembic，先安装项目依赖或单独安装 alembic。',
+    commands: ['pip install alembic'],
+  },
+  {
+    patterns: ['Permission denied', 'EACCES', 'operation not permitted', '拒绝访问'],
+    title: '权限错误',
+    advice: '检查文件权限，必要时用管理员 PowerShell 重新执行。',
+    commands: ['whoami /priv'],
+  },
+  {
+    patterns: ['ECONNREFUSED', 'Connection refused'],
+    title: '连接被拒绝',
+    advice: '目标服务未启动或端口不可达，先确认本地服务和代理状态。',
+    commands: ['netstat -ano | findstr <port>'],
+  },
+  {
+    patterns: ['ETIMEDOUT', 'Timed out', 'timeout', '超时'],
+    title: '连接超时',
+    advice: '网络请求超时，检查代理、DNS、证书或稍后重试。',
+    commands: [],
+  },
+  {
+    patterns: ['MCP server error', 'mcp server', 'MCP error', 'mcpServers'],
+    title: 'MCP 配置或服务错误',
+    advice: '检查 MCP JSON 配置、命令路径和对应服务日志。',
+    commands: ['claude mcp list'],
+  },
+  {
+    patterns: ['unknown flag:', 'invalid option', 'Unknown skill:'],
+    title: '命令参数错误',
+    advice: '当前命令参数不被支持，先查看该命令的帮助输出。',
+    commands: ['<cmd> --help'],
+  },
+  {
+    patterns: ['fatal:', 'not an empty directory', 'needs merge'],
+    title: 'Git 操作错误',
+    advice: '检查仓库状态、冲突和远端同步情况。',
+    commands: ['git status', 'git pull --rebase'],
+  },
+  {
+    patterns: ['command not found', 'not found:', 'ENOENT', '不是内部或外部命令'],
+    title: '命令不存在',
+    advice: '缺少可执行命令，检查 PATH 或安装对应工具。',
+    commands: ['where.exe <cmd>'],
+  },
+  {
+    patterns: ['Traceback', 'most recent call last'],
+    title: '代码执行错误',
+    advice: '根据堆栈顶部和底部定位真正的异常来源。',
+    commands: [],
+  },
+  {
+    patterns: ['GraphQL:', 'GitHub API'],
+    title: 'GitHub API 错误',
+    advice: '检查 GitHub 登录状态、权限范围和网络连接。',
+    commands: ['gh auth status'],
+  },
+  {
+    patterns: ['npm', 'node_modules', 'package.json'],
+    title: 'Node.js 项目问题',
+    advice: '检查 Node.js 版本和依赖安装状态。',
+    commands: ['npm install', 'node --version'],
+  },
+];
+
+function lookupExperience(message) {
+  const text = String(message || '').toLowerCase();
+  for (const item of EXPERIENCE_PATTERNS) {
+    if (item.patterns.some(pattern => text.includes(pattern.toLowerCase()))) {
+      return {
+        title: item.title,
+        advice: item.advice,
+        commands: item.commands || [],
+      };
+    }
+  }
+  return null;
+}
+
+function appendExperience(event, experience, deps = {}) {
+  appendJsonl(paths(deps).experience, {
+    fingerprint: event.fingerprint,
+    eventType: event.eventType,
+    title: experience.title,
+    advice: experience.advice,
+    commands: experience.commands,
+    happenedAt: nowIso(deps),
+    resolved: false,
+  });
 }
 
 function sha256(value) {
@@ -238,10 +363,14 @@ function updateDaily(event, deps = {}) {
       uniqueFingerprints: 0,
       repeatedEvents: 0,
       fixedEvents: 0,
+      consecutiveFailures: 0,
+      lastFailureFingerprint: null,
+      lastEventAt: null,
       topProblems: [],
     });
 
     pack.totalEvents += 1;
+    pack.lastEventAt = event.occurredAt;
     const problem = pack.topProblems.find(item => item.fingerprint === event.fingerprint);
     if (problem) {
       problem.count += 1;
@@ -255,6 +384,21 @@ function updateDaily(event, deps = {}) {
         status: 'new',
       });
     }
+
+    if (event.severity === 'error' || event.severity === 'warn') {
+      const currentFailures = Number.isFinite(pack.consecutiveFailures) ? pack.consecutiveFailures : 0;
+      if (pack.lastFailureFingerprint === event.fingerprint) {
+        pack.consecutiveFailures = currentFailures + 1;
+      } else {
+        pack.consecutiveFailures = 1;
+        pack.lastFailureFingerprint = event.fingerprint;
+      }
+      if (pack.consecutiveFailures >= FAILURE_LOOP_THRESHOLD) {
+        const current = pack.topProblems.find(item => item.fingerprint === event.fingerprint);
+        if (current) current.status = 'looping';
+      }
+    }
+
     pack.uniqueFingerprints = pack.topProblems.length;
     pack.topProblems.sort((a, b) => b.count - a.count);
     writeJson(file, pack);
@@ -476,12 +620,15 @@ function printHelp(io = {}) {
   out.write(`WinAICheck Agent Lite\n\n` +
     `用法:\n` +
     `  winaicheck agent install-hook --target claude-code|openclaw|all\n` +
+    `  winaicheck agent enable --target claude-code|openclaw|all\n` +
     `  winaicheck agent uninstall-hook --target claude-code|openclaw|all\n` +
     `  winaicheck agent capture --agent <name> --message <text>\n` +
     `  winaicheck agent capture --agent <name> --log <path>\n` +
     `  winaicheck agent sync\n` +
     `  winaicheck agent uploads --local|--remote\n` +
     `  winaicheck agent pause|resume\n` +
+    `  winaicheck agent summary --date today\n` +
+    `  winaicheck agent diagnose\n` +
     `  winaicheck agent advice --format json|markdown\n`);
 }
 
@@ -623,10 +770,16 @@ async function runOriginalAgent(args, deps = {}) {
   }
   const passthrough = args._ || [];
   const stderrChunks = [];
+  const stdoutChunks = [];
   const child = spawn(original, passthrough, {
-    stdio: ['inherit', 'inherit', 'pipe'],
+    stdio: ['inherit', 'pipe', 'pipe'],
     shell: process.platform === 'win32' && (!/[\\/]/.test(original) || /\.(cmd|bat)$/i.test(original)),
     windowsHide: false,
+  });
+  child.stdout.on('data', chunk => {
+    const buf = Buffer.from(chunk);
+    stdoutChunks.push(buf);
+    process.stdout.write(buf);
   });
   child.stderr.on('data', chunk => {
     const buf = Buffer.from(chunk);
@@ -642,12 +795,46 @@ async function runOriginalAgent(args, deps = {}) {
   });
 
   const stderrText = Buffer.concat(stderrChunks).toString('utf8');
-  if (exitCode !== 0 || stderrText.trim()) {
+  const stdoutText = Buffer.concat(stdoutChunks).toString('utf8');
+  const errorBlocks = [];
+  const extractBlock = (regex, maxLines = 6) => {
+    let match;
+    while ((match = regex.exec(stdoutText)) !== null) {
+      const context = stdoutText.slice(match.index).split(/\r?\n/).slice(0, maxLines).join('\n');
+      if (context.trim() && !errorBlocks.some(block => block.includes(match[0]))) {
+        errorBlocks.push(context);
+      }
+    }
+  };
+  extractBlock(/^Error:.*$/gm);
+  extractBlock(/^Error: Exit code \d+.*$/gm);
+  extractBlock(/^unknown flag:.*$/gm, 3);
+  extractBlock(/^Unknown skill:.*$/gm, 3);
+  extractBlock(/^fatal:.*$/gm, 4);
+  extractBlock(/^GraphQL:.*$/gm, 3);
+  extractBlock(/^\s+at .*$/gm, 5);
+  extractBlock(/^\s*File ".*$/gm, 5);
+  extractBlock(/^Traceback.*$/gm, 6);
+
+  const extractedError = errorBlocks.join('\n---\n').trim();
+  const hasError = exitCode !== 0 || stderrText.trim() || extractedError;
+  if (hasError) {
+    const message = stderrText.trim() || extractedError || `${normalizeAgent(args.agent)} exited with code ${exitCode}`;
     const event = storeEvent(createEvent({
       agent: args.agent,
-      message: stderrText.trim() || `${normalizeAgent(args.agent)} exited with code ${exitCode}`,
-      severity: exitCode === 0 ? 'warn' : 'error',
+      message,
+      severity: exitCode === 0 && (stderrText.trim() || extractedError) ? 'warn' : 'error',
     }, deps), deps);
+    const experience = lookupExperience(message);
+    if (experience) {
+      appendExperience(event, experience, deps);
+      process.stderr.write('\nWinAICheck 经验库建议:\n');
+      process.stderr.write(`  ${experience.title}\n`);
+      process.stderr.write(`  ${experience.advice}\n`);
+      if (experience.commands.length > 0) {
+        process.stderr.write(`  可尝试: ${experience.commands.join(' | ')}\n`);
+      }
+    }
     const config = loadConfig(deps);
     if (config.autoSync && config.shareData && !config.paused) await bestEffortSync(deps);
     process.stderr.write(`\nWinAICheck: 已记录 Agent 问题 ${event.eventId}\n`);
@@ -737,6 +924,8 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
     const message = await messageFromCaptureArgs(args);
     if (!message.trim()) throw new Error('没有可记录的错误内容');
     const event = storeEvent(createEvent({ agent: args.agent, message, severity: args.severity }, deps), deps);
+    const experience = lookupExperience(message);
+    if (experience) appendExperience(event, experience, deps);
     const config = loadConfig(deps);
     if (config.autoSync && config.shareData && !config.paused) await bestEffortSync(deps);
     out.write(`${JSON.stringify({ ok: true, eventId: event.eventId, fingerprint: event.fingerprint }, null, 2)}\n`);
@@ -784,6 +973,22 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
     return 0;
   }
 
+  if (command === 'enable') {
+    const localAgent = installLocalAgent(deps);
+    const hook = installHook(args, deps);
+    const config = loadConfig(deps);
+    config.shareData = true;
+    config.autoSync = true;
+    config.paused = false;
+    saveConfig(config, deps);
+    out.write(`WinAICheck Agent Lite 已启用\n`);
+    out.write(`  Agent Runner: ${localAgent.agentJs}\n`);
+    out.write(`  Hook: ${hook.agents.map(agent => agent.target).join(', ')}\n`);
+    out.write(`  自动同步: 已启用\n`);
+    out.write(`\n请重启 PowerShell，或重新加载 PowerShell profile 后生效。\n`);
+    return 0;
+  }
+
   if (command === 'uninstall-hook') {
     uninstallHook(args, deps);
     out.write('已卸载 WinAICheck Agent Hook。\n');
@@ -792,6 +997,49 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
 
   if (command === 'run') {
     return runOriginalAgent(args, deps);
+  }
+
+  if (command === 'diagnose') {
+    const p = paths(deps);
+    const summary = readJson(path.join(p.dailyDir, `${today(deps)}.json`), {
+      date: today(deps),
+      totalEvents: 0,
+      uniqueFingerprints: 0,
+      repeatedEvents: 0,
+      fixedEvents: 0,
+      consecutiveFailures: 0,
+      lastFailureFingerprint: null,
+      lastEventAt: null,
+      topProblems: [],
+    });
+    const lines = [`# WinAICheck Agent 诊断报告 - ${summary.date}`, ''];
+    lines.push(`总事件数: ${summary.totalEvents}`);
+    lines.push(`唯一错误: ${summary.uniqueFingerprints}`);
+    lines.push(`重复错误: ${summary.repeatedEvents}`);
+    lines.push(`连续失败: ${summary.consecutiveFailures || 0}`);
+    if ((summary.consecutiveFailures || 0) >= FAILURE_LOOP_THRESHOLD) {
+      lines.push('');
+      lines.push(`警告: 检测到 Failure Loop，同一错误连续出现 ${summary.consecutiveFailures} 次。`);
+    }
+    if (summary.lastEventAt) {
+      const minsAgo = Math.max(0, Math.round((Date.now() - new Date(summary.lastEventAt).getTime()) / 60000));
+      lines.push(`最后事件: ${minsAgo} 分钟前`);
+      if (minsAgo > 60) {
+        lines.push('静默警告: 超过 1 小时没有新的 Agent 事件。');
+      }
+    }
+    lines.push('', '## Top 问题');
+    if (summary.topProblems.length === 0) {
+      lines.push('暂无问题记录。');
+    } else {
+      for (const problem of summary.topProblems.slice(0, 5)) {
+        const marker = problem.status === 'looping' ? ' LOOP' : problem.status === 'repeated' ? ' repeated' : '';
+        lines.push(`- [${problem.count}次] ${problem.title}${marker}`);
+      }
+    }
+    lines.push('', '运行 `winaicheck agent advice --format markdown` 查看服务端建议。');
+    out.write(`${lines.join('\n')}\n`);
+    return 0;
   }
 
   if (command === 'auth') {
@@ -822,6 +1070,7 @@ export const _testHelpers = {
   readJson,
   writeJson,
   updateDaily,
+  lookupExperience,
 };
 
 let isDirectExecution = false;
