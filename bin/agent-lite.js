@@ -294,6 +294,12 @@ function normalizeAgent(value) {
   return 'custom';
 }
 
+function agentType(config) {
+  // Determine agent type from config or detect from environment
+  // Default to 'custom' if not set
+  return config.agentType || 'custom';
+}
+
 function classifyEvent(agent, message) {
   const text = String(message || '').toLowerCase();
   if (text.includes('mcp') || text.includes('mcpservers')) return 'mcp_error';
@@ -628,6 +634,8 @@ function printHelp(io = {}) {
     `  winaicheck agent uploads --local|--remote\n` +
     `  winaicheck agent pause|resume\n` +
     `  winaicheck agent summary --date today\n` +
+    `  winaicheck agent auth --email <addr> start|verify\n` +
+    `  winaicheck agent bind [--agent claude-code|openclaw]\n` +
     `  winaicheck agent diagnose\n` +
     `  winaicheck agent advice --format json|markdown\n`);
 }
@@ -1061,6 +1069,92 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
       await authVerify(authArgs, deps, io);
       return 0;
     }
+  }
+
+  if (command === 'bind') {
+    const config = loadConfig(deps);
+    const out = io.stdout || process.stdout;
+    const errOut = io.stderr || process.stderr;
+
+    // Determine agent type (default to claude-code)
+    const agentTypeArg = args.agent || config.agentType || 'claude-code';
+    const osInfo = `${os.platform()} ${os.release()}`;
+    const agentVersion = process.env.WINAICHECK_VERSION || '0.0.0';
+
+    // Step 1: Call bind/init to get a 6-digit code
+    out.write(`正在连接 aicoevo.net...\n`);
+    const initResult = await requestJson(`${apiBase()}/bind/init`, {
+      method: 'POST',
+      body: {
+        device_id: config.deviceId,
+        agent_type: normalizeAgent(agentTypeArg),
+        os_info: osInfo,
+        agent_version: agentVersion,
+      },
+    }, deps);
+
+    if (initResult.status !== 200) {
+      errOut.write(`绑定初始化失败 (${initResult.status}): ${JSON.stringify(initResult.data)}\n`);
+      return 1;
+    }
+
+    const bindCode = initResult.data.code;
+    out.write(`\n 绑定码已生成!\n`);
+    out.write(`\n  验证码: ${bindCode}\n`);
+    out.write(`  有效期: 5 分钟\n\n`);
+    out.write(`请在浏览器中打开 https://aicoevo.net/bind\n`);
+    out.write(`输入上面的验证码完成绑定。\n\n`);
+    out.write(`正在等待绑定确认...\n`);
+
+    // Step 2: Poll /bind/verify/{code} every 2 seconds
+    const maxPolls = 150; // 5 minutes / 2s = 150
+    for (let i = 0; i < maxPolls; i++) {
+      await new Promise(r => setTimeout(r, 2000));
+
+      const pollResult = await requestJson(`${apiBase()}/bind/verify/${bindCode}`, {
+        method: 'GET',
+      }, deps);
+
+      if (pollResult.status === 200 && pollResult.data.status === 'completed') {
+        const { api_key, profile_id, agent_name, message } = pollResult.data;
+
+        // Save to config
+        config.authToken = api_key;
+        config.profileId = profile_id;
+        config.agentType = normalizeAgent(agentTypeArg);
+        config.shareData = true;
+        config.autoSync = true;
+        config.paused = false;
+        config.confirmedAt = nowIso(deps);
+        saveConfig(config, deps);
+
+        out.write(`\n绑定成功!\n`);
+        out.write(`  Agent: ${agent_name || normalizeAgent(agentTypeArg)}\n`);
+        out.write(`  Profile ID: ${profile_id}\n`);
+        out.write(`  自动同步: 已启用\n\n`);
+        out.write(`现在可以在 PowerShell 中运行你的 AI Agent，\n`);
+        out.write(`WinAICheck 会自动记录和同步问题日志。\n`);
+        return 0;
+      }
+
+      if (pollResult.status === 200 && pollResult.data.status === 'expired') {
+        errOut.write(`\n绑定码已过期，请重新运行 winaicheck agent bind\n`);
+        return 1;
+      }
+
+      if (pollResult.status !== 200 || pollResult.data.status === 'invalid') {
+        errOut.write(`\n绑定失败: 无效的绑定码\n`);
+        return 1;
+      }
+
+      // status is 'pending' - continue polling
+      if (i % 15 === 0) {
+        out.write(`.`);
+      }
+    }
+
+    errOut.write(`\n绑定超时 (5分钟无响应)，请重新运行 winaicheck agent bind\n`);
+    return 1;
   }
 
   throw new Error(`未知 agent 命令: ${command}`);
