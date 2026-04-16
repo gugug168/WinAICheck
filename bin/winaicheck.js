@@ -17,6 +17,9 @@ import { main as agentMain } from './agent-lite.js';
 const REPO = 'gugug168/WinAICheck';
 const EXE_NAME = 'WinAICheck.exe';
 const CACHE_DIR = path.join(process.env.USERPROFILE || process.env.HOME || '.', '.winaicheck');
+const STATE_DIR = path.join(CACHE_DIR, 'state');
+const REMOTE_VERSION_URL = 'https://raw.githubusercontent.com/gugug168/WinAICheck/main/VERSION';
+const VERSION_CHECK_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
 
 function fetchJSON(url) {
   return new Promise((resolve, reject) => {
@@ -104,35 +107,75 @@ export async function main(argv = process.argv.slice(2)) {
 
   const exePath = path.join(CACHE_DIR, EXE_NAME);
 
-  // Get latest release info
-  console.log("WinAICheck: 获取最新版本...");
-  const release = await fetchJSON(`https://api.github.com/repos/${REPO}/releases/latest`);
-  const version = release.tag_name;
-
-  const asset = release.assets.find((a) => a.name === EXE_NAME);
-  if (!asset) {
-    console.error(`WinAICheck: 未找到 ${EXE_NAME}，请前往 https://github.com/${REPO}/releases 手动下载`);
-    process.exit(1);
-  }
-
-  // Check if cached version matches
+  // Lightweight version check: fetch VERSION file (~10 bytes) instead of full GitHub API
   const versionFile = path.join(CACHE_DIR, "version.txt");
+  const checkCacheFile = path.join(STATE_DIR, "last-update-check");
+  let cachedVersion = '';
   let needDownload = true;
+
   if (fs.existsSync(exePath) && fs.existsSync(versionFile)) {
-    const cached = fs.readFileSync(versionFile, "utf8").trim();
-    if (cached === version) {
-      needDownload = false;
+    cachedVersion = fs.readFileSync(versionFile, "utf8").trim();
+
+    // Check rate-limited cache
+    let skipCheck = false;
+    try {
+      if (fs.existsSync(checkCacheFile)) {
+        const cache = JSON.parse(fs.readFileSync(checkCacheFile, 'utf8'));
+        const age = Date.now() - (cache.ts || 0);
+        if (age < VERSION_CHECK_INTERVAL_MS) {
+          needDownload = cache.result !== 'UP_TO_DATE';
+          skipCheck = true;
+        }
+      }
+    } catch {}
+
+    if (!skipCheck) {
+      try {
+        const remoteVersion = await new Promise((resolve, reject) => {
+          https.get(REMOTE_VERSION_URL, { timeout: 5000 }, (res) => {
+            if (res.statusCode !== 200) return reject(new Error(`HTTP ${res.statusCode}`));
+            let body = '';
+            res.on('data', (c) => body += c);
+            res.on('end', () => resolve(body.trim()));
+          }).on('error', reject);
+        });
+
+        if (!fs.existsSync(STATE_DIR)) fs.mkdirSync(STATE_DIR, { recursive: true });
+
+        if (remoteVersion === cachedVersion) {
+          needDownload = false;
+          fs.writeFileSync(checkCacheFile, JSON.stringify({ result: 'UP_TO_DATE', ts: Date.now() }));
+        } else {
+          console.log(`WinAICheck: 发现新版本 ${remoteVersion} (当前: ${cachedVersion})`);
+          fs.writeFileSync(checkCacheFile, JSON.stringify({ result: 'UPGRADE_AVAILABLE', remote: remoteVersion, ts: Date.now() }));
+        }
+      } catch {
+        // Network error, use cached exe
+        needDownload = false;
+      }
     }
   }
 
   if (needDownload) {
+    // Full download: fetch GitHub release info
+    console.log("WinAICheck: 获取最新版本...");
+    const release = await fetchJSON(`https://api.github.com/repos/${REPO}/releases/latest`);
+    const version = release.tag_name;
+
+    const asset = release.assets.find((a) => a.name === EXE_NAME);
+    if (!asset) {
+      console.error(`WinAICheck: 未找到 ${EXE_NAME}，请前往 https://github.com/${REPO}/releases 手动下载`);
+      process.exit(1);
+    }
+
     console.log(`WinAICheck: 下载 v${version}...`);
+    if (!fs.existsSync(CACHE_DIR)) fs.mkdirSync(CACHE_DIR, { recursive: true });
     await downloadFile(asset.browser_download_url, exePath);
     fs.writeFileSync(versionFile, version);
     const size = Math.round(fs.statSync(exePath).size / 1024 / 1024);
     console.log(`WinAICheck: 已下载 ${size}MB`);
   } else {
-    console.log(`WinAICheck: 使用缓存 v${version}`);
+    console.log(`WinAICheck: 使用缓存 v${cachedVersion || 'unknown'}`);
   }
 
   // Run the exe
