@@ -35,8 +35,12 @@ function getHome() {
   return process.env.USERPROFILE || process.env.HOME || os.homedir() || process.cwd();
 }
 
+function getHomeForDeps(deps = {}) {
+  return deps.homeDir || getHome();
+}
+
 function getBaseDir(deps = {}) {
-  return deps.baseDir || path.join(getHome(), '.aicoevo');
+  return deps.baseDir || process.env.WINAICHECK_AGENT_BASE_DIR || path.join(getHome(), '.aicoevo');
 }
 
 function paths(deps = {}) {
@@ -54,6 +58,8 @@ function paths(deps = {}) {
     agentJs: path.join(base, 'agent', 'agent-lite.js'),
     agentCmd: path.join(base, 'agent', 'winaicheck-agent.cmd'),
     experience: path.join(base, 'experience.jsonl'),
+    sessionStartHookJs: path.join(base, 'agent', 'winaicheck-session-start.cjs'),
+    postToolHookJs: path.join(base, 'agent', 'winaicheck-post-tool.cjs'),
   };
 }
 
@@ -253,6 +259,11 @@ function shortHash(value) {
 
 function nowIso(deps = {}) {
   return deps.now ? deps.now().toISOString() : new Date().toISOString();
+}
+
+function sleep(ms, deps = {}) {
+  if (deps.sleep) return deps.sleep(ms);
+  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 function today(deps = {}) {
@@ -625,8 +636,9 @@ function printHelp(io = {}) {
   const out = io.stdout || process.stdout;
   out.write(`WinAICheck Agent Lite\n\n` +
     `用法:\n` +
-    `  winaicheck agent install-hook --target claude-code|openclaw|all\n` +
     `  winaicheck agent enable --target claude-code|openclaw|all\n` +
+    `  winaicheck agent migrate --target claude-code|openclaw|all\n` +
+    `  winaicheck agent install-hook --target claude-code|openclaw|all  旧 PowerShell hook\n` +
     `  winaicheck agent uninstall-hook --target claude-code|openclaw|all\n` +
     `  winaicheck agent capture --agent <name> --message <text>\n` +
     `  winaicheck agent capture --agent <name> --log <path>\n` +
@@ -635,7 +647,7 @@ function printHelp(io = {}) {
     `  winaicheck agent pause|resume\n` +
     `  winaicheck agent summary --date today\n` +
     `  winaicheck agent auth --email <addr> start|verify\n` +
-    `  winaicheck agent bind [--agent claude-code|openclaw]\n` +
+    `  winaicheck agent bind [--agent claude-code|openclaw]  (自动打开浏览器确认)\n` +
     `  winaicheck agent diagnose\n` +
     `  winaicheck agent advice --format json|markdown\n`);
 }
@@ -675,6 +687,14 @@ function targetAgents(target) {
   if (target === 'claude-code' || target === 'claude') return [{ target: 'claude-code', command: 'claude', functionName: 'claude' }];
   if (target === 'openclaw') return [{ target: 'openclaw', command: 'openclaw', functionName: 'openclaw' }];
   throw new Error(`不支持的 hook 目标: ${target}`);
+}
+
+function targetIncludesClaude(target) {
+  return !target || target === 'all' || target === 'claude-code' || target === 'claude';
+}
+
+function targetIncludesOpenClaw(target) {
+  return !target || target === 'all' || target === 'openclaw';
 }
 
 function buildHookBlock(agents) {
@@ -741,9 +761,199 @@ function uninstallHook(args, deps = {}) {
   return { profiles };
 }
 
+function settingsFilePath(deps = {}) {
+  return path.join(getHomeForDeps(deps), '.claude', 'settings.json');
+}
+
+function removeWinAICheckHookEntries(entries) {
+  return (entries || [])
+    .map(entry => ({
+      ...entry,
+      hooks: (entry.hooks || []).filter(hook => !String(hook.command || '').toLowerCase().includes('winaicheck')),
+    }))
+    .filter(entry => (entry.hooks || []).length > 0);
+}
+
+function installSettingsHook(args = {}, deps = {}) {
+  const p = paths(deps);
+  installLocalAgent(deps);
+  const settingsFile = settingsFilePath(deps);
+  ensureParent(settingsFile);
+
+  const settings = readJson(settingsFile, {});
+  if (!settings.hooks) settings.hooks = {};
+  if (!Array.isArray(settings.hooks.SessionStart)) settings.hooks.SessionStart = [];
+  if (!Array.isArray(settings.hooks.PostToolUse)) settings.hooks.PostToolUse = [];
+
+  const sessionCommand = `node "${p.sessionStartHookJs}"`;
+  const postToolCommand = `node "${p.postToolHookJs}"`;
+
+  const hasSession = settings.hooks.SessionStart.some(entry =>
+    (entry.hooks || []).some(hook => String(hook.command || '').includes('winaicheck-session-start.cjs'))
+  );
+  if (!hasSession) {
+    settings.hooks.SessionStart.push({
+      hooks: [{ type: 'command', command: sessionCommand, timeout: 10 }],
+    });
+  }
+
+  const hasPostTool = settings.hooks.PostToolUse.some(entry =>
+    (entry.hooks || []).some(hook => String(hook.command || '').includes('winaicheck-post-tool.cjs'))
+  );
+  if (!hasPostTool) {
+    settings.hooks.PostToolUse.push({
+      matcher: 'Bash|Agent|Task',
+      hooks: [{ type: 'command', command: postToolCommand, timeout: 10 }],
+    });
+  }
+
+  writeJson(settingsFile, settings);
+  const hooks = readJson(p.hooks, {});
+  writeJson(p.hooks, {
+    ...hooks,
+    hookType: 'settings',
+    settingsFile,
+    settingsInstalledAt: nowIso(deps),
+    settingsHooks: ['SessionStart', 'PostToolUse'],
+  });
+
+  return {
+    hookType: 'settings',
+    settingsFile,
+    hooks: ['SessionStart (版本检查)', 'PostToolUse (错误捕获)'],
+  };
+}
+
+function uninstallSettingsHook(args = {}, deps = {}) {
+  const settingsFile = settingsFilePath(deps);
+  const settings = readJson(settingsFile, {});
+  if (!settings.hooks) return { settingsFile, removed: false };
+
+  if (Array.isArray(settings.hooks.SessionStart)) {
+    settings.hooks.SessionStart = removeWinAICheckHookEntries(settings.hooks.SessionStart);
+  }
+  if (Array.isArray(settings.hooks.PostToolUse)) {
+    settings.hooks.PostToolUse = removeWinAICheckHookEntries(settings.hooks.PostToolUse);
+  }
+
+  writeJson(settingsFile, settings);
+  return { settingsFile, removed: true };
+}
+
 function computeFileHash(filepath) {
   const content = fs.readFileSync(filepath);
   return crypto.createHash('sha256').update(content).digest('hex');
+}
+
+function buildPostToolHookScript(agentCmd, baseDir) {
+  return [
+    '#!/usr/bin/env node',
+    "const { execFileSync } = require('child_process');",
+    '',
+    'function readStdin() {',
+    '  return new Promise(resolve => {',
+    "    let payload = '';",
+    "    process.stdin.on('data', chunk => { payload += chunk.toString(); });",
+    "    process.stdin.on('end', () => resolve(payload));",
+    "    process.stdin.on('error', () => resolve(''));",
+    '  });',
+    '}',
+    '',
+    'function pickToolName(data) {',
+    "  return data.toolName || data.tool_name || data.tool || '';",
+    '}',
+    '',
+    'function pickErrorMessage(data) {',
+    '  const output = data.toolOutput || data.tool_output || data.response || {};',
+    '  return String(',
+    '    data.error ||',
+    '    output.stderr ||',
+    '    output.error ||',
+    '    output.message ||',
+    "    ''",
+    '  );',
+    '}',
+    '',
+    '(async () => {',
+    '  try {',
+    '    const raw = await readStdin();',
+    '    if (!raw.trim()) return;',
+    '    const data = JSON.parse(raw);',
+    '    const toolName = String(pickToolName(data));',
+    "    if (!['bash', 'agent', 'task', 'bashcon'].some(name => toolName.toLowerCase().includes(name))) return;",
+    '',
+    '    const exitCode = data.exitCode ?? data.exit_code;',
+    '    const message = pickErrorMessage(data);',
+    '    if (!message.trim() && (exitCode === 0 || exitCode === undefined)) return;',
+    '',
+    "    const normalized = message.trim() || (toolName + ' exited with code ' + exitCode);",
+    '    const noise = [',
+    '      /Input must be provided either through stdin or as a prompt argument when using --print/i,',
+    '      /^Error: Input must be provided/i,',
+    '    ];',
+    '    if (noise.some(pattern => pattern.test(normalized))) return;',
+    '',
+    `    execFileSync(${JSON.stringify(agentCmd)}, ['capture', '--agent', 'claude-code'], {`,
+    '      shell: true,',
+    '      input: normalized,',
+    "      encoding: 'utf8',",
+    '      windowsHide: true,',
+    '      timeout: 15000,',
+    "      stdio: ['pipe', 'ignore', 'ignore'],",
+    `      env: { ...process.env, WINAICHECK_AGENT_BASE_DIR: ${JSON.stringify(baseDir)} },`,
+    '    });',
+    '  } catch {',
+    '    process.exit(0);',
+    '  }',
+    '})();',
+    '',
+  ].join('\n');
+}
+
+function buildSessionStartHookScript(baseDir) {
+  const cacheFile = path.join(baseDir, 'version-cache.json');
+  const backgroundScript = [
+    "const { execFileSync } = require('child_process');",
+    "const { mkdirSync, writeFileSync } = require('fs');",
+    "const { dirname } = require('path');",
+    `const cacheFile = ${JSON.stringify(cacheFile)};`,
+    '',
+    'function version(cmd) {',
+    '  try {',
+    "    const out = execFileSync(cmd, ['--version'], { encoding: 'utf8', timeout: 5000, windowsHide: true });",
+    '    const match = out.match(/(\\d+\\.\\d+\\.\\d+)/);',
+    "    return match ? match[1] : 'unknown';",
+    '  } catch {',
+    "    return 'unknown';",
+    '  }',
+    '}',
+    '',
+    'const result = {',
+    "  current: 'node:' + process.version.replace(/^v/, '') + '|claude:' + version('claude'),",
+    "  latest: 'unchecked',",
+    '  hasUpdate: false,',
+    '  lastCheck: new Date().toISOString()',
+    '};',
+    '',
+    'mkdirSync(dirname(cacheFile), { recursive: true });',
+    'writeFileSync(cacheFile, JSON.stringify(result, null, 2));',
+    '',
+  ].join('\n');
+
+  return [
+    '#!/usr/bin/env node',
+    "const { spawn } = require('child_process');",
+    '',
+    'try {',
+    `  const child = spawn(process.execPath, ['-e', ${JSON.stringify(backgroundScript)}], {`,
+    "    stdio: 'ignore',",
+    '    detached: true,',
+    '    windowsHide: true,',
+    '  });',
+    '  child.unref();',
+    '} catch {}',
+    '',
+  ].join('\n');
 }
 
 function installLocalAgent(deps = {}) {
@@ -753,9 +963,12 @@ function installLocalAgent(deps = {}) {
   fs.copyFileSync(selfPath, p.agentJs);
   const hash = computeFileHash(p.agentJs);
   writeJson(path.join(p.agentDir, 'agent-lite.hash.json'), { sha256: hash, installedAt: nowIso(deps) });
+  fs.writeFileSync(p.sessionStartHookJs, buildSessionStartHookScript(p.base), 'utf8');
+  fs.writeFileSync(p.postToolHookJs, buildPostToolHookScript(p.agentCmd, p.base), 'utf8');
   const cmd = [
     '@echo off',
     'setlocal',
+    `set "WINAICHECK_AGENT_BASE_DIR=${p.base}"`,
     'node "%~dp0agent-lite.js" %*',
     'exit /b %ERRORLEVEL%',
     '',
@@ -990,8 +1203,20 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
   }
 
   if (command === 'enable') {
+    const target = String(args.target || 'all');
     const localAgent = installLocalAgent(deps);
-    const hook = installHook(args, deps);
+    const installed = [];
+
+    if (targetIncludesClaude(target)) {
+      const settingsHook = installSettingsHook(args, deps);
+      installed.push(settingsHook.hooks.join(', '));
+    }
+
+    if (targetIncludesOpenClaw(target)) {
+      const hook = installHook({ target: 'openclaw' }, deps);
+      installed.push(`PowerShell Hook: ${hook.agents.map(agent => agent.target).join(', ')}`);
+    }
+
     const config = loadConfig(deps);
     config.shareData = true;
     config.autoSync = true;
@@ -999,15 +1224,47 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
     saveConfig(config, deps);
     out.write(`WinAICheck Agent Lite 已启用\n`);
     out.write(`  Agent Runner: ${localAgent.agentJs}\n`);
-    out.write(`  Hook: ${hook.agents.map(agent => agent.target).join(', ')}\n`);
+    out.write(`  Hook: ${installed.join(' | ')}\n`);
     out.write(`  自动同步: 已启用\n`);
-    out.write(`\n请重启 PowerShell，或重新加载 PowerShell profile 后生效。\n`);
+    out.write(`\nClaude Code 请重启会话；OpenClaw 请重启 PowerShell 或重新加载 profile。\n`);
     return 0;
   }
 
   if (command === 'uninstall-hook') {
+    const target = String(args.target || 'all');
+    if (targetIncludesClaude(target)) uninstallSettingsHook(args, deps);
     uninstallHook(args, deps);
     out.write('已卸载 WinAICheck Agent Hook。\n');
+    return 0;
+  }
+
+  if (command === 'migrate') {
+    const target = String(args.target || 'all');
+    const removedLegacy = uninstallHook({ target: 'all' }, deps);
+    const installed = [];
+
+    if (targetIncludesClaude(target)) {
+      const settingsHook = installSettingsHook(args, deps);
+      installed.push(settingsHook.hooks.join(', '));
+    }
+    if (targetIncludesOpenClaw(target)) {
+      const openclawHook = installHook({ target: 'openclaw' }, deps);
+      installed.push(`PowerShell Hook: ${openclawHook.agents.map(agent => agent.target).join(', ')}`);
+    }
+
+    const p = paths(deps);
+    const hooks = readJson(p.hooks, {});
+    writeJson(p.hooks, {
+      ...hooks,
+      hookType: 'settings',
+      migratedAt: nowIso(deps),
+      legacyProfiles: removedLegacy.profiles,
+    });
+
+    out.write(`WinAICheck Agent Hook 已迁移\n`);
+    out.write(`  新 Hook: ${installed.join(' | ')}\n`);
+    out.write(`  已清理旧 PowerShell profile: ${removedLegacy.profiles.join(', ')}\n`);
+    out.write(`\nClaude Code 请重启会话；OpenClaw 请重启 PowerShell 或重新加载 profile。\n`);
     return 0;
   }
 
@@ -1076,84 +1333,106 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
     const out = io.stdout || process.stdout;
     const errOut = io.stderr || process.stderr;
 
-    // Determine agent type (default to claude-code)
-    const agentTypeArg = args.agent || config.agentType || 'claude-code';
-    const osInfo = `${os.platform()} ${os.release()}`;
-    const agentVersion = process.env.WINAICHECK_VERSION || '0.0.0';
+    // 兼容旧流程：如果用户提供了 --code，走旧的 6 位码交换
+    const bindCode = String(args.code || '').trim();
+    if (bindCode && /^\d{6}$/.test(bindCode)) {
+      out.write(`正在绑定设备...\n`);
+      const result = await requestJson(`${apiBase()}/bind/${bindCode}`, {
+        method: 'POST',
+      }, deps);
 
-    // Step 1: Call bind/init to get a 6-digit code
-    out.write(`正在连接 aicoevo.net...\n`);
-    const initResult = await requestJson(`${apiBase()}/bind/init`, {
-      method: 'POST',
-      body: {
-        device_id: config.deviceId,
-        agent_type: normalizeAgent(agentTypeArg),
-        os_info: osInfo,
-        agent_version: agentVersion,
-      },
-    }, deps);
+      if (result.status !== 200) {
+        errOut.write(`绑定失败 (${result.status}): ${(result.data || {}).detail || '验证码无效或已过期'}\n`);
+        return 1;
+      }
 
-    if (initResult.status !== 200) {
-      errOut.write(`绑定初始化失败 (${initResult.status}): ${JSON.stringify(initResult.data)}\n`);
+      const { api_key } = result.data;
+      config.authToken = api_key;
+      config.shareData = true;
+      config.autoSync = true;
+      config.paused = false;
+      config.confirmedAt = nowIso(deps);
+      saveConfig(config, deps);
+
+      out.write(`\n绑定成功!\n  自动同步: 已启用\n\n`);
+      return 0;
+    }
+
+    // 新流程：OAuth 设备流（自动打开浏览器）
+    const agentName = String(args.agent || 'unknown').trim();
+    const deviceInfo = `${os.hostname()}/${process.platform}`;
+
+    out.write(`正在发起设备绑定...\n`);
+
+    // Step 1: 创建绑定请求
+    const reqResult = await requestJson(
+      `${apiBase()}/bind/request?agent_type=${encodeURIComponent(agentName)}&device_info=${encodeURIComponent(deviceInfo)}`,
+      { method: 'POST' },
+      deps,
+    );
+
+    if (reqResult.status !== 200) {
+      errOut.write(`绑定请求失败 (${reqResult.status}): ${(reqResult.data || {}).detail || '未知错误'}\n`);
       return 1;
     }
 
-    const bindCode = initResult.data.code;
-    out.write(`\n 绑定码已生成!\n`);
-    out.write(`\n  验证码: ${bindCode}\n`);
-    out.write(`  有效期: 5 分钟\n\n`);
-    out.write(`请在浏览器中打开 https://aicoevo.net/bind\n`);
-    out.write(`输入上面的验证码完成绑定。\n\n`);
-    out.write(`正在等待绑定确认...\n`);
+    const { request_token, confirm_url, expires_in } = reqResult.data;
+    out.write(`\n请在浏览器中确认绑定:\n`);
+    out.write(`  ${confirm_url}\n\n`);
 
-    // Step 2: Poll /bind/verify/{code} every 2 seconds
-    const maxPolls = 150; // 5 minutes / 2s = 150
+    // Step 2: 尝试自动打开浏览器
+    try {
+      const startCmd = process.platform === 'win32' ? 'start' : 'open';
+      execFileSync(startCmd, [confirm_url], { timeout: 5000, windowsHide: true });
+      out.write(`已自动打开浏览器。\n\n`);
+    } catch {
+      out.write(`请手动复制上方链接到浏览器中打开。\n\n`);
+    }
+
+    // Step 3: 轮询等待确认
+    out.write(`等待确认中`);
+    const maxPolls = Math.min(Math.floor(expires_in / 3), 200);
     for (let i = 0; i < maxPolls; i++) {
-      await new Promise(r => setTimeout(r, 2000));
+      await sleep(3000, deps);
+      out.write('.');
 
-      const pollResult = await requestJson(`${apiBase()}/bind/verify/${bindCode}`, {
-        method: 'GET',
-      }, deps);
+      const pollResult = await requestJson(
+        `${apiBase()}/bind/poll?request_token=${encodeURIComponent(request_token)}`,
+        { method: 'GET' },
+        deps,
+      );
 
-      if (pollResult.status === 200 && pollResult.data.status === 'completed') {
-        const { api_key, profile_id, agent_name, message } = pollResult.data;
+      if (pollResult.status !== 200) {
+        // 可能已过期
+        errOut.write(`\n绑定请求已过期，请重新运行 bind 命令。\n`);
+        return 1;
+      }
 
-        // Save to config
+      const { status, api_key } = pollResult.data;
+
+      if (status === 'confirmed' && api_key) {
+        out.write(`\n\n`);
         config.authToken = api_key;
-        config.profileId = profile_id;
-        config.agentType = normalizeAgent(agentTypeArg);
         config.shareData = true;
         config.autoSync = true;
         config.paused = false;
         config.confirmedAt = nowIso(deps);
         saveConfig(config, deps);
 
-        out.write(`\n绑定成功!\n`);
-        out.write(`  Agent: ${agent_name || normalizeAgent(agentTypeArg)}\n`);
-        out.write(`  Profile ID: ${profile_id}\n`);
+        out.write(`绑定成功!\n`);
         out.write(`  自动同步: 已启用\n\n`);
-        out.write(`现在可以在 PowerShell 中运行你的 AI Agent，\n`);
-        out.write(`WinAICheck 会自动记录和同步问题日志。\n`);
+        out.write(`现在 Claude Code 中的错误会自动记录并同步到 aicoevo.net。\n`);
         return 0;
       }
 
-      if (pollResult.status === 200 && pollResult.data.status === 'expired') {
-        errOut.write(`\n绑定码已过期，请重新运行 winaicheck agent bind\n`);
+      if (status === 'expired') {
+        out.write(`\n\n`);
+        errOut.write(`绑定请求已过期，请重新运行 bind 命令。\n`);
         return 1;
-      }
-
-      if (pollResult.status !== 200 || pollResult.data.status === 'invalid') {
-        errOut.write(`\n绑定失败: 无效的绑定码\n`);
-        return 1;
-      }
-
-      // status is 'pending' - continue polling
-      if (i % 15 === 0) {
-        out.write(`.`);
       }
     }
 
-    errOut.write(`\n绑定超时 (5分钟无响应)，请重新运行 winaicheck agent bind\n`);
+    out.write(`\n\n绑定超时，请重新运行 bind 命令。\n`);
     return 1;
   }
 
@@ -1167,6 +1446,9 @@ export const _testHelpers = {
   buildHookBlock,
   installHook,
   uninstallHook,
+  installSettingsHook,
+  uninstallSettingsHook,
+  settingsFilePath,
   installLocalAgent,
   resolveCommand,
   selectResolvedCommand,
