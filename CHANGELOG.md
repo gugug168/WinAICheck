@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.3.6] - 2026-04-18
+
+### Added
+- **Agent 自动更新检查**: Claude Code 捕获错误后，自动检查 WinAICheck 是否有新版本。有更新时在对话中显示提醒 `[WinAICheck] 发现新版本 vX.X.X → vX.X.X`。
+- `agent check-update` 命令：查询 GitHub VERSION 文件，1 小时 TTL 缓存，支持 `deps.fetchImpl` 注入测试。
+- 安装 Agent 时自动写入当前版本号到 `~/.aicoevo/version-cache.json`。
+
+### Changed
+- PostToolUse hook 在捕获错误后额外调用 `check-update`，8 秒超时，失败静默。
+- Agent 启用检测：`getAgentLocalStatus()` 同时识别 `settings` hook 类型和旧版 PowerShell hook。
+
 ## [0.3.5] - 2026-04-15
 
 ### Fixed
