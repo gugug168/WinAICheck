@@ -80,6 +80,10 @@ export interface UploadPayload {
     category: string;
     status: string;
     message: string;
+    detail?: string;
+    version?: string | null;
+    severity?: string | null;
+    fixCommand?: string | null;
   }>;
   systemInfo: SystemInfo;
 }
@@ -95,6 +99,10 @@ export function createPayload(results: ScanResult[], score: ScoreResult): Upload
       category: r.category,
       status: r.status,
       message: sanitize(r.message),
+      detail: r.detail ? sanitize(r.detail) : undefined,
+      version: r.version || null,
+      severity: r.severity || null,
+      fixCommand: r.fixCommand ? sanitize(r.fixCommand) : null,
     })),
     systemInfo: collectSystemInfo(),
   };
