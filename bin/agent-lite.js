@@ -649,6 +649,7 @@ function printHelp(io = {}) {
     `  winaicheck agent auth --email <addr> start|verify\n` +
     `  winaicheck agent bind [--agent claude-code|openclaw]  (自动打开浏览器确认)\n` +
     `  winaicheck agent diagnose\n` +
+    `  winaicheck agent check-update\n` +
     `  winaicheck agent advice --format json|markdown\n`);
 }
 
@@ -902,6 +903,22 @@ function buildPostToolHookScript(agentCmd, baseDir) {
     "      stdio: ['pipe', 'ignore', 'ignore'],",
     `      env: { ...process.env, WINAICHECK_AGENT_BASE_DIR: ${JSON.stringify(baseDir)} },`,
     '    });',
+    '',
+    '    // Check for WinAICheck updates after capture',
+    '    try {',
+    `      const updateRaw = execFileSync(${JSON.stringify(agentCmd)}, ['check-update'], {`,
+    '        shell: true,',
+    "        encoding: 'utf8',",
+    '        windowsHide: true,',
+    '        timeout: 8000,',
+    "        stdio: ['pipe', 'pipe', 'ignore'],",
+    `        env: { ...process.env, WINAICHECK_AGENT_BASE_DIR: ${JSON.stringify(baseDir)} },`,
+    '      });',
+    '      const update = JSON.parse(updateRaw);',
+    '      if (update.hasUpdate) {',
+    `        process.stdout.write("[WinAICheck] 发现新版本 v" + update.current + " → v" + update.latest + "，运行 npx winaicheck@latest agent enable 更新\\n");`,
+    '      }',
+    '    } catch {}',
     '  } catch {',
     '    process.exit(0);',
     '  }',
@@ -974,6 +991,18 @@ function installLocalAgent(deps = {}) {
     '',
   ].join('\r\n');
   fs.writeFileSync(p.agentCmd, cmd, 'utf8');
+
+  // Write WinAICheck version to version-cache.json for check-update
+  try {
+    const versionFile = path.join(path.dirname(selfPath), '..', 'VERSION');
+    const localVersion = fs.existsSync(versionFile) ? fs.readFileSync(versionFile, 'utf8').trim() : '0.0.0';
+    const cacheFile = path.join(p.base, 'version-cache.json');
+    const cache = readJson(cacheFile, {});
+    cache.winaicheckVersion = localVersion;
+    ensureDir(p.base);
+    writeJson(cacheFile, cache);
+  } catch { /* version write is non-critical */ }
+
   return {
     agentDir: p.agentDir,
     agentJs: p.agentJs,
@@ -1270,6 +1299,55 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
 
   if (command === 'run') {
     return runOriginalAgent(args, deps);
+  }
+
+  if (command === 'check-update') {
+    const p = paths(deps);
+    const cacheFile = path.join(p.base, 'version-cache.json');
+    const cache = readJson(cacheFile, {});
+    const ONE_HOUR_MS = 60 * 60 * 1000;
+    const localVersion = cache.winaicheckVersion || '0.0.0';
+
+    // 1-hour TTL cache
+    const lastCheck = cache.winaicheckUpdateCheck ? new Date(cache.winaicheckUpdateCheck).getTime() : 0;
+    if ((Date.now() - lastCheck) < ONE_HOUR_MS && cache.winaicheckLatest !== undefined) {
+      // Re-evaluate hasUpdate in case local version was updated since last check
+      const cachedHasUpdate = cache.winaicheckLatest !== localVersion;
+      out.write(`${JSON.stringify({ hasUpdate: cachedHasUpdate, current: localVersion, latest: cache.winaicheckLatest }, null, 2)}\n`);
+      return 0;
+    }
+
+    // Fetch remote VERSION
+    try {
+      const fetchImpl = deps.fetchImpl || fetch;
+      const response = await fetchImpl(
+        'https://raw.githubusercontent.com/gugug168/WinAICheck/main/VERSION',
+        { signal: AbortSignal.timeout(5000) },
+      );
+      const remoteVersion = (await response.text()).trim();
+
+      // Simple semver comparison: split on '.' and compare numerically
+      const localParts = localVersion.split('.').map(Number);
+      const remoteParts = remoteVersion.split('.').map(Number);
+      let hasUpdate = false;
+      for (let i = 0; i < Math.max(localParts.length, remoteParts.length); i++) {
+        const l = localParts[i] || 0;
+        const r = remoteParts[i] || 0;
+        if (r > l) { hasUpdate = true; break; }
+        if (r < l) break;
+      }
+
+      cache.winaicheckVersion = localVersion;
+      cache.winaicheckLatest = remoteVersion;
+      cache.winaicheckHasUpdate = hasUpdate;
+      cache.winaicheckUpdateCheck = nowIso(deps);
+      writeJson(cacheFile, cache);
+
+      out.write(`${JSON.stringify({ hasUpdate, current: localVersion, latest: remoteVersion }, null, 2)}\n`);
+    } catch {
+      out.write(`${JSON.stringify({ hasUpdate: false, current: localVersion, latest: localVersion }, null, 2)}\n`);
+    }
+    return 0;
   }
 
   if (command === 'diagnose') {

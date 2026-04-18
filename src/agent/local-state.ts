@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
 import { AGENT_LITE_SOURCE, AGENT_LITE_HASH } from './embedded-agent-lite-source';
+import { VERSION } from '../constants';
 
 function getBaseDir(): string {
   return join(homedir(), '.aicoevo');
@@ -105,6 +106,14 @@ function installEmbeddedLocalAgent() {
     ['@echo off', 'setlocal', 'node "%~dp0agent-lite.js" %*', 'exit /b %ERRORLEVEL%', ''].join('\r\n'),
     'utf-8',
   );
+
+  // Write WinAICheck version to version-cache.json so check-update knows local version
+  const cacheFile = join(paths.base, 'version-cache.json');
+  const cache = readJson<Record<string, any>>(cacheFile, {});
+  cache.winaicheckVersion = VERSION;
+  mkdirSync(paths.base, { recursive: true });
+  writeFileSync(cacheFile, JSON.stringify(cache, null, 2) + '\n', 'utf-8');
+
   return {
     agentDir: paths.agentDir,
     agentJs: paths.agentJs,
@@ -133,13 +142,17 @@ export function getAgentLocalStatus() {
   const experience = readJsonl(paths.experience);
 
   return {
-    enabled: existsSync(paths.agentCmd) && Array.isArray(hooks.agents) && hooks.agents.length > 0,
+    enabled: existsSync(paths.agentCmd) && (
+      hooks.hookType === 'settings' ||
+      (Array.isArray(hooks.agents) && hooks.agents.length > 0)
+    ),
     localRunnerInstalled: existsSync(paths.agentCmd),
     paused: !!config.paused,
     shareData: !!config.shareData,
     autoSync: !!config.autoSync,
     email: config.email || null,
     agentCmd: paths.agentCmd,
+    hookType: hooks.hookType || (Array.isArray(hooks.agents) && hooks.agents.length > 0 ? 'powershell' : 'none'),
     hooks,
     totals: {
       events: events.length,
