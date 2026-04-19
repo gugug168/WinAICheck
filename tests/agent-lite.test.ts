@@ -223,14 +223,14 @@ describe('agent-lite', () => {
     expect(resolved).toBe('C:\\nvm4w\\nodejs\\claude.cmd');
   });
 
-  test('enable 会安装 hook 并启用自动同步配置', async () => {
+  test('enable claude-code 会安装 settings hook 并启用自动同步配置', async () => {
     const root = createTempRoot();
     roots.push(root);
-    const profile = join(root, 'profile.ps1');
+    const home = join(root, 'home');
 
     await agentMain(['enable', '--target', 'claude-code'], {
       baseDir: root,
-      profilePaths: [profile],
+      homeDir: home,
       now: () => new Date('2026-04-12T11:30:00.000Z'),
     }, createIo().io as any);
 
@@ -239,7 +239,7 @@ describe('agent-lite', () => {
     expect(config.shareData).toBe(true);
     expect(config.autoSync).toBe(true);
     expect(config.paused).toBe(false);
-    expect(readFileSync(profile, 'utf-8')).toContain('function claude');
+    expect(readFileSync(join(home, '.claude', 'settings.json'), 'utf-8')).toContain('winaicheck-post-tool.cjs');
   });
 
   test('run 会捕获 stdout 中的 Error 块', async () => {
