@@ -2150,7 +2150,7 @@ function renderAgentTab(): string {
     </a>
     <div style="flex:1;padding:16px;border-radius:12px;border:1px solid var(--border);background:rgba(7,11,24,.55)">
       <div style="font-size:.82rem;font-weight:700;color:var(--text-mid);margin-bottom:4px">插件原理</div>
-      <div style="font-size:.74rem;color:var(--text-dim)">纯 Node.js，29KB，零依赖。安装到 ~/.aicoevo/agent/，通过 PowerShell hook 自动运行。</div>
+      <div style="font-size:.74rem;color:var(--text-dim)">纯 Node.js，29KB，零依赖。安装到 ~/.aicoevo/agent/，Claude Code 使用 settings hook，OpenClaw 使用 PowerShell hook。</div>
     </div>
   </div>
   <div id="agent-status-root">

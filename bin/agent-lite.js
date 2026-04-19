@@ -519,7 +519,12 @@ async function requestJson(url, init = {}, deps = {}) {
 }
 
 function authHeaders(config) {
-  return config.authToken ? { Authorization: `Bearer ${config.authToken}` } : {};
+  if (!config.authToken) return {};
+  // API Keys (ak_*) go in X-API-Key header; JWTs use Bearer
+  if (config.authToken.startsWith('ak_')) {
+    return { 'X-API-Key': config.authToken };
+  }
+  return { Authorization: `Bearer ${config.authToken}` };
 }
 
 async function syncEvents(deps = {}) {
