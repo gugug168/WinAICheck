@@ -1449,7 +1449,7 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
 
     // Step 1: 创建绑定请求
     const reqResult = await requestJson(
-      `${apiBase()}/bind/request?agent_type=${encodeURIComponent(agentName)}&device_info=${encodeURIComponent(deviceInfo)}`,
+      `${apiBase()}/bind/request?agent_type=${encodeURIComponent(agentName)}&device_info=${encodeURIComponent(deviceInfo)}&device_id=${encodeURIComponent(config.deviceId)}`,
       { method: 'POST' },
       deps,
     );
