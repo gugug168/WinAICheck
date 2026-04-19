@@ -358,6 +358,7 @@ export function createEvent(input, deps = {}) {
     sanitizedMessage,
     severity: input.severity || severityFromMessage(sanitizedMessage),
     localContext: localContext(),
+    toolContext: input.toolContext || null,
     syncStatus: 'pending',
   };
 }
@@ -899,7 +900,14 @@ function buildPostToolHookScript(agentCmd, baseDir) {
     '    ];',
     '    if (noise.some(pattern => pattern.test(normalized))) return;',
     '',
-    `    execFileSync(${JSON.stringify(agentCmd)}, ['capture', '--agent', 'claude-code'], {`,
+    '    // Build tool context from Claude Code hook input',
+    '    const toolInput = data.toolInput || data.tool_input || {};',
+    '    const toolCtx = { toolName: toolName };',
+    '    if (toolInput.command) toolCtx.command = String(toolInput.command).slice(0, 500);',
+    '    if (toolInput.file_path) toolCtx.filePath = String(toolInput.file_path).slice(0, 300);',
+    '    if (exitCode !== undefined) toolCtx.exitCode = exitCode;',
+    '',
+    `    execFileSync(${JSON.stringify(agentCmd)}, ['capture', '--agent', 'claude-code', '--tool-context', JSON.stringify(toolCtx)], {`,
     '      shell: true,',
     '      input: normalized,',
     "      encoding: 'utf8',",
@@ -1186,7 +1194,11 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
   if (command === 'capture') {
     const message = await messageFromCaptureArgs(args);
     if (!message.trim()) throw new Error('没有可记录的错误内容');
-    const event = storeEvent(createEvent({ agent: args.agent, message, severity: args.severity }, deps), deps);
+    let toolContext = null;
+    if (args.toolContext) {
+      try { toolContext = JSON.parse(args.toolContext); } catch {}
+    }
+    const event = storeEvent(createEvent({ agent: args.agent, message, severity: args.severity, toolContext }, deps), deps);
     const experience = lookupExperience(message);
     if (experience) appendExperience(event, experience, deps);
     const config = loadConfig(deps);
