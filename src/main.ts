@@ -4,13 +4,13 @@ import { runAllScanners, getScannerById } from './scanners/registry';
 import { generateJsonReport } from './report/json';
 import { generateHtmlReport } from './report/html';
 import { getConsent, saveConsent } from './privacy/consent';
-import { createPayload, saveLocal } from './privacy/uploader';
+import { createPayload, saveLocal, stashData } from './privacy/uploader';
 import { loadPreviousReport, loadHistory } from './privacy/uploader';
 import { writeFileSync, mkdirSync, existsSync } from 'fs';
 import { join } from 'path';
 import { execSync } from 'child_process';
 import { requestRemoteJson } from './web/remote-json';
-import { getCommunityApiBase } from './web/community-config';
+import { getCommunityApiBase, buildCommunityClaimUrl } from './web/community-config';
 import { enableAgentExperience, getAgentLocalStatus, pauseAgentUploads, syncAgentEvents } from './agent/local-state';
 import type { ScoreResult } from './scanners/types';
 import { VERSION } from './constants';
@@ -95,6 +95,19 @@ async function cliMode(wantJson: boolean, wantHtml: boolean) {
   }
 
   saveLocal(createPayload(results, score));
+
+  // 自动上传 stash 到 AICOEVO（失败不影响本地）
+  const consent = getConsent();
+  if (consent) {
+    try {
+      const payload = createPayload(results, score);
+      const apiBase = getCommunityApiBase();
+      const resp = await stashData(payload, apiBase);
+      console.log(`\n[AICOEVO] 扫描数据已上传，查看方案: ${buildCommunityClaimUrl(resp.token)}`);
+    } catch (err) {
+      // 上传失败不影响本地保存
+    }
+  }
 }
 
 // ==================== Web UI 模式 ====================
