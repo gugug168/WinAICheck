@@ -1,6 +1,17 @@
 import type { Fixer, FixSuggestion, FixResult, ScanResult, BackupData, FixTier, PostFixGuidance } from '../scanners/types';
 import { runCommand, isAdmin, classifyCommandError, commandExists } from '../executor/index';
 import { getScannerById } from '../scanners/registry';
+import { registerFixer as _registerFixer, getFixers as _getFixers, getFixerByScannerId as _getFixerByScannerId } from './registry';
+
+// Re-export new three-layer architecture (D-19, D-04)
+export { classifyError } from './errors';
+export { diagnose, formatDiagnostic } from './diagnostics';
+export { verifyFix, determineVerificationStatus, buildNextSteps } from './verify';
+export { registerFixer, getFixers, getFixerByScannerId } from './registry';
+export { clearFixers } from './registry';
+export type { ErrorCategory, ClassifiedError } from './errors';
+export type { DiagnosticResult } from './diagnostics';
+export type { VerificationStatus } from '../scanners/types';
 
 /**
  * 修复系统：4 档分类
@@ -13,26 +24,17 @@ import { getScannerById } from '../scanners/registry';
  * 失败时自动 rollback()
  */
 
-const fixers: Fixer[] = [];
-
-export function registerFixer(fixer: Fixer): void {
-  fixers.push(fixer);
-}
-
-export function getFixers(): Fixer[] {
-  return [...fixers];
-}
-
-export function getFixerByScannerId(scannerId: string): Fixer | undefined {
-  return fixers.find(f => f.scannerId === scannerId);
-}
+// Delegate to registry.ts to avoid duplication
+function registerFixerLocal(fixer: Fixer): void { _registerFixer(fixer); }
+function getFixersLocal(): Fixer[] { return _getFixers(); }
+function getFixerByScannerIdLocal(scannerId: string): Fixer | undefined { return _getFixerByScannerId(scannerId); }
 
 /** 获取所有需要修复的结果的建议 */
 export function getFixSuggestions(results: ScanResult[]): FixSuggestion[] {
   const suggestions: FixSuggestion[] = [];
   for (const result of results) {
     if (result.status === 'pass') continue;
-    const fixer = getFixerByScannerId(result.id);
+    const fixer = getFixerByScannerIdLocal(result.id);
     if (fixer) {
       suggestions.push(fixer.getFix(result));
     }
@@ -311,7 +313,7 @@ function runPreflight(scannerId: string): string | null {
 
 /** 三阶段执行修复：preflight → backup → execute → verify，失败时 rollback */
 export async function executeFix(fix: FixSuggestion): Promise<FixResult> {
-  const fixer = getFixerByScannerId(fix.scannerId);
+  const fixer = getFixerByScannerIdLocal(fix.scannerId);
   if (!fixer) {
     return { success: false, message: `未找到 scanner ${fix.scannerId} 对应的 fixer` };
   }
@@ -529,7 +531,7 @@ export function createRestorePoint(tag: string): void {
 // ==================== 绿色档（5个，一键修复）====================
 
 // 1. mirror-sources → 写 pip.ini/.npmrc
-registerFixer({
+registerFixerLocal({
   scannerId: 'mirror-sources',
   getFix(result: ScanResult): FixSuggestion {
     return {
@@ -566,7 +568,7 @@ registerFixer({
 });
 
 // 2. powershell-policy → Set-ExecutionPolicy
-registerFixer({
+registerFixerLocal({
   scannerId: 'powershell-policy',
   getFix(result: ScanResult): FixSuggestion {
     return {
@@ -594,7 +596,7 @@ registerFixer({
 });
 
 // 3. long-paths → 注册表修改
-registerFixer({
+registerFixerLocal({
   scannerId: 'long-paths',
   getFix(result: ScanResult): FixSuggestion {
     return {
@@ -623,7 +625,7 @@ registerFixer({
 });
 
 // 4. time-sync → 强制时间同步
-registerFixer({
+registerFixerLocal({
   scannerId: 'time-sync',
   getFix(result: ScanResult): FixSuggestion {
     return {
@@ -651,7 +653,7 @@ registerFixer({
 });
 
 // 5. env-path-length → 分析重复项
-registerFixer({
+registerFixerLocal({
   scannerId: 'env-path-length',
   getFix(result: ScanResult): FixSuggestion {
     return {
@@ -682,7 +684,7 @@ registerFixer({
 
 // ==================== 黄色档（5个，审查确认）====================
 
-registerFixer({
+registerFixerLocal({
   scannerId: 'git',
   getFix(result: ScanResult): FixSuggestion {
     return {
@@ -709,7 +711,7 @@ registerFixer({
   },
 });
 
-registerFixer({
+registerFixerLocal({
   scannerId: 'node-version',
   getFix(result: ScanResult): FixSuggestion {
     return {
@@ -731,7 +733,7 @@ registerFixer({
   },
 });
 
-registerFixer({
+registerFixerLocal({
   scannerId: 'python-versions',
   getFix(result: ScanResult): FixSuggestion {
     return {
@@ -774,7 +776,7 @@ registerFixer({
   },
 });
 
-registerFixer({
+registerFixerLocal({
   scannerId: 'firewall-ports',
   getFix(result: ScanResult): FixSuggestion {
     return {
@@ -807,7 +809,7 @@ registerFixer({
   },
 });
 
-registerFixer({
+registerFixerLocal({
   scannerId: 'temp-space',
   getFix(result: ScanResult): FixSuggestion {
     return {
@@ -844,7 +846,7 @@ registerFixer({
 
 // ==================== 红色档（5个，只给指引）====================
 
-registerFixer({
+registerFixerLocal({
   scannerId: 'path-chinese',
   getFix(result: ScanResult): FixSuggestion {
     return {
@@ -859,7 +861,7 @@ registerFixer({
   async execute(): Promise<FixResult> { return { success: false, message: '需手动操作，请参考指引' }; },
 });
 
-registerFixer({
+registerFixerLocal({
   scannerId: 'gpu-driver',
   getFix(result: ScanResult): FixSuggestion {
     return {
@@ -874,7 +876,7 @@ registerFixer({
   async execute(): Promise<FixResult> { return { success: false, message: '需手动操作，请参考指引' }; },
 });
 
-registerFixer({
+registerFixerLocal({
   scannerId: 'virtualization',
   getFix(result: ScanResult): FixSuggestion {
     return {
@@ -889,7 +891,7 @@ registerFixer({
   async execute(): Promise<FixResult> { return { success: false, message: '需手动操作，请参考指引' }; },
 });
 
-registerFixer({
+registerFixerLocal({
   scannerId: 'cpp-compiler',
   getFix(result: ScanResult): FixSuggestion {
     return {
@@ -904,7 +906,7 @@ registerFixer({
   async execute(): Promise<FixResult> { return { success: false, message: '需手动操作，请参考指引' }; },
 });
 
-registerFixer({
+registerFixerLocal({
   scannerId: 'proxy-config',
   getFix(result: ScanResult): FixSuggestion {
     return {
@@ -921,7 +923,7 @@ registerFixer({
 
 // ==================== 黑色档（5个，只告知）====================
 
-registerFixer({
+registerFixerLocal({
   scannerId: 'vram-usage',
   getFix(result: ScanResult): FixSuggestion {
     return {
@@ -936,7 +938,7 @@ registerFixer({
   async execute(): Promise<FixResult> { return { success: true, message: '仅供参考' }; },
 });
 
-registerFixer({
+registerFixerLocal({
   scannerId: 'cuda-version',
   getFix(result: ScanResult): FixSuggestion {
     return {
@@ -951,7 +953,7 @@ registerFixer({
   async execute(): Promise<FixResult> { return { success: true, message: '仅供参考' }; },
 });
 
-registerFixer({
+registerFixerLocal({
   scannerId: 'ssl-certs',
   getFix(result: ScanResult): FixSuggestion {
     return {
@@ -966,7 +968,7 @@ registerFixer({
   async execute(): Promise<FixResult> { return { success: true, message: '仅供参考' }; },
 });
 
-registerFixer({
+registerFixerLocal({
   scannerId: 'dns-resolution',
   getFix(result: ScanResult): FixSuggestion {
     return {
@@ -981,7 +983,7 @@ registerFixer({
   async execute(): Promise<FixResult> { return { success: true, message: '仅供参考' }; },
 });
 
-registerFixer({
+registerFixerLocal({
   scannerId: 'site-reachability',
   getFix(result: ScanResult): FixSuggestion {
     return {
@@ -999,7 +1001,7 @@ registerFixer({
 // ==================== 补充 fixer（原 5 个未覆盖的 scanner）====================
 
 // admin-perms → 管理员权限提示
-registerFixer({
+registerFixerLocal({
   scannerId: 'admin-perms',
   getFix(result: ScanResult): FixSuggestion {
     return {
@@ -1015,7 +1017,7 @@ registerFixer({
 });
 
 // package-managers → 安装缺失的包管理器
-registerFixer({
+registerFixerLocal({
   scannerId: 'package-managers',
   getFix(result: ScanResult): FixSuggestion {
     return {
@@ -1047,7 +1049,7 @@ registerFixer({
 });
 
 // unix-commands → 安装 Unix 命令（通过 Git Bash 或 WSL）
-registerFixer({
+registerFixerLocal({
   scannerId: 'unix-commands',
   getFix(result: ScanResult): FixSuggestion {
     return {
@@ -1073,7 +1075,7 @@ registerFixer({
 });
 
 // wsl-version → 安装/升级 WSL
-registerFixer({
+registerFixerLocal({
   scannerId: 'wsl-version',
   getFix(result: ScanResult): FixSuggestion {
     return {
@@ -1102,7 +1104,7 @@ registerFixer({
 
 // ==================== Git PATH 完整性修复 ====================
 
-registerFixer({
+registerFixerLocal({
   scannerId: 'git-path',
   getFix(result: ScanResult): FixSuggestion {
     return {
@@ -1143,7 +1145,7 @@ registerFixer({
 // ==================== AI 开发工具一键安装 ====================
 
 // uv 包管理器 → pip 国内镜像安装
-registerFixer({
+registerFixerLocal({
   scannerId: 'uv-package-manager',
   getFix(result: ScanResult): FixSuggestion {
     return {
@@ -1179,7 +1181,7 @@ registerFixer({
 });
 
 // Claude Code CLI → npm 国内镜像安装
-registerFixer({
+registerFixerLocal({
   scannerId: 'claude-cli',
   getFix(result: ScanResult): FixSuggestion {
     return {
@@ -1210,7 +1212,7 @@ registerFixer({
 });
 
 // OpenClaw → npm 国内镜像安装
-registerFixer({
+registerFixerLocal({
   scannerId: 'openclaw',
   getFix(result: ScanResult): FixSuggestion {
     return {
@@ -1241,7 +1243,7 @@ registerFixer({
 });
 
 // CCSwitch → npm 国内镜像安装
-registerFixer({
+registerFixerLocal({
   scannerId: 'ccswitch',
   getFix(result: ScanResult): FixSuggestion {
     return {
@@ -1273,7 +1275,7 @@ registerFixer({
 
 // ==================== PowerShell 7 升级 ====================
 
-registerFixer({
+registerFixerLocal({
   scannerId: 'powershell-version',
   getFix(result: ScanResult): FixSuggestion {
     return {

@@ -54,14 +54,37 @@ export interface BackupData {
   data: Record<string, string>; // 旧值键值对
 }
 
-/** Fixer 接口 */
+/** Fixer 接口 (D-02, FIX-01) */
 export interface Fixer {
+  id?: string;
   scannerId: string;
+  risk?: 'green' | 'yellow' | 'red';
+  /** Check if this fixer can handle the given scan failure */
+  canFix?(scanResult: ScanResult): boolean;
+  /** Generate a fix suggestion for the given scan result */
   getFix(result: ScanResult): FixSuggestion;
+  /** Backup state before applying fix */
   backup?(result: ScanResult): Promise<BackupData>;
+  /** Execute the fix */
   execute(fix: FixSuggestion, backup: BackupData): Promise<FixResult>;
+  /** Rollback on failure */
   rollback?(backup: BackupData): Promise<void>;
+  /** Optional preflight checks */
+  preflightChecks?: PreflightCheck[];
+  /** Optional post-fix guidance */
+  getGuidance?: () => PostFixGuidance | undefined;
+  /** Optional verification commands */
+  getVerificationCommand?: () => string | string[] | undefined;
 }
+
+/** 预检检查项 (D-15, DIA-02) */
+export interface PreflightCheck {
+  id: string;
+  check: () => Promise<{ pass: boolean; message?: string }>;
+}
+
+/** Verification result states (D-05, VRF-02) */
+export type VerificationStatus = 'pass' | 'warn' | 'fail';
 
 /** 修复执行结果 */
 export interface FixResult {
