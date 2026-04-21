@@ -538,6 +538,13 @@ function authHeaders(config) {
   return { Authorization: `Bearer ${config.authToken}` };
 }
 
+function apiKeyHeaders(config) {
+  if (!config.authToken || !config.authToken.startsWith('ak_')) {
+    return null;
+  }
+  return { 'X-API-Key': config.authToken };
+}
+
 async function syncEvents(deps = {}) {
   return withMutex(async () => {
     const p = paths(deps);
@@ -1574,7 +1581,8 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
   // ── Bounty commands: list, recommended ──
   if (command === 'bounty-list') {
     const config = loadConfig(deps);
-    if (!config.authToken) { out.write('未登录，请先运行 winaicheck agent auth\n'); return 1; }
+    const headers = apiKeyHeaders(config);
+    if (!headers) { out.write('悬赏命令需要 Agent API Key，请先运行 winaicheck agent bind\n'); return 1; }
     const origin = config.origin || DEFAULT_ORIGIN;
     const page = args.page || '1';
     const pageSize = args.limit || '10';
@@ -1582,7 +1590,7 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
     const _fetch = deps.fetchImpl || fetch;
     try {
       const res = await _fetch(`${origin}/api/v1/agent/bounties?page=${page}&page_size=${pageSize}&sort_by=${sortBy}`, {
-        headers: { 'Authorization': `Bearer ${config.authToken}`, 'X-API-Key': config.authToken },
+        headers,
       });
       const data = await res.json();
       out.write(`${JSON.stringify(data, null, 2)}\n`);
@@ -1592,14 +1600,15 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
 
   if (command === 'bounty-recommended') {
     const config = loadConfig(deps);
-    if (!config.authToken) { out.write('未登录，请先运行 winaicheck agent auth\n'); return 1; }
+    const headers = apiKeyHeaders(config);
+    if (!headers) { out.write('悬赏命令需要 Agent API Key，请先运行 winaicheck agent bind\n'); return 1; }
     const origin = config.origin || DEFAULT_ORIGIN;
     const strategy = args.strategy || 'balanced';
     const limit = args.limit || '10';
     const _fetch = deps.fetchImpl || fetch;
     try {
       const res = await _fetch(`${origin}/api/v1/agent/bounties/recommended?strategy=${strategy}&limit=${limit}`, {
-        headers: { 'Authorization': `Bearer ${config.authToken}`, 'X-API-Key': config.authToken },
+        headers,
       });
       const data = await res.json();
       out.write(`${JSON.stringify(data, null, 2)}\n`);
@@ -1610,7 +1619,8 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
   // ── Bounty: solve (KB 匹配获取答案) ──
   if (command === 'bounty-solve') {
     const config = loadConfig(deps);
-    if (!config.authToken) { out.write('未登录，请先运行 winaicheck agent auth\n'); return 1; }
+    const auth = apiKeyHeaders(config);
+    if (!auth) { out.write('悬赏命令需要 Agent API Key，请先运行 winaicheck agent bind\n'); return 1; }
     const id = args._[0];
     if (!id) { out.write('用法: winaicheck agent bounty-solve <id>\n'); return 1; }
     const origin = config.origin || DEFAULT_ORIGIN;
@@ -1618,7 +1628,7 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
     try {
       const res = await _fetch(`${origin}/api/v1/agent/bounties/${id}/auto-solve`, {
         method: 'POST',
-        headers: { 'Authorization': `Bearer ${config.authToken}`, 'X-API-Key': config.authToken, 'Content-Type': 'application/json' },
+        headers: { ...auth, 'Content-Type': 'application/json' },
       });
       const data = await res.json();
       if (!res.ok) { out.write(`KB 匹配失败: ${data.detail || JSON.stringify(data)}\n`); return 1; }
@@ -1630,7 +1640,8 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
   // ── Bounty: claim (认领悬赏) ──
   if (command === 'bounty-claim') {
     const config = loadConfig(deps);
-    if (!config.authToken) { out.write('未登录，请先运行 winaicheck agent auth\n'); return 1; }
+    const auth = apiKeyHeaders(config);
+    if (!auth) { out.write('悬赏命令需要 Agent API Key，请先运行 winaicheck agent bind\n'); return 1; }
     const id = args._[0];
     if (!id) { out.write('用法: winaicheck agent bounty-claim <id>\n'); return 1; }
     const origin = config.origin || DEFAULT_ORIGIN;
@@ -1638,7 +1649,7 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
     try {
       const res = await _fetch(`${origin}/api/v1/agent/bounties/${id}/claim`, {
         method: 'POST',
-        headers: { 'Authorization': `Bearer ${config.authToken}`, 'X-API-Key': config.authToken, 'Content-Type': 'application/json' },
+        headers: { ...auth, 'Content-Type': 'application/json' },
       });
       const data = await res.json();
       if (!res.ok) { out.write(`认领失败: ${data.detail || JSON.stringify(data)}\n`); return 1; }
@@ -1651,7 +1662,8 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
   // ── Bounty: submit (提交回答) ──
   if (command === 'bounty-submit') {
     const config = loadConfig(deps);
-    if (!config.authToken) { out.write('未登录，请先运行 winaicheck agent auth\n'); return 1; }
+    const auth = apiKeyHeaders(config);
+    if (!auth) { out.write('悬赏命令需要 Agent API Key，请先运行 winaicheck agent bind\n'); return 1; }
     const id = args._[0];
     const content = args.content;
     if (!id || !content) { out.write('用法: winaicheck agent bounty-submit <id> --content <text>\n'); return 1; }
@@ -1660,7 +1672,7 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
     try {
       const res = await _fetch(`${origin}/api/v1/agent/bounties/${id}/submit`, {
         method: 'POST',
-        headers: { 'Authorization': `Bearer ${config.authToken}`, 'X-API-Key': config.authToken, 'Content-Type': 'application/json' },
+        headers: { ...auth, 'Content-Type': 'application/json' },
         body: JSON.stringify({ content, source: args.source || 'manual' }),
       });
       const data = await res.json();
@@ -1673,7 +1685,8 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
   // ── Bounty: release (释放认领) ──
   if (command === 'bounty-release') {
     const config = loadConfig(deps);
-    if (!config.authToken) { out.write('未登录，请先运行 winaicheck agent auth\n'); return 1; }
+    const headers = apiKeyHeaders(config);
+    if (!headers) { out.write('悬赏命令需要 Agent API Key，请先运行 winaicheck agent bind\n'); return 1; }
     const id = args._[0];
     if (!id) { out.write('用法: winaicheck agent bounty-release <id>\n'); return 1; }
     const origin = config.origin || DEFAULT_ORIGIN;
@@ -1681,7 +1694,7 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
     try {
       const res = await _fetch(`${origin}/api/v1/agent/bounties/${id}/claim`, {
         method: 'DELETE',
-        headers: { 'Authorization': `Bearer ${config.authToken}`, 'X-API-Key': config.authToken },
+        headers,
       });
       const data = await res.json();
       if (!res.ok) { out.write(`释放失败: ${data.detail || JSON.stringify(data)}\n`); return 1; }
@@ -1693,12 +1706,13 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
   // ── Bounty: auto (自动循环: 推荐 → KB匹配 → claim+submit) ──
   if (command === 'bounty-auto') {
     const config = loadConfig(deps);
-    if (!config.authToken) { out.write('未登录，请先运行 winaicheck agent auth\n'); return 1; }
+    const apiKey = apiKeyHeaders(config);
+    if (!apiKey) { out.write('悬赏命令需要 Agent API Key，请先运行 winaicheck agent bind\n'); return 1; }
     const interval = parseInt(args.interval || '300', 10);
     const maxPerCycle = parseInt(args.limit || '3', 10);
     const origin = config.origin || DEFAULT_ORIGIN;
     const _fetch = deps.fetchImpl || fetch;
-    const headers = { 'Authorization': `Bearer ${config.authToken}`, 'X-API-Key': config.authToken, 'Content-Type': 'application/json' };
+    const headers = { ...apiKey, 'Content-Type': 'application/json' };
     const strategy = args.strategy || 'balanced';
 
     out.write(`bounty-auto 启动 (间隔 ${interval}s, 每轮最多 ${maxPerCycle})\n`);
@@ -1786,6 +1800,7 @@ export const _testHelpers = {
   writeJson,
   updateDaily,
   lookupExperience,
+  apiKeyHeaders,
 };
 
 let isDirectExecution = false;
