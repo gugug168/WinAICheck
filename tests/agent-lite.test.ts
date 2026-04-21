@@ -177,6 +177,42 @@ describe('agent-lite', () => {
     expect(readFileSync(p.adviceMd, 'utf-8')).toContain('修复 MCP 配置 JSON');
   });
 
+  test('apiKeyHeaders 只接受 Agent API Key', () => {
+    expect(_testHelpers.apiKeyHeaders({ authToken: 'ak_test_123' })).toEqual({
+      'X-API-Key': 'ak_test_123',
+    });
+    expect(_testHelpers.apiKeyHeaders({ authToken: 'jwt-token' })).toBeNull();
+    expect(_testHelpers.apiKeyHeaders({})).toBeNull();
+  });
+
+  test('bounty-list 在 JWT 授权态下提示先 bind，不发送请求', async () => {
+    const root = createTempRoot();
+    roots.push(root);
+    const p = _testHelpers.paths({ baseDir: root });
+    _testHelpers.writeJson(p.config, {
+      clientId: 'client-test',
+      deviceId: 'device-test',
+      shareData: true,
+      autoSync: true,
+      paused: false,
+      authToken: 'jwt-token',
+    });
+
+    let called = false;
+    const io = createIo();
+    const code = await agentMain(['bounty-list'], {
+      baseDir: root,
+      fetchImpl: async () => {
+        called = true;
+        throw new Error('should not reach network');
+      },
+    }, io.io as any);
+
+    expect(code).toBe(1);
+    expect(called).toBe(false);
+    expect(io.output).toContain('agent bind');
+  });
+
   test('install-hook 和 uninstall-hook 只管理 WinAICheck 代码块', () => {
     const root = createTempRoot();
     roots.push(root);
