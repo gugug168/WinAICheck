@@ -579,6 +579,29 @@ async function syncEvents(deps = {}) {
       writeAdvice(remote.data.advice, deps);
     }
 
+    // 展示同步反馈：匹配结果和悬赏草稿
+    if (remote.data) {
+      const accepted = remote.data.accepted || 0;
+      const advice = remote.data.advice;
+      const drafts = remote.data.bountyDrafts;
+      if (accepted > 0) {
+        const parts = [`[AICOEVO] 已上传 ${accepted} 条事件`];
+        if (advice) {
+          const conf = typeof advice.confidence === 'number' ? advice.confidence : 0;
+          if (conf >= 0.6) {
+            parts.push(`匹配到已有方案 (置信度 ${Math.round(conf * 100)}%)`);
+          } else if (advice.summary) {
+            parts.push(String(advice.summary).split('\n')[0]);
+          }
+        }
+        if (drafts && drafts.length > 0) {
+          const d = drafts[0];
+          parts.push(`已创建悬赏草稿: ${d.title || d.id}`);
+        }
+        (deps.stderr || process.stderr).write(parts.join(' | ') + '\n');
+      }
+    }
+
     return { ok: true, uploaded: pending.length, data: remote.data };
   });
 }

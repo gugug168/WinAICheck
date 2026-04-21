@@ -128,6 +128,46 @@ export function saveLocal(payload: UploadPayload): string {
   return '';
 }
 
+/** Stash API 响应 */
+export interface StashResponse {
+  token: string;
+  claim_url: string;
+  ttl_seconds: number;
+}
+
+/** 上传扫描数据到 AICOEVO stash API（与 MacAICheck stashData 对齐） */
+export async function stashData(payload: UploadPayload, apiBase: string): Promise<StashResponse> {
+  const fingerprint = JSON.stringify({
+    platform: 'Windows',
+    userAgent: `WinAICheck/${process.version}`,
+    system: payload.systemInfo,
+    score: payload.score,
+    failCount: payload.results.filter(r => r.status === 'fail').length,
+    failCategories: [...new Set(payload.results.filter(r => r.status === 'fail').map(r => r.category))],
+  });
+
+  const resp = await fetch(`${apiBase}/stash`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+    body: JSON.stringify({
+      data: JSON.stringify(payload),
+      fingerprint,
+    }),
+  });
+
+  if (!resp.ok) {
+    throw new Error(`stash upload failed: ${resp.status}`);
+  }
+
+  return resp.json() as Promise<StashResponse>;
+}
+
+/** 构建 claim URL */
+export function buildClaimUrl(token: string, apiBase: string): string {
+  const origin = apiBase.replace(/\/api\/v1\/?$/, '').replace(/\/$/, '');
+  return `${origin}/claim?t=${token}`;
+}
+
 /** 读取最近一次扫描报告（不含当前） */
 export function loadPreviousReport(): UploadPayload | null {
   const reportDir = getReportDir();
