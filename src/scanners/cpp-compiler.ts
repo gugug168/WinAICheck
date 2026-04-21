@@ -40,6 +40,7 @@ const scanner: Scanner = {
       name: this.name,
       category: this.category,
       status: 'fail',
+      error_type: 'missing',
       message: '未检测到 C/C++ 编译器（MSVC 或 GCC）',
       detail: '部分 Python 包需要编译器支持',
     };

@@ -46,6 +46,7 @@ const scanner: Scanner = {
         status: failed.length === domains.length ? 'fail' : 'warn',
         message: `DNS 解析失败: ${failed.join(', ')}`,
         detail: failed.length < domains.length ? `正常: ${ok.join(', ')}` : '请检查 DNS 设置',
+        error_type: 'network',
       };
     }
 

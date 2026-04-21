@@ -37,6 +37,7 @@ const scanner: Scanner = {
         status: 'fail',
         message: '所有站点 SSL 连接失败',
         detail: '可能是网络代理或证书问题',
+        error_type: 'network',
       };
     }
 
@@ -47,6 +48,7 @@ const scanner: Scanner = {
         category: this.category,
         status: 'warn',
         message: `部分站点 SSL 连接失败: ${failed.join(', ')}`,
+        error_type: 'network',
       };
     }
 

@@ -30,6 +30,7 @@ const scanner: Scanner = {
         name: this.name,
         category: this.category,
         status: 'fail',
+        error_type: 'misconfigured',
         message: 'Windows 长路径支持未启用，可能导致 npm/git 长路径问题',
         detail: '注册表 LongPathsEnabled = 0',
       };

@@ -37,6 +37,7 @@ const scanner: Scanner = {
         name: this.name,
         category: this.category,
         status: 'warn',
+        error_type: 'conflict',
         message: '检测到多个 Node 管理链路，可能导致命令漂移',
         detail: `node 路径:\n${locations.join('\n')}`,
       };

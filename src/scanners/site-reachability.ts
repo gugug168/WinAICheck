@@ -36,6 +36,7 @@ const scanner: Scanner = {
         name: this.name,
         category: this.category,
         status: 'fail',
+        error_type: 'network',
         message: '所有 AI 站点不可达',
         detail: '请检查网络连接或代理设置',
       };
@@ -47,6 +48,7 @@ const scanner: Scanner = {
         name: this.name,
         category: this.category,
         status: 'warn',
+        error_type: 'network',
         message: `不可达: ${unreachable.join(', ')}`,
         detail: `可达: ${reachable.join(', ')}`,
       };

@@ -30,6 +30,7 @@ const scanner: Scanner = {
         name: this.name,
         category: this.category,
         status: 'warn',
+        error_type: 'misconfigured',
         message: '检测到 Python 项目，但未发现项目级虚拟环境',
         detail: '建议在项目根目录创建 .venv 或 venv，避免污染系统 Python/Anaconda 环境。',
       };

@@ -47,6 +47,7 @@ const scanner: Scanner = {
         status: 'warn',
         message: 'NVIDIA 驱动版本较旧，建议更新到 525+',
         detail,
+        error_type: 'outdated',
       };
     }
 

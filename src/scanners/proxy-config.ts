@@ -43,6 +43,7 @@ const scanner: Scanner = {
       status: hasNoProxy ? 'pass' : 'warn',
       message: `检测到 ${found.length} 个代理环境变量${!hasNoProxy ? '（缺少 NO_PROXY）' : ''}`,
       detail: found.join('\n'),
+      ...(hasNoProxy ? {} : { error_type: 'misconfigured' }),
     };
   },
 };

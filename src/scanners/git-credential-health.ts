@@ -25,6 +25,7 @@ const scanner: Scanner = {
         name: this.name,
         category: this.category,
         status: 'warn',
+        error_type: 'misconfigured',
         message: '未检测到 Git 凭据助手或 SSH Key',
         detail: '可使用 HTTPS credential helper，或在 ~/.ssh 中配置 id_ed25519 / id_rsa。',
       };

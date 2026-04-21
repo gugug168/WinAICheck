@@ -17,6 +17,7 @@ const scanner: Scanner = {
         name: this.name,
         category: this.category,
         status: 'warn',
+        error_type: 'misconfigured',
         message: '无法查询时间同步状态',
         detail: '可能时间服务未启动',
       };
@@ -33,6 +34,7 @@ const scanner: Scanner = {
         name: this.name,
         category: this.category,
         status: 'warn',
+        error_type: 'misconfigured',
         message: '时间同步源可能不可靠',
         detail: `源: ${sourceValue}\n上次同步: ${syncValue}`,
       };

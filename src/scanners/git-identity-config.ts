@@ -20,6 +20,7 @@ const scanner: Scanner = {
         name: this.name,
         category: this.category,
         status: 'warn',
+        error_type: 'misconfigured',
         message: 'Git 全局身份未完整配置',
         detail: `user.name: ${userName || '(未设置)'}\nuser.email: ${userEmail || '(未设置)'}`,
       };

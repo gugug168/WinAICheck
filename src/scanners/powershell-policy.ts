@@ -53,6 +53,7 @@ const scanner: Scanner = {
         status: 'fail',
         message: `PowerShell 执行策略为 "${policy}"，将阻止脚本运行`,
         detail: '建议执行: Set-ExecutionPolicy RemoteSigned -Scope CurrentUser',
+        error_type: 'misconfigured',
       };
     }
 

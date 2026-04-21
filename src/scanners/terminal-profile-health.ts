@@ -37,6 +37,7 @@ const scanner: Scanner = {
         name: this.name,
         category: this.category,
         status: 'fail',
+        error_type: 'misconfigured',
         message: 'Windows Terminal 配置无法解析',
         detail: `文件: ${settings.path}\n错误: ${settings.error}`,
       };
@@ -55,6 +56,7 @@ const scanner: Scanner = {
         name: this.name,
         category: this.category,
         status: 'warn',
+        error_type: 'misconfigured',
         message: 'Windows Terminal 默认 profile 无法匹配到有效配置',
         detail: `文件: ${settings.path}`,
       };
@@ -66,6 +68,7 @@ const scanner: Scanner = {
         name: this.name,
         category: this.category,
         status: 'warn',
+        error_type: 'misconfigured',
         message: 'Windows Terminal 默认 profile 不是 PowerShell 7',
         detail: `默认 profile: ${name || defaultProfile}\ncommandline: ${commandline || '(未配置)'}`,
       };

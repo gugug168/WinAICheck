@@ -39,6 +39,7 @@ const scanner: Scanner = {
         name: this.name,
         category: this.category,
         status: 'fail',
+        error_type: 'missing',
         message: 'Python 不可用，无法校验项目环境',
       };
     }
@@ -49,6 +50,7 @@ const scanner: Scanner = {
         name: this.name,
         category: this.category,
         status: 'warn',
+        error_type: 'missing',
         message: 'pip 不可用，Python 依赖安装可能失败',
         detail: `python: ${python.stdout.trim()}`,
       };
@@ -65,6 +67,7 @@ const scanner: Scanner = {
         name: this.name,
         category: this.category,
         status: 'warn',
+        error_type: 'conflict',
         message: 'python 与 pip 可能来自不同环境',
         detail: `python: ${pythonPath}\npip: ${pipPath || pip.stdout.trim()}`,
       };

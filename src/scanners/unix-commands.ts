@@ -28,6 +28,7 @@ const scanner: Scanner = {
         name: this.name,
         category: this.category,
         status: 'fail',
+        error_type: 'missing',
         message: '所有常用 Unix 命令均不可用',
       };
     }
@@ -37,6 +38,7 @@ const scanner: Scanner = {
         name: this.name,
         category: this.category,
         status: 'warn',
+        error_type: 'missing',
         message: `缺少命令: ${missing.join(', ')}`,
         detail: `可用: ${available.join(', ')}`,
       };

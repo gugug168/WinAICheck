@@ -26,6 +26,7 @@ const scanner: Scanner = {
         name: this.name,
         category: this.category,
         status: 'warn',
+        error_type: 'misconfigured',
         message: `当前终端代码页为 ${codePage}，可能出现中文或 JSON 输出乱码`,
         detail: '建议使用 chcp 65001、PowerShell 7 或 Windows Terminal UTF-8 配置。',
       };

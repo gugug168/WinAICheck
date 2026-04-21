@@ -49,6 +49,7 @@ const scanner: Scanner = {
         name: this.name,
         category: this.category,
         status: available.length > 0 ? 'warn' : 'fail',
+        error_type: 'missing',
         message: '部分 MCP server 启动命令不可用',
         detail: `可用:\n${available.join('\n') || '(无)'}\n\n不可用:\n${missing.join('\n')}`,
       };

@@ -19,6 +19,7 @@ const scanner: Scanner = {
         name: this.name,
         category: this.category,
         status: 'warn',
+        error_type: 'missing',
         message: 'uv 未安装，Claude Code 的 Python MCP 服务器将无法运行',
         detail: 'uv 是高性能 Python 包管理器，Claude Code/OpenClaw 依赖它运行 Python MCP 服务器。\n\n安装方法:\n  PowerShell: irm https://astral.sh/uv/install.ps1 | iex\n  pip: pip install uv\n  winget: winget install astral-sh.uv\n  国内加速: pip install uv -i https://pypi.tuna.tsinghua.edu.cn/simple',
       };

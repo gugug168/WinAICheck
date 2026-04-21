@@ -21,6 +21,7 @@ const scanner: Scanner = {
         name: this.name,
         category: this.category,
         status: 'fail',
+        error_type: 'missing',
         message: '未检测到 Git',
       };
     }
@@ -74,6 +75,7 @@ const scanner: Scanner = {
         name: this.name,
         category: this.category,
         status: 'fail',
+        error_type: 'misconfigured',
         message: `Git PATH 不完整，缺少 ${missing.join('、')}，导致 ${missingCmds.join('、')} 不可用`,
         detail: `Git 安装目录: ${gitDir}\n缺少目录: ${missing.join('、')}\n不可用命令: ${missingCmds.join('、')}\n\n建议添加到系统 PATH:\n${missing.map(d => `${gitDir}\\${d === 'Git\\cmd' ? 'cmd' : d.replace('Git\\', '')}`).join('\n')}`,
       };
@@ -85,6 +87,7 @@ const scanner: Scanner = {
       name: this.name,
       category: this.category,
       status: 'warn',
+      error_type: 'misconfigured',
       message: `Git PATH 不够规范，缺少 ${missing.join('、')}（命令暂时可用但不稳定）`,
       detail: `建议将以下目录加入系统 PATH:\n${missing.map(d => `  ${gitDir}\\${d.replace('Git\\', '')}`).join('\n')}`,
     };
