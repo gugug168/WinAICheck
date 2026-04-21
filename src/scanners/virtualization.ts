@@ -48,6 +48,7 @@ const scanner: Scanner = {
         name: this.name,
         category: this.category,
         status: 'warn',
+        error_type: 'incompatible',
         message: 'BIOS/UEFI 中的虚拟化未启用',
         detail: '请在 BIOS/UEFI 中启用 Intel VT-x / AMD-V；如需 WSL2 或 Docker，再启用对应 Windows 功能。',
       };

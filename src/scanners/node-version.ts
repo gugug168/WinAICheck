@@ -17,6 +17,7 @@ const scanner: Scanner = {
         category: this.category,
         status: 'fail',
         message: 'Node.js 未安装',
+        error_type: 'missing',
       };
     }
 
@@ -30,6 +31,7 @@ const scanner: Scanner = {
         category: this.category,
         status: 'warn',
         message: `Node.js 版本过旧 (v${version})，建议 v18+`,
+        error_type: 'outdated',
       };
     }
 

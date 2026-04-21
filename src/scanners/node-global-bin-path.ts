@@ -15,6 +15,7 @@ const scanner: Scanner = {
         name: this.name,
         category: this.category,
         status: 'fail',
+        error_type: 'misconfigured',
         message: '无法获取 npm 全局安装路径',
       };
     }
@@ -30,6 +31,7 @@ const scanner: Scanner = {
         name: this.name,
         category: this.category,
         status: 'warn',
+        error_type: 'misconfigured',
         message: 'Node 全局 CLI 环境不完整',
         detail: `npm prefix: ${globalPrefix}\n在 PATH 中: ${inPath ? '是' : '否'}\nnpx 可用: ${hasNpx ? '是' : '否'}`,
       };

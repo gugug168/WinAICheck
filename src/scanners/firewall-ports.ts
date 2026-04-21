@@ -59,6 +59,7 @@ const scanner: Scanner = {
       name: this.name,
       category: this.category,
       status: missing.length > 0 ? 'warn' : 'pass',
+      ...(missing.length > 0 && { error_type: 'permission' as const }),
       message: missing.length > 0
         ? `${missing.length} 个 AI 常用端口未发现显式入站放行规则`
         : 'AI 常用端口防火墙配置正常',

@@ -17,6 +17,7 @@ const scanner: Scanner = {
         category: this.category,
         status: 'fail',
         message: 'Git 未安装或不在 PATH 中',
+        error_type: 'missing',
       };
     }
 
@@ -32,6 +33,7 @@ const scanner: Scanner = {
         category: this.category,
         status: 'warn',
         message: `Git 版本过旧 (${version})，建议升级到 2.30+`,
+        error_type: 'outdated',
       };
     }
 

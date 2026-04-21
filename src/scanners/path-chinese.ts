@@ -18,6 +18,7 @@ const scanner: Scanner = {
         name: this.name,
         category: this.category,
         status: 'fail',
+        error_type: 'misconfigured',
         message: '用户目录包含非 ASCII 字符（中文路径），可能导致部分 AI 工具异常',
         detail: `路径: ${home}`,
       };

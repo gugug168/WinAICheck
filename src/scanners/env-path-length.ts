@@ -27,6 +27,7 @@ const scanner: Scanner = {
         name: this.name,
         category: this.category,
         status: 'fail',
+        error_type: 'misconfigured',
         message: `PATH 过长 (${length} 字符，接近系统上限 ${MAX_FAIL})`,
         detail: duplicates.length > 0
           ? `重复项:\n${duplicates.map(([p, c]) => `  ${p} (x${c})`).join('\n')}`
@@ -40,6 +41,7 @@ const scanner: Scanner = {
         name: this.name,
         category: this.category,
         status: 'warn',
+        error_type: 'misconfigured',
         message: `PATH 偏长或存在冗余 (${length} 字符，${entries.length} 个条目)`,
         detail: duplicates.length > 0
           ? `重复项:\n${duplicates.map(([p, c]) => `  ${p} (x${c})`).join('\n')}`

@@ -55,6 +55,7 @@ const scanner: Scanner = {
         status: 'warn',
         message: '显存使用率 > 90%，可能影响 AI 训练/推理',
         detail: details.join('\n'),
+        error_type: 'resource',
       };
     }
 

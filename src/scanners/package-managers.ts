@@ -37,6 +37,7 @@ const scanner: Scanner = {
         name: this.name,
         category: this.category,
         status: 'fail',
+        error_type: 'missing',
         message: '未检测到任何包管理器',
       };
     }
@@ -50,6 +51,7 @@ const scanner: Scanner = {
         name: this.name,
         category: this.category,
         status: 'warn',
+        error_type: 'misconfigured',
         message: `核心包管理器不完整（${!hasPython ? '缺少 pip' : ''}${!hasPython && !hasNode ? '，' : ''}${!hasNode ? '缺少 npm' : ''}）`,
         detail: `已安装: ${found.join(', ')}${missing.length > 0 ? `\n未安装: ${missing.join(', ')}` : ''}`,
       };

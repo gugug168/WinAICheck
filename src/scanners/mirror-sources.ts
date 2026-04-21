@@ -50,6 +50,7 @@ const scanner: Scanner = {
         name: this.name,
         category: this.category,
         status: 'warn',
+        error_type: 'misconfigured',
         message: `${noMirror.length} 个包管理器未配置国内镜像`,
         detail: [...mirrors, ...noMirror].join('\n'),
       };

@@ -69,6 +69,7 @@ const scanner: Scanner = {
         category: this.category,
         status: 'fail',
         message: 'Python 未安装或未加入当前命令环境',
+        error_type: 'missing',
       };
     }
 
@@ -82,6 +83,7 @@ const scanner: Scanner = {
         status: 'warn',
         message: `检测到多个 Python 版本，可能存在冲突`,
         detail: versions.join('\n'),
+        error_type: 'conflict',
       };
     }
 
@@ -95,6 +97,7 @@ const scanner: Scanner = {
         category: this.category,
         status: 'warn',
         message: `Python 版本过旧 (${ver})，建议 3.8+`,
+        error_type: 'outdated',
       };
     }
 

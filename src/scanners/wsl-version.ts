@@ -18,6 +18,7 @@ const scanner: Scanner = {
         name: this.name,
         category: this.category,
         status: 'warn',
+        error_type: 'missing',
         message: 'WSL 未安装或未初始化',
         detail: '建议安装 WSL2: wsl --install',
       };
@@ -42,6 +43,7 @@ const scanner: Scanner = {
       name: this.name,
       category: this.category,
       status: 'warn',
+      error_type: 'outdated',
       message: 'WSL 已安装但可能使用 WSL1，建议升级到 WSL2',
       detail: stdout.split('\n').slice(0, 5).join('\n'),
     };

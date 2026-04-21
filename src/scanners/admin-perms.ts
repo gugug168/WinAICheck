@@ -21,14 +21,15 @@ const scanner: Scanner = {
       };
     }
 
-    return {
-      id: this.id,
-      name: this.name,
-      category: this.category,
-      status: 'warn',
-      message: '当前非管理员权限，部分修复操作需要提升权限',
-      detail: '建议以管理员身份运行本工具以获得完整修复能力',
-    };
+      return {
+        id: this.id,
+        name: this.name,
+        category: this.category,
+        status: 'warn',
+        message: '当前非管理员权限，部分修复操作需要提升权限',
+        detail: '建议以管理员身份运行本工具以获得完整修复能力',
+        error_type: 'permission',
+      };
   },
 };
 

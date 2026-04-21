@@ -20,6 +20,7 @@ const scanner: Scanner = {
         name: this.name,
         category: this.category,
         status: 'warn',
+        error_type: 'missing',
         message: 'Claude Code CLI 未安装',
         detail: 'Claude Code 是 Anthropic 官方命令行 AI 编程助手。\n\n安装方法:\n  npm install -g @anthropic-ai/claude-code\n  国内镜像: npm install -g @anthropic-ai/claude-code --registry https://registry.npmmirror.com\n\n使用: claude\n首次运行需要登录 Anthropic 账号或配置 API Key',
       };

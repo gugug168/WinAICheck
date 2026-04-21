@@ -20,6 +20,7 @@ const scanner: Scanner = {
         name: this.name,
         category: this.category,
         status: 'warn',
+        error_type: 'missing',
         message: 'OpenClaw 未安装（可选）',
         detail: 'OpenClaw 是开源的 Claude Code 替代品，支持 OpenRouter/兼容 API。\n\n安装方法:\n  npm install -g openclaw\n  国内镜像: npm install -g openclaw --registry https://registry.npmmirror.com\n\n使用: openclaw\n需要配置 API Key（支持多种提供商）',
       };

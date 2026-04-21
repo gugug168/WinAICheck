@@ -30,6 +30,7 @@ const scanner: Scanner = {
         name: this.name,
         category: this.category,
         status: 'fail',
+        error_type: 'misconfigured',
         message: 'MCP 配置文件无法解析',
         detail: `文件: ${config.path}\n错误: ${config.error}`,
       };

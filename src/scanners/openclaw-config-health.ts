@@ -36,6 +36,7 @@ const scanner: Scanner = {
         name: this.name,
         category: this.category,
         status: 'fail',
+        error_type: 'misconfigured',
         message: 'OpenClaw 配置文件无法解析',
         detail: `文件: ${config.path}\n错误: ${config.error}`,
       };
@@ -50,6 +51,7 @@ const scanner: Scanner = {
         name: this.name,
         category: this.category,
         status: 'fail',
+        error_type: 'misconfigured',
         message: 'OpenClaw 配置包含明显占位密钥',
         detail: `文件: ${config.path}\n占位字段:\n${placeholders.map(item => item.key).join('\n')}`,
       };

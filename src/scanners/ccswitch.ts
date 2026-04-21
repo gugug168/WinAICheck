@@ -107,6 +107,7 @@ const scanner: Scanner = {
       name: this.name,
       category: this.category,
       status: 'warn',
+      error_type: 'missing',
       message: 'CCSwitch 未安装（可选，多账号管理工具）',
       detail:
         'CCSwitch 是 Claude Code 多账号/API Key 切换工具。分为 CLI 版和 GUI 版。\n\n' +

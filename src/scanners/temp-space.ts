@@ -41,6 +41,7 @@ const scanner: Scanner = {
           status: 'fail',
           message: `${driveLetter}: 盘剩余空间不足 (${freeGB} GB < ${MIN_GB} GB)`,
           detail: `TEMP 目录: ${tempDir}`,
+          error_type: 'resource',
         };
       }
       return {

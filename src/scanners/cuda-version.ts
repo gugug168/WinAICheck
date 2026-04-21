@@ -48,6 +48,7 @@ const scanner: Scanner = {
           status: 'warn',
           message: `驱动支持 CUDA ${cudaMatch[1]}，但 CUDA Toolkit 未安装`,
           detail: 'nvcc 不可用，建议安装 CUDA Toolkit',
+          error_type: 'outdated',
         };
       }
     }

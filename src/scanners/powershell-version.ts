@@ -46,6 +46,7 @@ const scanner: Scanner = {
         name: this.name,
         category: this.category,
         status: 'warn',
+        error_type: 'outdated',
         message: `仅安装了 Windows PowerShell ${ps5Ver}，建议升级到 PowerShell 7`,
         detail: `Windows PowerShell 5.x 是旧版本，缺少以下特性:\n- 并行执行 (ForEach-Object -Parallel)\n- 三元运算符 ($a ? $b : $c)\n- 管道链操作符 (&& 和 ||)\n- null 合并操作符 (??)\n- 更好的性能和跨平台兼容性\n\n安装命令: winget install Microsoft.PowerShell`,
       };
@@ -56,6 +57,7 @@ const scanner: Scanner = {
       name: this.name,
       category: this.category,
       status: 'fail',
+      error_type: 'outdated',
       message: '未检测到 PowerShell',
     };
   },

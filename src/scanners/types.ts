@@ -9,6 +9,18 @@ export type ScannerCategory =
 /** 检测状态 */
 export type ScanStatus = 'pass' | 'fail' | 'warn' | 'unknown';
 
+/** 错误类型分类（标准化二级分类，提升匹配精度） */
+export type ErrorType =
+  | 'missing'        // 工具未安装
+  | 'outdated'       // 版本过旧
+  | 'conflict'       // 版本/配置冲突
+  | 'misconfigured'  // 配置错误
+  | 'incompatible'   // 硬件/驱动不兼容
+  | 'permission'     // 权限不足
+  | 'network'        // 网络问题
+  | 'resource'       // 资源不足（显存/磁盘/内存）
+  | 'unknown';       // 无法判定
+
 /** 单个扫描结果 */
 export interface ScanResult {
   id: string;
@@ -21,6 +33,7 @@ export interface ScanResult {
   path?: string | null;
   fixCommand?: string | null;
   severity?: string | null;
+  error_type?: ErrorType;
 }
 
 /** Scanner 接口 */
