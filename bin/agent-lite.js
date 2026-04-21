@@ -270,6 +270,14 @@ function today(deps = {}) {
   return nowIso(deps).slice(0, 10);
 }
 
+function computeAgentDeviceId(baseDeviceId, agentType) {
+  if (!baseDeviceId) return `device_${crypto.randomUUID()}`;
+  const suffix = agentType === 'claude-code' ? '_cc' : agentType === 'openclaw' ? '_oc' : '';
+  if (!suffix) return baseDeviceId;
+  if (baseDeviceId.endsWith('_cc') || baseDeviceId.endsWith('_oc')) return baseDeviceId;
+  return `${baseDeviceId}${suffix}`;
+}
+
 function loadConfig(deps = {}) {
   const p = paths(deps);
   const hadExisting = fs.existsSync(p.config);
@@ -344,12 +352,14 @@ export function createEvent(input, deps = {}) {
   const eventType = input.eventType || classifyEvent(agent, sanitizedMessage);
   const occurredAt = input.occurredAt || nowIso(deps);
   const fingerprint = input.fingerprint || shortHash(`${agent}\n${eventType}\n${sanitizedMessage.replace(/\d+/g, '<N>')}`);
+  const agentDeviceId = computeAgentDeviceId(config.deviceId, agent);
+
 
   return {
     schemaVersion: 1,
     eventId: input.eventId || `evt_${crypto.randomUUID()}`,
     clientId: config.clientId,
-    deviceId: config.deviceId,
+    deviceId: agentDeviceId,
     source: 'winaicheck-lite',
     agent,
     eventType,
