@@ -13,7 +13,7 @@ import { requestRemoteJson } from './web/remote-json';
 import { getCommunityApiBase, buildCommunityClaimUrl } from './web/community-config';
 import { enableAgentExperience, getAgentLocalStatus, pauseAgentUploads, syncAgentEvents } from './agent/local-state';
 import type { ScoreResult } from './scanners/types';
-import { VERSION } from './constants';
+import { APP_NAME, VERSION } from './constants';
 
 // 导入所有 scanner（触发注册）
 import './scanners/index';

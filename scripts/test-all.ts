@@ -57,6 +57,16 @@ if (targets.length === 0) {
   process.exit(1);
 }
 
+console.log('\n==> Running typecheck');
+const typecheckResult = spawnSync(process.execPath, ['run', 'typecheck'], {
+  cwd: process.cwd(),
+  stdio: 'inherit',
+});
+
+if (typecheckResult.status !== 0) {
+  process.exit(typecheckResult.status ?? 1);
+}
+
 for (const target of targets) {
   console.log(`\n==> Running ${target}`);
   const result = spawnSync(process.execPath, ['test', target], {
