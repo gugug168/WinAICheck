@@ -103,7 +103,9 @@ async function cliMode(wantJson: boolean, wantHtml: boolean) {
       const payload = createPayload(results, score);
       const apiBase = getCommunityApiBase();
       const resp = await stashData(payload, apiBase);
-      console.log(`\n[AICOEVO] 扫描数据已上传，查看方案: ${buildCommunityClaimUrl(resp.token)}`);
+      console.log(
+        `\n[AICOEVO] 扫描数据已上传，查看方案: ${resp.claim_url || buildCommunityClaimUrl(resp.token)}`,
+      );
     } catch (err) {
       // 上传失败不影响本地保存
     }
@@ -272,7 +274,7 @@ async function webMode(port: number) {
       if (url.pathname === '/api/stash' && req.method === 'POST') {
         try {
           const body = await req.json() as { data?: string; fingerprint?: string };
-          const remote = await requestRemoteJson(`${communityApiBase}/stash`, {
+          const remote = await requestRemoteJson(`${communityApiBase}/problem-briefs/scan-intake`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
             body,
