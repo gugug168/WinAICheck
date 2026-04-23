@@ -135,11 +135,13 @@ export function saveLocal(payload: UploadPayload): string {
 /** Stash API 响应 */
 export interface StashResponse {
   token: string;
-  claim_url: string;
-  ttl_seconds: number;
+  claim_url?: string;
+  ttl_seconds?: number;
+  problem_brief_id?: string;
+  evidence_pack_id?: string;
 }
 
-/** 上传扫描数据到 AICOEVO stash API（与 MacAICheck stashData 对齐） */
+/** 上传扫描数据到 AICOEVO scan-intake API（创建 stash + problem brief + evidence pack）。 */
 export async function stashData(payload: UploadPayload, apiBase: string): Promise<StashResponse> {
   const fingerprint = JSON.stringify({
     platform: 'Windows',
@@ -150,7 +152,7 @@ export async function stashData(payload: UploadPayload, apiBase: string): Promis
     failCategories: [...new Set(payload.results.filter(r => r.status === 'fail').map(r => r.category))],
   });
 
-  const resp = await fetch(`${apiBase}/stash`, {
+  const resp = await fetch(`${apiBase}/problem-briefs/scan-intake`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
     body: JSON.stringify({
@@ -160,7 +162,7 @@ export async function stashData(payload: UploadPayload, apiBase: string): Promis
   });
 
   if (!resp.ok) {
-    throw new Error(`stash upload failed: ${resp.status}`);
+    throw new Error(`scan intake upload failed: ${resp.status}`);
   }
 
   return resp.json() as Promise<StashResponse>;
