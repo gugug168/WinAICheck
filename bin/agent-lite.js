@@ -506,6 +506,10 @@ function apiBase() {
   return raw.endsWith('/api/v1') ? raw : `${raw}/api/v1`;
 }
 
+function agentApiBase(version = 'v2') {
+  return apiBase().replace(/\/api\/v1$/, `/api/${version}`) + '/agent';
+}
+
 async function requestJson(url, init = {}, deps = {}) {
   const fetchImpl = deps.fetchImpl || fetch;
   const response = await fetchImpl(url, {
@@ -1583,13 +1587,12 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
     const config = loadConfig(deps);
     const headers = apiKeyHeaders(config);
     if (!headers) { out.write('悬赏命令需要 Agent API Key，请先运行 winaicheck agent bind\n'); return 1; }
-    const origin = config.origin || DEFAULT_ORIGIN;
     const page = args.page || '1';
     const pageSize = args.limit || '10';
     const sortBy = args.sort || 'reward';
     const _fetch = deps.fetchImpl || fetch;
     try {
-      const res = await _fetch(`${origin}/api/v1/agent/bounties?page=${page}&page_size=${pageSize}&sort_by=${sortBy}`, {
+      const res = await _fetch(`${agentApiBase('v2')}/bounties?page=${page}&page_size=${pageSize}&sort_by=${sortBy}`, {
         headers,
       });
       const data = await res.json();
@@ -1602,12 +1605,11 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
     const config = loadConfig(deps);
     const headers = apiKeyHeaders(config);
     if (!headers) { out.write('悬赏命令需要 Agent API Key，请先运行 winaicheck agent bind\n'); return 1; }
-    const origin = config.origin || DEFAULT_ORIGIN;
     const strategy = args.strategy || 'balanced';
     const limit = args.limit || '10';
     const _fetch = deps.fetchImpl || fetch;
     try {
-      const res = await _fetch(`${origin}/api/v1/agent/bounties/recommended?strategy=${strategy}&limit=${limit}`, {
+      const res = await _fetch(`${agentApiBase('v2')}/bounties/recommended?strategy=${strategy}&limit=${limit}`, {
         headers,
       });
       const data = await res.json();
@@ -1623,10 +1625,9 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
     if (!auth) { out.write('悬赏命令需要 Agent API Key，请先运行 winaicheck agent bind\n'); return 1; }
     const id = args._[0];
     if (!id) { out.write('用法: winaicheck agent bounty-solve <id>\n'); return 1; }
-    const origin = config.origin || DEFAULT_ORIGIN;
     const _fetch = deps.fetchImpl || fetch;
     try {
-      const res = await _fetch(`${origin}/api/v1/agent/bounties/${id}/auto-solve`, {
+      const res = await _fetch(`${agentApiBase('v1')}/bounties/${id}/auto-solve`, {
         method: 'POST',
         headers: { ...auth, 'Content-Type': 'application/json' },
       });
@@ -1644,17 +1645,19 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
     if (!auth) { out.write('悬赏命令需要 Agent API Key，请先运行 winaicheck agent bind\n'); return 1; }
     const id = args._[0];
     if (!id) { out.write('用法: winaicheck agent bounty-claim <id>\n'); return 1; }
-    const origin = config.origin || DEFAULT_ORIGIN;
+    const envId = String(args.env || '').trim();
     const _fetch = deps.fetchImpl || fetch;
     try {
-      const res = await _fetch(`${origin}/api/v1/agent/bounties/${id}/claim`, {
+      const res = await _fetch(`${agentApiBase('v2')}/bounties/${id}/claim`, {
         method: 'POST',
         headers: { ...auth, 'Content-Type': 'application/json' },
+        body: JSON.stringify(envId ? { env_id: envId } : {}),
       });
       const data = await res.json();
       if (!res.ok) { out.write(`认领失败: ${data.detail || JSON.stringify(data)}\n`); return 1; }
-      out.write(`✓ 认领成功 ${data.bounty_id} (锁定 ${data.lock_minutes} 分钟)\n`);
+      out.write(`✓ 认领成功 ${data.bounty_id} (lease ${data.lease_id})\n`);
       out.write(`  截止: ${data.claimed_until}\n`);
+      if (data.slot_limit) out.write(`  并行槽位: ${data.slot_limit}\n`);
     } catch (e) { out.write(`认领失败: ${e.message}\n`); return 1; }
     return 0;
   }
@@ -1667,13 +1670,17 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
     const id = args._[0];
     const content = args.content;
     if (!id || !content) { out.write('用法: winaicheck agent bounty-submit <id> --content <text>\n'); return 1; }
-    const origin = config.origin || DEFAULT_ORIGIN;
     const _fetch = deps.fetchImpl || fetch;
     try {
-      const res = await _fetch(`${origin}/api/v1/agent/bounties/${id}/submit`, {
+      const res = await _fetch(`${agentApiBase('v2')}/bounties/${id}/submit`, {
         method: 'POST',
         headers: { ...auth, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content, source: args.source || 'manual' }),
+        body: JSON.stringify({
+          content,
+          source: args.source || 'manual',
+          confidence: Number(args.confidence || 0),
+          execution_mode: args.executionMode || 'agent',
+        }),
       });
       const data = await res.json();
       if (!res.ok) { out.write(`提交失败: ${data.detail || JSON.stringify(data)}\n`); return 1; }
@@ -1689,10 +1696,9 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
     if (!headers) { out.write('悬赏命令需要 Agent API Key，请先运行 winaicheck agent bind\n'); return 1; }
     const id = args._[0];
     if (!id) { out.write('用法: winaicheck agent bounty-release <id>\n'); return 1; }
-    const origin = config.origin || DEFAULT_ORIGIN;
     const _fetch = deps.fetchImpl || fetch;
     try {
-      const res = await _fetch(`${origin}/api/v1/agent/bounties/${id}/claim`, {
+      const res = await _fetch(`${agentApiBase('v2')}/bounties/${id}/claim`, {
         method: 'DELETE',
         headers,
       });
@@ -1710,7 +1716,6 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
     if (!apiKey) { out.write('悬赏命令需要 Agent API Key，请先运行 winaicheck agent bind\n'); return 1; }
     const interval = parseInt(args.interval || '300', 10);
     const maxPerCycle = parseInt(args.limit || '3', 10);
-    const origin = config.origin || DEFAULT_ORIGIN;
     const _fetch = deps.fetchImpl || fetch;
     const headers = { ...apiKey, 'Content-Type': 'application/json' };
     const strategy = args.strategy || 'balanced';
@@ -1723,12 +1728,12 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
       cycle++;
       try {
         // 1. 心跳
-        await _fetch(`${origin}/api/v1/agent/heartbeat`, {
+        await _fetch(`${agentApiBase('v2')}/heartbeat`, {
           method: 'POST', headers, body: JSON.stringify({ status: 'idle', current_tasks: 0 }),
         });
 
         // 2. 拉取推荐悬赏
-        const recRes = await _fetch(`${origin}/api/v1/agent/bounties/recommended?strategy=${strategy}&limit=${maxPerCycle}`, { headers });
+        const recRes = await _fetch(`${agentApiBase('v2')}/bounties/recommended?strategy=${strategy}&limit=${maxPerCycle}`, { headers });
         const recData = await recRes.json();
         const items = recData.items || [];
 
@@ -1740,7 +1745,7 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
 
           for (const item of items) {
             // 3. KB 匹配
-            const solveRes = await _fetch(`${origin}/api/v1/agent/bounties/${item.id}/auto-solve`, {
+            const solveRes = await _fetch(`${agentApiBase('v1')}/bounties/${item.id}/auto-solve`, {
               method: 'POST', headers,
             });
             const solveData = await solveRes.json();
@@ -1751,10 +1756,15 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
             }
 
             // 4. Delayed claim + submit
-            const submitRes = await _fetch(`${origin}/api/v1/agent/bounties/${item.id}/claim-and-submit`, {
+            const submitRes = await _fetch(`${agentApiBase('v2')}/bounties/${item.id}/claim-and-submit`, {
               method: 'POST',
               headers,
-              body: JSON.stringify({ content: solveData.answer, source: 'kb_auto', confidence: solveData.confidence || 0.8 }),
+              body: JSON.stringify({
+                content: solveData.answer,
+                source: 'kb_auto',
+                confidence: solveData.confidence || 0.8,
+                execution_mode: 'agent',
+              }),
             });
 
             if (submitRes.ok) {
@@ -1779,6 +1789,51 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
     }
   }
 
+  if (command === 'review-list') {
+    const config = loadConfig(deps);
+    const headers = apiKeyHeaders(config);
+    if (!headers) { out.write('评审命令需要 Agent API Key，请先运行 winaicheck agent bind\n'); return 1; }
+    const _fetch = deps.fetchImpl || fetch;
+    try {
+      const res = await _fetch(`${agentApiBase('v2')}/reviews/recommended`, { headers });
+      const data = await res.json();
+      out.write(`${JSON.stringify(data, null, 2)}\n`);
+    } catch (e) { out.write(`获取评审任务失败: ${e.message}\n`); return 1; }
+    return 0;
+  }
+
+  if (command === 'review-submit') {
+    const config = loadConfig(deps);
+    const headers = apiKeyHeaders(config);
+    if (!headers) { out.write('评审命令需要 Agent API Key，请先运行 winaicheck agent bind\n'); return 1; }
+    const leaseId = args._[0];
+    const resultValue = String(args.result || '');
+    if (!leaseId || !/^(success|partial|failed)$/.test(resultValue)) {
+      out.write('用法: winaicheck agent review-submit <lease_id> --result success|partial|failed\n');
+      return 1;
+    }
+    const _fetch = deps.fetchImpl || fetch;
+    try {
+      const res = await _fetch(`${agentApiBase('v2')}/reviews/${leaseId}/submit`, {
+        method: 'POST',
+        headers: { ...headers, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          result: resultValue,
+          method: args.method || 'semantic',
+          notes: args.notes || '',
+          confidence: Number(args.confidence || 0),
+          review_score: Number(args.reviewScore || 0),
+          review_summary: args.summary || '',
+          execution_mode: args.executionMode || 'agent',
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) { out.write(`提交评审失败: ${data.detail || JSON.stringify(data)}\n`); return 1; }
+      out.write(`✓ 评审已提交 ${leaseId}\n`);
+    } catch (e) { out.write(`提交评审失败: ${e.message}\n`); return 1; }
+    return 0;
+  }
+
   throw new Error(`未知 agent 命令: ${command}`);
 }
 
@@ -1801,6 +1856,7 @@ export const _testHelpers = {
   updateDaily,
   lookupExperience,
   apiKeyHeaders,
+  agentApiBase,
 };
 
 let isDirectExecution = false;
