@@ -510,6 +510,19 @@ function agentApiBase(version = 'v2') {
   return apiBase().replace(/\/api\/v1$/, `/api/${version}`) + '/agent';
 }
 
+async function heartbeatAgentV2(headers, init = {}, deps = {}) {
+  return requestJson(`${agentApiBase('v2')}/heartbeat`, {
+    method: 'POST',
+    headers,
+    body: {
+      status: 'idle',
+      current_tasks: 0,
+      max_parallel_tasks: 1,
+      ...(init.body || {}),
+    },
+  }, deps);
+}
+
 async function requestJson(url, init = {}, deps = {}) {
   const fetchImpl = deps.fetchImpl || fetch;
   const response = await fetchImpl(url, {
@@ -1592,7 +1605,7 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
     const sortBy = args.sort || 'reward';
     const _fetch = deps.fetchImpl || fetch;
     try {
-      const res = await _fetch(`${agentApiBase('v2')}/bounties?page=${page}&page_size=${pageSize}&sort_by=${sortBy}`, {
+      const res = await _fetch(`${agentApiBase('v1')}/bounties?page=${page}&page_size=${pageSize}&sort_by=${sortBy}`, {
         headers,
       });
       const data = await res.json();
@@ -1607,13 +1620,16 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
     if (!headers) { out.write('悬赏命令需要 Agent API Key，请先运行 winaicheck agent bind\n'); return 1; }
     const strategy = args.strategy || 'balanced';
     const limit = args.limit || '10';
-    const _fetch = deps.fetchImpl || fetch;
     try {
-      const res = await _fetch(`${agentApiBase('v2')}/bounties/recommended?strategy=${strategy}&limit=${limit}`, {
-        headers,
-      });
-      const data = await res.json();
-      out.write(`${JSON.stringify(data, null, 2)}\n`);
+      const result = await heartbeatAgentV2(headers, {
+        body: { max_parallel_tasks: Number(args.maxParallelTasks || 1) },
+      }, deps);
+      const data = result.data || {};
+      out.write(`${JSON.stringify({
+        items: (data.recommended_bounties || []).slice(0, Number(limit)),
+        total: Array.isArray(data.recommended_bounties) ? data.recommended_bounties.length : 0,
+        strategy,
+      }, null, 2)}\n`);
     } catch (e) { out.write(`获取推荐悬赏失败: ${e.message}\n`); return 1; }
     return 0;
   }
@@ -1648,6 +1664,10 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
     const envId = String(args.env || '').trim();
     const _fetch = deps.fetchImpl || fetch;
     try {
+      const heartbeat = await heartbeatAgentV2(auth, {
+        body: { available_env_ids: envId ? [envId] : [] },
+      }, deps);
+      if (heartbeat.status >= 400) { out.write(`心跳失败: ${JSON.stringify(heartbeat.data)}\n`); return 1; }
       const res = await _fetch(`${agentApiBase('v2')}/bounties/${id}/claim`, {
         method: 'POST',
         headers: { ...auth, 'Content-Type': 'application/json' },
@@ -1728,14 +1748,11 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
       cycle++;
       try {
         // 1. 心跳
-        await _fetch(`${agentApiBase('v2')}/heartbeat`, {
-          method: 'POST', headers, body: JSON.stringify({ status: 'idle', current_tasks: 0 }),
-        });
-
-        // 2. 拉取推荐悬赏
-        const recRes = await _fetch(`${agentApiBase('v2')}/bounties/recommended?strategy=${strategy}&limit=${maxPerCycle}`, { headers });
-        const recData = await recRes.json();
-        const items = recData.items || [];
+        const heartbeat = await heartbeatAgentV2(headers, {
+          body: { max_parallel_tasks: maxPerCycle },
+        }, deps);
+        const recData = heartbeat.data || {};
+        const items = (recData.recommended_bounties || []).slice(0, maxPerCycle);
 
         if (items.length === 0) {
           out.write(`[${cycle}] 无推荐悬赏\n`);
