@@ -8,6 +8,24 @@ WinAICheck is a Windows AI development environment diagnostic and repair tool. I
 
 Built with **Bun + TypeScript**. Distributed as a single `.exe` or via npm (`npx winaicheck`). npm 入口智能检测：有 Bun + 源码存在时直接运行源码，节省下载时间；无 Bun 时下载 exe。可选安装 agent 插件：`npx winaicheck-agent`。
 
+## Three-Repo Ecosystem
+
+WinAICheck 是三端生态的 Windows 客户端：
+
+| 仓库 | 平台 | 技术栈 | GitHub |
+|------|------|--------|--------|
+| **WinAICheck** | Windows | Bun + TypeScript (.exe) | `gugug168/WinAICheck` |
+| MacAICheck | macOS | Node + TypeScript (CLI) | `gugug168/mac-aicheck` |
+| aicoevo-platform | 服务端 | FastAPI + Next.js + SQLite | `gugug168/aicoevo-platform` |
+
+**API 契约**: 见 aicoevo-platform 的 `docs/API_CONTRACT.md`，包含 scan-intake 请求/响应规范、认证方式、数据类型定义。
+
+**关键同步规则**:
+- 修改 `src/privacy/uploader.ts` 中的上传逻辑 → 同步检查 MacAICheck 的 `src/api/aicoevo-client.ts`
+- 修改扫描结果结构（`ScanResult` 类型）→ 三端同步更新
+- 修改上传端点路径 → aicoevo-platform 的路由也要同步
+- 新增扫描器分类 → 同步更新 `web/src/lib/types.ts` 的 `CATEGORY_LABELS`
+
 ## Commands
 
 ```bash
@@ -61,7 +79,7 @@ Single-page app served by `Bun.serve`. SSE streams real-time scan progress. API 
 ### Privacy & Upload (`src/privacy/`)
 
 `src/privacy/sanitizer.ts` strips API keys, tokens, usernames, IPs, emails before upload.
-`src/privacy/uploader.ts` handles stash/claim flow: POST to `/api/v1/stash` → get token → open browser to `aicoevo.net/claim?t=TOKEN`. Upload consent stored in `~/.aicoevo/config.json`.
+`src/privacy/uploader.ts` handles scan-intake flow: POST to `/api/v1/problem-briefs/scan-intake` → get token + claim_url → open browser to claim_url. Fallback to legacy `/api/v1/stash` for older servers. Upload consent stored in `~/.aicoevo/config.json`.
 
 ### Command Executor (`src/executor/`)
 
