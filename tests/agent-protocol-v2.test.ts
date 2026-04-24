@@ -30,7 +30,7 @@ describe('agent protocol v2', () => {
     }
   });
 
-  test('bounty-claim uses v2 route and sends an empty JSON body by default', async () => {
+  test('bounty-recommended reads v2 recommendations from heartbeat', async () => {
     const root = createTempRoot();
     roots.push(root);
     const p = _testHelpers.paths({ baseDir: root });
@@ -45,13 +45,59 @@ describe('agent protocol v2', () => {
 
     let request = null;
     const io = createIo();
-    const code = await agentMain(['bounty-claim', 'bounty_1'], {
+    const code = await agentMain(['bounty-recommended', '--limit', '1'], {
       baseDir: root,
       fetchImpl: async (url, init) => {
         request = { url, body: init?.body ? String(init.body) : undefined };
         return {
+          status: 200,
           ok: true,
           json: async () => ({
+            recommended_bounties: [{ id: 'bounty_1' }, { id: 'bounty_2' }],
+          }),
+          text: async () => JSON.stringify({
+            recommended_bounties: [{ id: 'bounty_1' }, { id: 'bounty_2' }],
+          }),
+        };
+      },
+    }, io.io);
+
+    expect(code).toBe(0);
+    expect(request.url).toBe('https://aicoevo.net/api/v2/agent/heartbeat');
+    expect(request.body).toContain('"status":"idle"');
+    expect(io.output).toContain('"id": "bounty_1"');
+    expect(io.output).not.toContain('"id": "bounty_2"');
+  });
+
+  test('bounty-claim heartbeats first, then uses the v2 claim route', async () => {
+    const root = createTempRoot();
+    roots.push(root);
+    const p = _testHelpers.paths({ baseDir: root });
+    _testHelpers.writeJson(p.config, {
+      clientId: 'client-test',
+      deviceId: 'device-test',
+      shareData: true,
+      autoSync: true,
+      paused: false,
+      authToken: 'ak_test_123',
+    });
+
+    const requests = [];
+    const io = createIo();
+    const code = await agentMain(['bounty-claim', 'bounty_1'], {
+      baseDir: root,
+      fetchImpl: async (url, init) => {
+        requests.push({ url, body: init?.body ? String(init.body) : undefined });
+        return {
+          status: 200,
+          ok: true,
+          json: async () => ({
+            bounty_id: 'bounty_1',
+            lease_id: 'lease_1',
+            claimed_until: '2026-04-24T12:00:00Z',
+            slot_limit: 2,
+          }),
+          text: async () => JSON.stringify({
             bounty_id: 'bounty_1',
             lease_id: 'lease_1',
             claimed_until: '2026-04-24T12:00:00Z',
@@ -62,10 +108,12 @@ describe('agent protocol v2', () => {
     }, io.io);
 
     expect(code).toBe(0);
-    expect(request).toEqual({
-      url: 'https://aicoevo.net/api/v2/agent/bounties/bounty_1/claim',
-      body: '{}',
-    });
+    expect(requests.map(item => item.url)).toEqual([
+      'https://aicoevo.net/api/v2/agent/heartbeat',
+      'https://aicoevo.net/api/v2/agent/bounties/bounty_1/claim',
+    ]);
+    expect(requests[0].body).toContain('"status":"idle"');
+    expect(requests[1].body).toBe('{}');
     expect(io.output).toContain('lease_1');
   });
 
