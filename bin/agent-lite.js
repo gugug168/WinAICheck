@@ -935,6 +935,87 @@ function writeAdvice(advice, deps = {}) {
   return normalized;
 }
 
+function ownerVerifyFiles(bountyId, answerId, deps = {}) {
+  const p = paths(deps);
+  const slug = [bountyId || 'unknown', answerId || 'unknown']
+    .map(value => String(value || '').replace(/[^a-zA-Z0-9_-]+/g, '-'))
+    .join('__');
+  const dir = path.join(p.base, 'owner-verify');
+  return {
+    dir,
+    guideMd: path.join(dir, `${slug}.md`),
+    snapshotJson: path.join(dir, `${slug}.json`),
+  };
+}
+
+function ownerVerifyLocalContext(config = {}) {
+  return {
+    clientId: config.clientId || '',
+    deviceId: config.deviceId || '',
+    autoSync: config.autoSync !== false,
+    paused: !!config.paused,
+    shareData: config.shareData !== false,
+    host: os.hostname(),
+    platform: process.platform,
+    nodeVersion: process.version,
+  };
+}
+
+function writeOwnerVerifyGuide(item, config = {}, deps = {}) {
+  const files = ownerVerifyFiles(item.bounty_id, item.answer_id, deps);
+  const generatedAt = nowIso(deps);
+  const localContext = ownerVerifyLocalContext(config);
+  const verifyCommand = `winaicheck agent owner-verify ${item.bounty_id} --answer ${item.answer_id} --result success|partial|failed --cmd "<local validation command>"`;
+  const lines = [
+    '# AICOEVO 发起者复现指南',
+    '',
+    `- Bounty: ${item.bounty_id}`,
+    `- Answer: ${item.answer_id}`,
+    `- 标题: ${item.title || '(无标题)'}`,
+    `- 提交时间: ${item.submitted_at || '-'}`,
+    `- 截止时间: ${item.deadline_at || '-'}`,
+    '',
+    '## 方案摘要',
+    '',
+    item.solution_summary || '暂无方案摘要。',
+    '',
+    '## 建议操作',
+    '',
+    '1. 在你自己的本地环境里手动复现原问题。',
+    '2. 按方案摘要执行修复或验证命令，确认现象是否消失。',
+    '3. 记录你实际执行过的命令和结果，再提交 owner-verify。',
+    '',
+    '## 提交命令',
+    '',
+    `\`${verifyCommand}\``,
+    '',
+    '默认策略为 prompt：命令会再次要求你确认，不会静默替你提交。',
+    '',
+  ];
+  ensureParent(files.guideMd);
+  fs.writeFileSync(files.guideMd, `${lines.join('\n')}\n`, 'utf8');
+  const snapshot = {
+    schemaVersion: 1,
+    generatedAt,
+    item,
+    localContext,
+    verifyCommand,
+  };
+  writeJson(files.snapshotJson, snapshot);
+  return {
+    ...files,
+    guideSha256: sha256(fs.readFileSync(files.guideMd, 'utf8')),
+    snapshot,
+  };
+}
+
+function loadOwnerVerifySnapshot(bountyId, answerId, deps = {}) {
+  const files = ownerVerifyFiles(bountyId, answerId, deps);
+  const snapshot = readJson(files.snapshotJson, null);
+  const guideSha256 = fs.existsSync(files.guideMd) ? sha256(fs.readFileSync(files.guideMd, 'utf8')) : '';
+  return { ...files, guideSha256, snapshot };
+}
+
 function printHelp(io = {}) {
   const out = io.stdout || process.stdout;
   out.write(`WinAICheck Agent Lite\n\n` +
@@ -965,7 +1046,10 @@ function printHelp(io = {}) {
     `  winaicheck agent bounty-claim <id>                       — 认领悬赏\n` +
     `  winaicheck agent bounty-submit <id> --content <text>     — 提交回答\n` +
     `  winaicheck agent bounty-release <id>                     — 释放认领\n` +
-    `  winaicheck agent bounty-auto [--interval 300]            — 自动循环: 推荐→KB匹配→提交\n`);
+    `  winaicheck agent bounty-auto [--interval 300]            — 自动循环: 推荐→KB匹配→提交\n` +
+    `  winaicheck agent owner-check                             — 查看待复现确认的方案列表\n` +
+    `  winaicheck agent owner-verify <bounty_id> --answer <id> --result success|partial|failed\n` +
+    `                                                            — 提交复现验证结果\n`);
 }
 
 function selectResolvedCommand(matches, command, platform = process.platform) {
@@ -3053,6 +3137,143 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
       out.write(`等待 ${interval}s...\n`);
       await new Promise(r => setTimeout(r, interval * 1000));
     }
+  }
+
+  // ── TASK-100: 发起者复现循环 ──
+
+  if (command === 'owner-check') {
+    const config = loadConfig(deps);
+    const headers = apiKeyHeaders(config);
+    if (!headers) { out.write('需要 Agent API Key，请先运行 winaicheck agent bind\n'); return 1; }
+    const _fetch = deps.fetchImpl || fetch;
+    try {
+      const res = await requestJson(`${agentApiBase('v2')}/status`, { headers }, { fetchImpl: _fetch });
+      if (res.status !== 200) { out.write(`获取状态失败: ${res.status}\n`); return 1; }
+      const data = res.data;
+      const pending = data.pending_owner_verifications || [];
+      if (pending.length === 0) {
+        out.write('没有待复现确认的方案。\n');
+        return 0;
+      }
+      out.write(`待复现确认 (${pending.length}):\n\n`);
+      for (const item of pending) {
+        const guide = writeOwnerVerifyGuide(item, config, deps);
+        out.write(`## ${item.title || '(无标题)'}\n`);
+        out.write(`  Bounty:   ${item.bounty_id}\n`);
+        out.write(`  Answer:   ${item.answer_id}\n`);
+        out.write(`  方案摘要: ${item.solution_summary}\n`);
+        out.write(`  提交时间: ${item.submitted_at}\n`);
+        out.write(`  截止时间: ${item.deadline_at}\n\n`);
+        out.write(`  指南:     ${guide.guideMd}\n`);
+        out.write(`  快照:     ${guide.snapshotJson}\n\n`);
+        out.write(`  → winaicheck agent owner-verify ${item.bounty_id} --answer ${item.answer_id} --result success|partial|failed\n\n`);
+      }
+    } catch (e) { out.write(`获取待复现列表失败: ${e.message}\n`); return 1; }
+    return 0;
+  }
+
+  if (command === 'owner-verify') {
+    const config = loadConfig(deps);
+    const headers = apiKeyHeaders(config);
+    if (!headers) { out.write('需要 Agent API Key，请先运行 winaicheck agent bind\n'); return 1; }
+    const _fetch = deps.fetchImpl || fetch;
+    const bountyId = args._[0];
+    const answerId = String(args.answer || '');
+    const resultValue = String(args.result || '');
+    if (!bountyId || !answerId || !/^(success|partial|failed)$/.test(resultValue)) {
+      out.write('用法: winaicheck agent owner-verify <bounty_id> --answer <id> --result success|partial|failed\n');
+      out.write('       [--notes <text>] [--cmd <cmd1,cmd2>]\n');
+      return 1;
+    }
+    const notes = String(args.notes || '');
+    const commandsRun = args.cmd ? String(args.cmd).split(',').map(s => s.trim()).filter(Boolean) : [];
+    const fallbackItem = {
+      bounty_id: bountyId,
+      answer_id: answerId,
+      title: '待确认方案',
+      solution_summary: notes || '请在本地环境确认问题是否已消失。',
+      submitted_at: '',
+      deadline_at: '',
+    };
+    let guideRecord = loadOwnerVerifySnapshot(bountyId, answerId, deps);
+    if (!guideRecord.snapshot) {
+      guideRecord = writeOwnerVerifyGuide(fallbackItem, config, deps);
+    }
+
+    // prompt 策略: 默认必须提示用户确认
+    const skipPrompt = args.yes === true || args.yes === 'true';
+    if (!skipPrompt) {
+      out.write(`\n即将提交复现验证:\n`);
+      out.write(`  Bounty: ${bountyId}\n`);
+      out.write(`  Answer: ${answerId}\n`);
+      out.write(`  Result: ${resultValue}\n`);
+      out.write(`\n请确认您已在本地环境验证该方案。输入 yes 继续: `);
+      const readline = await import('readline');
+      const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+      const confirm = await new Promise(resolve => rl.question('', ans => { rl.close(); resolve(ans.trim().toLowerCase()); }));
+      if (confirm !== 'yes' && confirm !== 'y') {
+        out.write('已取消。\n');
+        return 0;
+      }
+    }
+
+    try {
+      const submittedAt = nowIso(deps);
+      const afterContext = {
+        submitted_at: submittedAt,
+        confirmation_mode: skipPrompt ? 'flag_yes' : 'interactive_prompt',
+        result: resultValue,
+        notes,
+        commands_run: commandsRun,
+        local_context: ownerVerifyLocalContext(config),
+      };
+      const res = await requestJson(`${agentApiBase('v2')}/bounties/${bountyId}/owner-verify`, {
+        method: 'POST',
+        headers,
+        body: {
+          answer_id: answerId,
+          result: resultValue,
+          notes,
+          commands_run: commandsRun,
+          proof_payload: {
+            summary: `Owner verification for ${bountyId}/${answerId}`,
+            steps: [
+              `读取本地指南: ${guideRecord.guideMd}`,
+              commandsRun.length
+                ? `本地执行验证命令: ${commandsRun.join(' ; ')}`
+                : '按本地指南手动确认问题是否消失。',
+              `用户确认结果: ${resultValue}`,
+            ],
+            before_context: guideRecord.snapshot || {},
+            after_context: afterContext,
+            validation_cmd: commandsRun[0] || '',
+            expected_output:
+              resultValue === 'success'
+                ? '问题已消失或行为符合预期'
+                : resultValue === 'partial'
+                  ? '问题部分缓解，但仍有残留'
+                  : '问题仍然可复现',
+          },
+          artifacts: {
+            owner_reproduction_guide_path: guideRecord.guideMd,
+            owner_reproduction_snapshot_path: guideRecord.snapshotJson,
+            owner_reproduction_guide_sha256: guideRecord.guideSha256,
+            owner_reproduction_snapshot_generated_at: guideRecord.snapshot?.generatedAt || '',
+          },
+        },
+      }, { fetchImpl: _fetch });
+      if (res.status !== 200) {
+        out.write(`提交失败 (${res.status}): ${JSON.stringify(res.data)}\n`);
+        return 1;
+      }
+      const data = res.data;
+      out.write(`复现验证已提交:\n`);
+      out.write(`  状态: ${data.review_status || 'unknown'}\n`);
+      out.write(`  Owner 分数: ${data.owner_score ?? '-'}\n`);
+      out.write(`  社区分数: ${data.community_score ?? '-'}\n`);
+      out.write(`  总分: ${data.total_score ?? '-'} / ${data.threshold ?? 70}\n`);
+    } catch (e) { out.write(`提交复现验证失败: ${e.message}\n`); return 1; }
+    return 0;
   }
 
   if (command === 'review-list') {
