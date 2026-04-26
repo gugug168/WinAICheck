@@ -1,6 +1,7 @@
 import type { ScanResult, ScoreResult } from '../scanners/types';
 import { sanitize } from './sanitizer.js';
 import { collectSystemInfo, type SystemInfo } from '../scanners/system-info.js';
+import { VERSION } from '../constants.js';
 import { existsSync, mkdirSync, writeFileSync, readdirSync, readFileSync, unlinkSync, statSync as fs_statSync } from 'fs';
 import { join } from 'path';
 import { homedir, tmpdir } from 'os';
@@ -145,7 +146,7 @@ export interface StashResponse {
 export async function stashData(payload: UploadPayload, apiBase: string): Promise<StashResponse> {
   const fingerprint = JSON.stringify({
     platform: 'Windows',
-    userAgent: `WinAICheck/${process.version}`,
+    userAgent: `WinAICheck/${VERSION}`,
     system: payload.systemInfo,
     score: payload.score,
     failCount: payload.results.filter(r => r.status === 'fail').length,

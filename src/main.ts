@@ -11,7 +11,16 @@ import { join } from 'path';
 import { execSync } from 'child_process';
 import { requestRemoteJson } from './web/remote-json';
 import { getCommunityApiBase, buildCommunityClaimUrl } from './web/community-config';
-import { enableAgentExperience, getAgentLocalStatus, pauseAgentUploads, syncAgentEvents } from './agent/local-state';
+import {
+  enableAgentExperience,
+  getAgentLocalStatus,
+  pauseAgentUploads,
+  runAgentLoopOnce,
+  setAgentStrategy,
+  startAgentLoop,
+  stopAgentLoop,
+  syncAgentEvents,
+} from './agent/local-state';
 import type { ScoreResult } from './scanners/types';
 import { APP_NAME, VERSION } from './constants';
 
@@ -359,6 +368,42 @@ async function webMode(port: number) {
       if (url.pathname === '/api/agent/sync' && req.method === 'POST') {
         try {
           return Response.json(syncAgentEvents());
+        } catch (e: any) {
+          return Response.json({ ok: false, error: e.message }, { status: 500 });
+        }
+      }
+
+      if (url.pathname === '/api/agent/loop/start' && req.method === 'POST') {
+        try {
+          return Response.json(startAgentLoop());
+        } catch (e: any) {
+          return Response.json({ ok: false, error: e.message }, { status: 500 });
+        }
+      }
+
+      if (url.pathname === '/api/agent/loop/stop' && req.method === 'POST') {
+        try {
+          return Response.json(stopAgentLoop());
+        } catch (e: any) {
+          return Response.json({ ok: false, error: e.message }, { status: 500 });
+        }
+      }
+
+      if (url.pathname === '/api/agent/loop/run-once' && req.method === 'POST') {
+        try {
+          return Response.json(runAgentLoopOnce());
+        } catch (e: any) {
+          return Response.json({ ok: false, error: e.message }, { status: 500 });
+        }
+      }
+
+      if (url.pathname === '/api/agent/strategy' && req.method === 'POST') {
+        try {
+          const body = await req.json().catch(() => ({})) as { strategy?: string };
+          if (!body.strategy) {
+            return Response.json({ ok: false, error: '缺少 strategy' }, { status: 400 });
+          }
+          return Response.json(setAgentStrategy(body.strategy));
         } catch (e: any) {
           return Response.json({ ok: false, error: e.message }, { status: 500 });
         }

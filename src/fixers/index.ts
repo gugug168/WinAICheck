@@ -311,6 +311,24 @@ function runPreflight(scannerId: string): string | null {
   return null;
 }
 
+const DEFERRED_VERIFICATION_SCANNERS = new Set([
+  'git',
+  'node-version',
+  'package-managers',
+  'unix-commands',
+  'wsl-version',
+  'git-path',
+  'uv-package-manager',
+  'claude-cli',
+  'openclaw',
+  'ccswitch',
+  'powershell-version',
+]);
+
+function shouldDeferVerification(scannerId: string): boolean {
+  return DEFERRED_VERIFICATION_SCANNERS.has(scannerId);
+}
+
 /** 三阶段执行修复：preflight → backup → execute → verify，失败时 rollback */
 export async function executeFix(fix: FixSuggestion): Promise<FixResult> {
   const fixer = getFixerByScannerIdLocal(fix.scannerId);
@@ -365,6 +383,25 @@ export async function executeFix(fix: FixSuggestion): Promise<FixResult> {
     if (guidance && guidance.verifyCommands) {
       result.postFixGuidance = guidance;
       result.message += `\n\n手动验证:\n${guidance.verifyCommands.map(c => `  > ${c}`).join('\n')}`;
+    }
+    return result;
+  }
+
+  if (shouldDeferVerification(fix.scannerId)) {
+    result.verified = false;
+    const guidance = generatePostFixGuidance(fix.scannerId, fix.tier);
+    if (guidance) {
+      result.postFixGuidance = guidance;
+      const deferredText = guidance.needsReboot
+        ? '该修复需要重启电脑后再重新检测，当前进程内无法准确验证。'
+        : '该修复需要重新打开终端后再重新检测，当前进程内无法准确验证。';
+      if (!result.message.includes(deferredText)) {
+        result.message += `\n\n${deferredText}`;
+      }
+      const guidanceText = formatPostFixGuidance(guidance);
+      if (guidanceText && !result.message.includes(guidanceText)) {
+        result.message += `\n\n${guidanceText}`;
+      }
     }
     return result;
   }
@@ -718,9 +755,9 @@ registerFixerLocal({
       id: 'fix-node-version',
       scannerId: 'node-version',
       tier: 'yellow',
-      description: '推荐使用 nvm-windows 管理 Node.js 版本',
-      commands: ['winget install CoreyButler.NVMforWindows'],
-      risk: '中风险：将安装 nvm-windows',
+      description: '安装或升级 Node.js LTS',
+      commands: ['winget install OpenJS.NodeJS.LTS --accept-package-agreements --accept-source-agreements'],
+      risk: '中风险：将安装或升级 Node.js LTS',
     };
   },
   async backup(): Promise<BackupData> {
@@ -729,7 +766,12 @@ registerFixerLocal({
   },
   async execute(fix: FixSuggestion, _backup: BackupData): Promise<FixResult> {
     const r = runCommand(fix.commands![0], 60000);
-    return { success: r.exitCode === 0, message: r.exitCode === 0 ? 'nvm-windows 安装成功' : commandFailedMessage(r, 'nvm-windows 安装') };
+    return { success: r.exitCode === 0, message: r.exitCode === 0 ? 'Node.js LTS 安装/升级成功' : commandFailedMessage(r, 'Node.js LTS 安装') };
+  },
+  async rollback(backup: BackupData): Promise<void> {
+    if (backup.data.nodeVersion === 'not-installed') {
+      runCommand('winget uninstall OpenJS.NodeJS.LTS', 30000);
+    }
   },
 });
 
@@ -1024,9 +1066,8 @@ registerFixerLocal({
       id: 'fix-package-managers',
       scannerId: 'package-managers',
       tier: 'yellow',
-      description: '安装缺失的包管理器',
-      commands: ['winget install Bun.HBun --accept-package-agreements'],
-      risk: '中风险：将安装 Bun 包管理器',
+      description: '安装缺失的核心包管理器（pip / npm / bun）',
+      risk: '中风险：将安装缺失的包管理器',
     };
   },
   async backup(): Promise<BackupData> {
@@ -1037,11 +1078,72 @@ registerFixerLocal({
     }
     return { scannerId: 'package-managers', timestamp: Date.now(), data };
   },
-  async execute(fix: FixSuggestion, _backup: BackupData): Promise<FixResult> {
-    return simpleExecute(fix, _backup);
+  async execute(_fix: FixSuggestion, _backup: BackupData): Promise<FixResult> {
+    const installPlans = [
+      {
+        name: 'Python',
+        cmd: 'where.exe pip',
+        install: 'winget install Python.Python.3.12 --accept-package-agreements --accept-source-agreements',
+      },
+      {
+        name: 'Node.js',
+        cmd: 'where.exe npm',
+        install: 'winget install OpenJS.NodeJS.LTS --accept-package-agreements --accept-source-agreements',
+      },
+      {
+        name: 'Bun',
+        cmd: 'where.exe bun',
+        install: 'winget install Bun.HBun --accept-package-agreements --accept-source-agreements',
+      },
+    ];
+
+    const installedNow: string[] = [];
+    const alreadyPresent: string[] = [];
+    const failures: string[] = [];
+
+    for (const plan of installPlans) {
+      if (runCommand(plan.cmd, 3000).exitCode === 0) {
+        alreadyPresent.push(plan.name);
+        continue;
+      }
+      const result = runCommand(plan.install, 120000);
+      if (result.exitCode === 0) {
+        installedNow.push(plan.name);
+      } else {
+        failures.push(`${plan.name}: ${commandFailedMessage(result, '安装')}`);
+      }
+    }
+
+    if (failures.length > 0) {
+      const prefix = installedNow.length > 0
+        ? `已安装: ${installedNow.join('、')}\n`
+        : '';
+      return {
+        success: false,
+        message: `${prefix}${failures.join('\n')}`,
+      };
+    }
+
+    if (installedNow.length === 0) {
+      return {
+        success: true,
+        message: `核心包管理器已存在，无需修复${alreadyPresent.length > 0 ? `: ${alreadyPresent.join('、')}` : ''}`,
+      };
+    }
+
+    return {
+      success: true,
+      message: `已安装缺失的包管理器: ${installedNow.join('、')}`,
+    };
   },
   async rollback(backup: BackupData): Promise<void> {
     // 只卸载本次新安装的（原来就有的不动）
+    if (backup.data['pip'] === 'missing') {
+      runCommand('winget uninstall Python.Python.3.12', 30000);
+    }
+    if (backup.data['npm'] === 'missing') {
+      runCommand('winget uninstall OpenJS.NodeJS.LTS', 30000);
+    }
     if (backup.data['bun'] === 'missing') {
       runCommand('winget uninstall Bun.HBun', 30000);
     }
