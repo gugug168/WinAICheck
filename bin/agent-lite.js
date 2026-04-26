@@ -2161,12 +2161,17 @@ async function runWorkerDaemon(args, deps = {}, io = {}) {
         const failed = loadWorkerState(deps);
         failed.consecutiveErrors = (failed.consecutiveErrors || 0) + 1;
         failed.lastError = e instanceof Error ? e.message : String(e);
-        failed.nextCycleAt = new Date(Date.now() + interval).toISOString();
+        const backoff = Math.min(interval * Math.pow(2, failed.consecutiveErrors - 1), 60 * 60 * 1000);
+        failed.nextCycleAt = new Date(Date.now() + backoff).toISOString();
         saveWorkerState(failed, deps);
         out.write(`[Worker] 循环错误: ${failed.lastError}\n`);
       }
 
-      await new Promise(r => setTimeout(r, interval));
+      const st = loadWorkerState(deps);
+      const sleepMs = st.consecutiveErrors > 0
+        ? Math.min(interval * Math.pow(2, st.consecutiveErrors - 1), 60 * 60 * 1000)
+        : interval;
+      await new Promise(r => setTimeout(r, sleepMs));
     }
   } finally {
     const finalState = loadWorkerState(deps);
