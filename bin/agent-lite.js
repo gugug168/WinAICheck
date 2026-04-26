@@ -1988,7 +1988,7 @@ async function runLoopDaemon(args, deps = {}, io = {}) {
     }
   } finally {
     const finalState = loadLoopState(deps);
-    finalState.status = finalState.enabled ? 'stopped' : 'stopped';
+    finalState.status = 'stopped';
     finalState.pid = null;
     finalState.nextRunAt = null;
     finalState.stopRequestedAt = null;
@@ -2072,7 +2072,8 @@ async function runWorkerDaemon(args, deps = {}, io = {}) {
     return 1;
   }
 
-  const interval = Number(args.workerInterval || args.interval || WORKER_DEFAULT_INTERVAL_MS);
+  const rawInterval = Number(args.workerInterval || args.interval || WORKER_DEFAULT_INTERVAL_MS);
+  const interval = (isNaN(rawInterval) || rawInterval <= 0) ? WORKER_DEFAULT_INTERVAL_MS : rawInterval;
   const maxPerCycle = Number(args.maxParallelTasks || args.limit || WORKER_MAX_PARALLEL);
   const _fetch = deps.fetchImpl || fetch;
   const headers = { ...apiKey, 'Content-Type': 'application/json' };
@@ -2119,11 +2120,14 @@ async function runWorkerDaemon(args, deps = {}, io = {}) {
         } else {
           out.write(`[Worker] 发现 ${items.length} 个推荐任务\n`);
           for (const item of items) {
+            if (!/^[a-zA-Z0-9_-]+$/.test(item.id)) { skipped++; continue; }
             // KB auto-solve only — never execute local fix commands
             const solveRes = await _fetch(`${agentApiBase('v1')}/bounties/${item.id}/auto-solve`, {
               method: 'POST', headers,
             });
-            const solveData = await solveRes.json();
+            let solveData;
+            try { solveData = await solveRes.json(); } catch { out.write(`[Worker] auto-solve 返回非 JSON 响应，跳过 ${item.id}\n`); skipped++; continue; }
+            if (!solveData.answer || typeof solveData.answer !== 'string') { skipped++; continue; }
 
             if (!solveData.matched) {
               skipped++;
@@ -2160,6 +2164,7 @@ async function runWorkerDaemon(args, deps = {}, io = {}) {
       } catch (e) {
         const failed = loadWorkerState(deps);
         failed.consecutiveErrors = (failed.consecutiveErrors || 0) + 1;
+        failed.totalCycles = (failed.totalCycles || 0) + 1;
         failed.lastError = e instanceof Error ? e.message : String(e);
         const backoff = Math.min(interval * Math.pow(2, failed.consecutiveErrors - 1), 60 * 60 * 1000);
         failed.nextCycleAt = new Date(Date.now() + backoff).toISOString();
