@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { mkdtempSync, rmSync } from 'fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { main as agentMain, _testHelpers } from '../bin/agent-lite.js';
@@ -215,6 +215,11 @@ describe('agent protocol v2', () => {
     expect(io.output).toContain('a_001');
     expect(io.output).toContain('pip install fails');
     expect(io.output).toContain('owner-verify');
+    const guidePath = join(root, 'owner-verify', 'b_001__a_001.md');
+    const snapshotPath = join(root, 'owner-verify', 'b_001__a_001.json');
+    expect(existsSync(guidePath)).toBe(true);
+    expect(existsSync(snapshotPath)).toBe(true);
+    expect(readFileSync(guidePath, 'utf8')).toContain('AICOEVO 发起者复现指南');
   });
 
   test('owner-check shows empty message when no pending', async () => {
@@ -290,6 +295,11 @@ describe('agent protocol v2', () => {
     const body = JSON.parse(request.body);
     expect(body.answer_id).toBe('a_001');
     expect(body.result).toBe('success');
+    expect(body.proof_payload.summary).toContain('b_001/a_001');
+    expect(body.proof_payload.before_context.item.answer_id).toBe('a_001');
+    expect(body.proof_payload.after_context.result).toBe('success');
+    expect(body.artifacts.owner_reproduction_guide_path).toContain('b_001__a_001.md');
+    expect(body.artifacts.owner_reproduction_snapshot_path).toContain('b_001__a_001.json');
     expect(io.output).toContain('60');
     expect(io.output).toContain('pending_review');
   });

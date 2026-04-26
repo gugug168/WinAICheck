@@ -935,6 +935,87 @@ function writeAdvice(advice, deps = {}) {
   return normalized;
 }
 
+function ownerVerifyFiles(bountyId, answerId, deps = {}) {
+  const p = paths(deps);
+  const slug = [bountyId || 'unknown', answerId || 'unknown']
+    .map(value => String(value || '').replace(/[^a-zA-Z0-9_-]+/g, '-'))
+    .join('__');
+  const dir = path.join(p.base, 'owner-verify');
+  return {
+    dir,
+    guideMd: path.join(dir, `${slug}.md`),
+    snapshotJson: path.join(dir, `${slug}.json`),
+  };
+}
+
+function ownerVerifyLocalContext(config = {}) {
+  return {
+    clientId: config.clientId || '',
+    deviceId: config.deviceId || '',
+    autoSync: config.autoSync !== false,
+    paused: !!config.paused,
+    shareData: config.shareData !== false,
+    host: os.hostname(),
+    platform: process.platform,
+    nodeVersion: process.version,
+  };
+}
+
+function writeOwnerVerifyGuide(item, config = {}, deps = {}) {
+  const files = ownerVerifyFiles(item.bounty_id, item.answer_id, deps);
+  const generatedAt = nowIso(deps);
+  const localContext = ownerVerifyLocalContext(config);
+  const verifyCommand = `winaicheck agent owner-verify ${item.bounty_id} --answer ${item.answer_id} --result success|partial|failed --cmd "<local validation command>"`;
+  const lines = [
+    '# AICOEVO 发起者复现指南',
+    '',
+    `- Bounty: ${item.bounty_id}`,
+    `- Answer: ${item.answer_id}`,
+    `- 标题: ${item.title || '(无标题)'}`,
+    `- 提交时间: ${item.submitted_at || '-'}`,
+    `- 截止时间: ${item.deadline_at || '-'}`,
+    '',
+    '## 方案摘要',
+    '',
+    item.solution_summary || '暂无方案摘要。',
+    '',
+    '## 建议操作',
+    '',
+    '1. 在你自己的本地环境里手动复现原问题。',
+    '2. 按方案摘要执行修复或验证命令，确认现象是否消失。',
+    '3. 记录你实际执行过的命令和结果，再提交 owner-verify。',
+    '',
+    '## 提交命令',
+    '',
+    `\`${verifyCommand}\``,
+    '',
+    '默认策略为 prompt：命令会再次要求你确认，不会静默替你提交。',
+    '',
+  ];
+  ensureParent(files.guideMd);
+  fs.writeFileSync(files.guideMd, `${lines.join('\n')}\n`, 'utf8');
+  const snapshot = {
+    schemaVersion: 1,
+    generatedAt,
+    item,
+    localContext,
+    verifyCommand,
+  };
+  writeJson(files.snapshotJson, snapshot);
+  return {
+    ...files,
+    guideSha256: sha256(fs.readFileSync(files.guideMd, 'utf8')),
+    snapshot,
+  };
+}
+
+function loadOwnerVerifySnapshot(bountyId, answerId, deps = {}) {
+  const files = ownerVerifyFiles(bountyId, answerId, deps);
+  const snapshot = readJson(files.snapshotJson, null);
+  const guideSha256 = fs.existsSync(files.guideMd) ? sha256(fs.readFileSync(files.guideMd, 'utf8')) : '';
+  return { ...files, guideSha256, snapshot };
+}
+
 function printHelp(io = {}) {
   const out = io.stdout || process.stdout;
   out.write(`WinAICheck Agent Lite\n\n` +
@@ -3076,12 +3157,15 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
       }
       out.write(`待复现确认 (${pending.length}):\n\n`);
       for (const item of pending) {
+        const guide = writeOwnerVerifyGuide(item, config, deps);
         out.write(`## ${item.title || '(无标题)'}\n`);
         out.write(`  Bounty:   ${item.bounty_id}\n`);
         out.write(`  Answer:   ${item.answer_id}\n`);
         out.write(`  方案摘要: ${item.solution_summary}\n`);
         out.write(`  提交时间: ${item.submitted_at}\n`);
         out.write(`  截止时间: ${item.deadline_at}\n\n`);
+        out.write(`  指南:     ${guide.guideMd}\n`);
+        out.write(`  快照:     ${guide.snapshotJson}\n\n`);
         out.write(`  → winaicheck agent owner-verify ${item.bounty_id} --answer ${item.answer_id} --result success|partial|failed\n\n`);
       }
     } catch (e) { out.write(`获取待复现列表失败: ${e.message}\n`); return 1; }
@@ -3103,6 +3187,18 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
     }
     const notes = String(args.notes || '');
     const commandsRun = args.cmd ? String(args.cmd).split(',').map(s => s.trim()).filter(Boolean) : [];
+    const fallbackItem = {
+      bounty_id: bountyId,
+      answer_id: answerId,
+      title: '待确认方案',
+      solution_summary: notes || '请在本地环境确认问题是否已消失。',
+      submitted_at: '',
+      deadline_at: '',
+    };
+    let guideRecord = loadOwnerVerifySnapshot(bountyId, answerId, deps);
+    if (!guideRecord.snapshot) {
+      guideRecord = writeOwnerVerifyGuide(fallbackItem, config, deps);
+    }
 
     // prompt 策略: 默认必须提示用户确认
     const skipPrompt = args.yes === true || args.yes === 'true';
@@ -3122,6 +3218,15 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
     }
 
     try {
+      const submittedAt = nowIso(deps);
+      const afterContext = {
+        submitted_at: submittedAt,
+        confirmation_mode: skipPrompt ? 'flag_yes' : 'interactive_prompt',
+        result: resultValue,
+        notes,
+        commands_run: commandsRun,
+        local_context: ownerVerifyLocalContext(config),
+      };
       const res = await requestJson(`${agentApiBase('v2')}/bounties/${bountyId}/owner-verify`, {
         method: 'POST',
         headers,
@@ -3130,8 +3235,31 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
           result: resultValue,
           notes,
           commands_run: commandsRun,
-          proof_payload: {},
-          artifacts: {},
+          proof_payload: {
+            summary: `Owner verification for ${bountyId}/${answerId}`,
+            steps: [
+              `读取本地指南: ${guideRecord.guideMd}`,
+              commandsRun.length
+                ? `本地执行验证命令: ${commandsRun.join(' ; ')}`
+                : '按本地指南手动确认问题是否消失。',
+              `用户确认结果: ${resultValue}`,
+            ],
+            before_context: guideRecord.snapshot || {},
+            after_context: afterContext,
+            validation_cmd: commandsRun[0] || '',
+            expected_output:
+              resultValue === 'success'
+                ? '问题已消失或行为符合预期'
+                : resultValue === 'partial'
+                  ? '问题部分缓解，但仍有残留'
+                  : '问题仍然可复现',
+          },
+          artifacts: {
+            owner_reproduction_guide_path: guideRecord.guideMd,
+            owner_reproduction_snapshot_path: guideRecord.snapshotJson,
+            owner_reproduction_guide_sha256: guideRecord.guideSha256,
+            owner_reproduction_snapshot_generated_at: guideRecord.snapshot?.generatedAt || '',
+          },
         },
       }, { fetchImpl: _fetch });
       if (res.status !== 200) {
