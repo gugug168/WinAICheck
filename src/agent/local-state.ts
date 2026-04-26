@@ -45,6 +45,10 @@ function getPaths() {
     adviceMd: join(base, 'advice', 'latest.md'),
     dailyDir: join(base, 'daily'),
     experience: join(base, 'experience.jsonl'),
+    signals: join(base, 'signals.jsonl'),
+    loopState: join(base, 'loop-state.json'),
+    healthBaseline: join(base, 'health-baseline.json'),
+    loopLock: join(base, 'loop.lock'),
     agentDir: join(base, 'agent'),
     agentJs: join(base, 'agent', 'agent-lite.js'),
     agentCmd: join(base, 'agent', 'winaicheck-agent.cmd'),
@@ -140,6 +144,31 @@ export function getAgentLocalStatus() {
   });
   const advice = readJson<Record<string, any>>(paths.adviceJson, {});
   const experience = readJsonl(paths.experience);
+  const signals = readJsonl(paths.signals);
+  const loop = readJson<Record<string, any>>(paths.loopState, {
+    enabled: false,
+    status: 'stopped',
+    strategy: 'balanced',
+    mode: 'cold',
+    sleepMs: 0,
+    nextRunAt: null,
+  });
+  const healthBaseline = readJson<Record<string, any> | null>(paths.healthBaseline, null);
+  const now = Date.now();
+  const claudeSeenAt = hooks?.lastSeen?.['claude-code']?.lastHookSeenAt || null;
+  const openclawSeenAt = hooks?.lastSeen?.openclaw?.lastHookSeenAt || null;
+  const coverage = {
+    claudeCode: {
+      lastHookSeenAt: claudeSeenAt,
+      hookType: hooks?.lastSeen?.['claude-code']?.hookType || null,
+      status: claudeSeenAt && now - new Date(claudeSeenAt).getTime() <= 24 * 60 * 60 * 1000 ? 'healthy' : claudeSeenAt ? 'degraded' : 'missing',
+    },
+    openclaw: {
+      lastHookSeenAt: openclawSeenAt,
+      hookType: hooks?.lastSeen?.openclaw?.hookType || null,
+      status: openclawSeenAt && now - new Date(openclawSeenAt).getTime() <= 24 * 60 * 60 * 1000 ? 'healthy' : openclawSeenAt ? 'degraded' : 'missing',
+    },
+  };
 
   return {
     enabled: existsSync(paths.agentCmd) && (
@@ -160,10 +189,32 @@ export function getAgentLocalStatus() {
       synced: events.filter(event => event.syncStatus === 'synced').length,
       uploads: ledger.length,
     },
+    strategy: config.strategy || 'balanced',
+    coverage,
+    loop: {
+      enabled: !!loop.enabled,
+      status: loop.status || 'stopped',
+      strategy: loop.strategy || config.strategy || 'balanced',
+      mode: loop.mode || 'cold',
+      sleepMs: loop.sleepMs || 0,
+      nextRunAt: loop.nextRunAt || null,
+      lastRunAt: loop.lastRunAt || null,
+      lastCompletedAt: loop.lastCompletedAt || null,
+      lastError: loop.lastError || null,
+      pid: loop.pid || null,
+      lockPresent: existsSync(paths.loopLock),
+    },
+    health: {
+      baseline: healthBaseline,
+      lastSnapshot: loop?.health?.lastSnapshot || null,
+      lastSnapshotAt: loop?.health?.lastSnapshotAt || null,
+      lastDrifts: Array.isArray(loop?.health?.lastDrifts) ? loop.health.lastDrifts : [],
+    },
     today: todayPack,
     latestEvents: events.slice(-20).reverse(),
     latestUploads: ledger.slice(-20).reverse(),
     latestExperience: experience.slice(-20).reverse(),
+    latestSignals: signals.slice(-20).reverse(),
     advice,
   };
 }
@@ -208,6 +259,78 @@ export function syncAgentEvents() {
     return {
       ok: false,
       output: '',
+      status: getAgentLocalStatus(),
+    };
+  }
+}
+
+export function startAgentLoop() {
+  try {
+    const output = runAgentCommand(['loop', 'start']);
+    const parsed = JSON.parse(output);
+    return {
+      ok: parsed.ok !== false,
+      output,
+      status: getAgentLocalStatus(),
+    };
+  } catch (error: any) {
+    return {
+      ok: false,
+      output: error?.message || '',
+      status: getAgentLocalStatus(),
+    };
+  }
+}
+
+export function stopAgentLoop() {
+  try {
+    const output = runAgentCommand(['loop', 'stop']);
+    const parsed = JSON.parse(output);
+    return {
+      ok: parsed.ok !== false,
+      output,
+      status: getAgentLocalStatus(),
+    };
+  } catch (error: any) {
+    return {
+      ok: false,
+      output: error?.message || '',
+      status: getAgentLocalStatus(),
+    };
+  }
+}
+
+export function runAgentLoopOnce() {
+  try {
+    const output = runAgentCommand(['loop', 'run-once']);
+    const parsed = JSON.parse(output);
+    return {
+      ok: parsed.ok !== false,
+      output,
+      status: getAgentLocalStatus(),
+    };
+  } catch (error: any) {
+    return {
+      ok: false,
+      output: error?.message || '',
+      status: getAgentLocalStatus(),
+    };
+  }
+}
+
+export function setAgentStrategy(strategy: string) {
+  try {
+    const output = runAgentCommand(['strategy', 'set', strategy]);
+    const parsed = JSON.parse(output);
+    return {
+      ok: parsed.ok !== false,
+      output,
+      status: getAgentLocalStatus(),
+    };
+  } catch (error: any) {
+    return {
+      ok: false,
+      output: error?.message || '',
       status: getAgentLocalStatus(),
     };
   }

@@ -348,6 +348,12 @@ h1{font-family:var(--display);font-size:1.5rem;font-weight:700;letter-spacing:3p
 .agent-event-msg{font-size:.76rem;color:var(--text-mid);line-height:1.55;white-space:pre-wrap}
 .agent-status-line{font-size:.78rem;color:var(--text-mid);line-height:1.7}
 .agent-status-line strong{color:var(--text)}
+.agent-pill{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:999px;border:1px solid var(--border);background:rgba(0,240,255,.05);font-size:.68rem;font-family:var(--mono);color:var(--text-mid)}
+.agent-toolbar{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-top:14px}
+.agent-select{min-width:180px;padding:10px 12px;border-radius:10px;border:1px solid var(--border);background:rgba(6,11,24,.7);color:var(--text);font-size:.78rem;font-family:var(--mono);outline:none}
+.agent-select:focus{border-color:rgba(236,72,153,.35);box-shadow:0 0 0 4px rgba(236,72,153,.08)}
+.agent-mini-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.agent-card-note{font-size:.74rem;color:var(--text-dim);line-height:1.6;margin-top:8px}
 /* 进度条 */
 .progress-bar{height:4px;background:rgba(0,240,255,.08);border-radius:2px;overflow:hidden;margin:12px 0}
 .progress-fill{height:100%;background:linear-gradient(90deg,var(--cyan),#7c3aed);border-radius:2px;transition:width .3s ease;width:0%;box-shadow:0 0 10px var(--cyan-glow)}
@@ -1311,8 +1317,8 @@ async function confirmFix() {
       }
     }
 
-    // 修复成功时重扫更新 UI（服务端验证已有重扫结果，这里刷新诊断面板）
-    if (data.success && fix.scannerId) {
+    // 仅在服务端确实完成自动验证时才立即重扫，避免 PATH/安装类修复被当前进程误判
+    if (data.success && data.verified !== false && fix.scannerId) {
       await rescanOne(fix.scannerId);
     }
     fixInProgress = false;
@@ -1693,6 +1699,49 @@ function setAgentStatus(text, ok) {
   el.innerHTML = '<span style="color:' + (ok ? '#00ff88' : '#ff6b6b') + '">' + escapeHtml(text) + '</span>';
 }
 
+function agentTone(status) {
+  if (status === 'healthy' || status === 'running') return '#00ff88';
+  if (status === 'degraded' || status === 'backoff' || status === 'starting' || status === 'hot' || status === 'warm') return '#ffc107';
+  if (status === 'missing' || status === 'stopped' || status === 'cold') return '#94a3b8';
+  return '#f9a8d4';
+}
+
+function agentStatusLabel(status) {
+  if (status === 'healthy') return '正常';
+  if (status === 'degraded') return '降级';
+  if (status === 'missing') return '缺失';
+  if (status === 'running') return '运行中';
+  if (status === 'starting') return '启动中';
+  if (status === 'backoff') return '退避中';
+  if (status === 'stopped') return '已停止';
+  if (status === 'hot') return '高频';
+  if (status === 'warm') return '中频';
+  if (status === 'cold') return '低频';
+  return status || '未知';
+}
+
+function formatAgentTime(value) {
+  if (!value) return '-';
+  try {
+    return new Date(value).toLocaleString('zh-CN', { hour12: false });
+  } catch {
+    return String(value);
+  }
+}
+
+function renderCoverageItem(name, entry) {
+  var status = entry && entry.status ? entry.status : 'missing';
+  var tone = agentTone(status);
+  return '<div class="agent-event">' +
+    '<div class="agent-event-head">' +
+      '<div class="agent-event-title">' + escapeHtml(name) + '</div>' +
+      '<div class="agent-pill" style="color:' + tone + ';border-color:' + tone + '33">' + agentStatusLabel(status) + '</div>' +
+    '</div>' +
+    '<div class="agent-event-meta">最近心跳: ' + escapeHtml(formatAgentTime(entry && entry.lastHookSeenAt)) + '</div>' +
+    '<div class="agent-event-meta">Hook: ' + escapeHtml(entry && entry.hookType ? entry.hookType : '-') + '</div>' +
+  '</div>';
+}
+
 function renderAgentStatus(data) {
   var root = document.getElementById('agent-status-root');
   if (!root || !data) return;
@@ -1701,35 +1750,75 @@ function renderAgentStatus(data) {
   var events = Array.isArray(data.latestEvents) ? data.latestEvents : [];
   var advice = data.advice || {};
   var topProblems = Array.isArray(today.topProblems) ? today.topProblems : [];
+  var loop = data.loop || {};
+  var health = data.health || {};
+  var signals = Array.isArray(data.latestSignals) ? data.latestSignals : [];
+  var drifts = Array.isArray(health.lastDrifts) ? health.lastDrifts : [];
+  var coverage = data.coverage || {};
+  var strategy = loop.strategy || data.strategy || 'balanced';
+  var loopStateLabel = agentStatusLabel(loop.status || 'stopped');
+  var loopTone = agentTone(loop.status || 'stopped');
+  var coverageCards = [
+    renderCoverageItem('Claude Code', coverage.claudeCode),
+    renderCoverageItem('OpenClaw', coverage.openclaw),
+  ].join('');
+
+  var strategySelect = document.getElementById('agent-strategy');
+  if (strategySelect) strategySelect.value = strategy;
+
   root.innerHTML = [
     '<div class="agent-grid">',
       '<div class="agent-stat"><div class="agent-stat-value">' + (today.totalEvents || 0) + '</div><div class="agent-stat-label">今日错误</div></div>',
-      '<div class="agent-stat"><div class="agent-stat-value">' + (today.repeatedEvents || 0) + '</div><div class="agent-stat-label">重复错误</div></div>',
+      '<div class="agent-stat"><div class="agent-stat-value">' + (signals.length || 0) + '</div><div class="agent-stat-label">最近信号</div></div>',
       '<div class="agent-stat"><div class="agent-stat-value">' + (totals.pending || 0) + '</div><div class="agent-stat-label">待同步</div></div>',
-      '<div class="agent-stat"><div class="agent-stat-value">' + (totals.synced || 0) + '</div><div class="agent-stat-label">已同步</div></div>',
-    '</div>',
-    '<div class="card">',
-      '<div class="section-title">运行状态 <span class="badge">' + (data.enabled ? '已启用' : '未启用') + '</span></div>',
-      '<div class="agent-status-line">本地 runner: <strong>' + (data.localRunnerInstalled ? '已安装' : '未安装') + '</strong></div>',
-      '<div class="agent-status-line">自动上传: <strong>' + (data.paused ? '已暂停' : (data.autoSync ? '已开启' : '未开启')) + '</strong></div>',
-      '<div class="agent-status-line">本地路径: <strong>' + escapeHtml(data.agentCmd || '-') + '</strong></div>',
-    '</div>',
-    '<div class="card">',
-      '<div class="section-title">最新建议 <span class="badge">AICOEVO</span></div>',
-      '<div class="agent-event-msg">' + escapeHtml(advice.summary || '暂无建议。启用后，Agent 运行错误会在这里沉淀成优化建议。') + '</div>',
+      '<div class="agent-stat"><div class="agent-stat-value" style="font-size:1rem;color:' + loopTone + '">' + escapeHtml(loopStateLabel) + '</div><div class="agent-stat-label">持续守护</div></div>',
     '</div>',
     '<div class="two-col">',
+      '<div class="card">' +
+        '<div class="section-title">守护状态 <span class="badge">' + (data.enabled ? '已启用' : '未启用') + '</span></div>' +
+        '<div class="agent-status-line">本地 runner: <strong>' + (data.localRunnerInstalled ? '已安装' : '未安装') + '</strong></div>' +
+        '<div class="agent-status-line">自动上传: <strong>' + (data.paused ? '已暂停' : (data.autoSync ? '已开启' : '未开启')) + '</strong></div>' +
+        '<div class="agent-status-line">分析策略: <strong>' + escapeHtml(strategy) + '</strong></div>' +
+        '<div class="agent-status-line">Loop 状态: <strong style="color:' + loopTone + '">' + escapeHtml(loopStateLabel) + '</strong></div>' +
+        '<div class="agent-status-line">调度档位: <strong>' + escapeHtml(agentStatusLabel(loop.mode || 'cold')) + '</strong></div>' +
+        '<div class="agent-status-line">下次唤醒: <strong>' + escapeHtml(formatAgentTime(loop.nextRunAt)) + '</strong></div>' +
+        '<div class="agent-status-line">最近完成: <strong>' + escapeHtml(formatAgentTime(loop.lastCompletedAt)) + '</strong></div>' +
+        '<div class="agent-status-line">本地路径: <strong>' + escapeHtml(data.agentCmd || '-') + '</strong></div>' +
+        (loop.lastError ? '<div class="agent-card-note" style="color:#fda4af">最近错误: ' + escapeHtml(loop.lastError) + '</div>' : '') +
+      '</div>',
+      '<div class="card"><div class="section-title">Hook 覆盖 <span class="badge">心跳</span></div><div class="agent-list">' + coverageCards + '</div></div>',
+    '</div>',
+    '<div class="two-col">',
+      '<div class="card">' +
+        '<div class="section-title">最新建议 <span class="badge">AICOEVO</span></div>' +
+        '<div class="agent-event-msg">' + escapeHtml(advice.summary || '暂无建议。启用后，Agent 运行错误会在这里沉淀成优化建议。') + '</div>' +
+        '<div class="agent-card-note">最近同步: ' + escapeHtml(formatAgentTime(events[0] && events[0].syncedAt)) + '</div>' +
+      '</div>',
+      '<div class="card"><div class="section-title">最近信号 <span class="badge">' + signals.length + '</span></div><div class="agent-list">' +
+        (signals.length ? signals.slice(0, 6).map(function(signal) {
+          var suppressed = signal && signal.suppressed ? '已压制' : '可行动';
+          var tone = signal && signal.suppressed ? '#94a3b8' : '#00ff88';
+          return '<div class="agent-event"><div class="agent-event-head"><div class="agent-event-title">' + escapeHtml(signal.title || signal.kind || 'signal') + '</div><div class="agent-pill" style="color:' + tone + ';border-color:' + tone + '33">' + suppressed + '</div></div><div class="agent-event-msg">' + escapeHtml((signal.sourceLayers || []).join(' / ') || 'history') + '</div><div class="agent-event-meta">命中 ' + escapeHtml(String(signal.hitCount || 1)) + ' 次 · 最近 ' + escapeHtml(formatAgentTime(signal.lastSeenAt)) + '</div></div>';
+        }).join('') : '<div class="agent-event-msg">还没有形成新的问题信号。</div>') +
+      '</div></div>',
+    '</div>',
+    '<div class="two-col">',
+      '<div class="card"><div class="section-title">环境退化 <span class="badge">' + drifts.length + '</span></div><div class="agent-list">' +
+        (drifts.length ? drifts.slice(0, 6).map(function(item) {
+          return '<div class="agent-event"><div class="agent-event-head"><div class="agent-event-title">' + escapeHtml(item.title || item.key || 'env_drift') + '</div><div class="agent-pill" style="color:#ffc107;border-color:rgba(255,193,7,.25)">已确认</div></div><div class="agent-event-msg">' + escapeHtml(item.detail || '检测到环境基线变化。') + '</div></div>';
+        }).join('') : '<div class="agent-event-msg">最近没有确认的环境退化。</div>') +
+      '</div><div class="agent-card-note">最近快照: ' + escapeHtml(formatAgentTime(health.lastSnapshotAt)) + '</div></div>',
       '<div class="card"><div class="section-title">Top 问题 <span class="badge">' + topProblems.length + '</span></div><div class="agent-list">' +
         (topProblems.length ? topProblems.slice(0, 6).map(function(item) {
           return '<div class="agent-event"><div class="agent-event-head"><div class="agent-event-title">' + escapeHtml(item.title || item.fingerprint) + '</div><div class="agent-event-meta">x' + item.count + '</div></div><div class="agent-event-meta">' + escapeHtml(item.status || 'new') + ' · ' + escapeHtml(item.fingerprint || '') + '</div></div>';
         }).join('') : '<div class="agent-event-msg">今天还没有问题包。</div>') +
       '</div></div>',
-      '<div class="card"><div class="section-title">最近上传清单 <span class="badge">' + events.length + '</span></div><div class="agent-list">' +
-        (events.length ? events.slice(0, 8).map(function(event) {
-          return '<div class="agent-event"><div class="agent-event-head"><div class="agent-event-title">' + escapeHtml(event.agent || 'agent') + '</div><div class="agent-event-meta">' + escapeHtml(event.syncStatus || 'pending') + '</div></div><div class="agent-event-msg">' + escapeHtml(event.sanitizedMessage || '') + '</div><div class="agent-event-meta">' + escapeHtml(event.occurredAt || '') + '</div></div>';
-        }).join('') : '<div class="agent-event-msg">还没有捕获到 Agent 错误。</div>') +
-      '</div></div>',
     '</div>',
+    '<div class="card"><div class="section-title">最近上传清单 <span class="badge">' + events.length + '</span></div><div class="agent-list">' +
+      (events.length ? events.slice(0, 8).map(function(event) {
+        return '<div class="agent-event"><div class="agent-event-head"><div class="agent-event-title">' + escapeHtml(event.agent || 'agent') + '</div><div class="agent-pill" style="color:' + agentTone(event.syncStatus === 'synced' ? 'healthy' : 'degraded') + ';border-color:' + agentTone(event.syncStatus === 'synced' ? 'healthy' : 'degraded') + '33">' + escapeHtml(event.syncStatus || 'pending') + '</div></div><div class="agent-event-msg">' + escapeHtml(event.sanitizedMessage || '') + '</div><div class="agent-event-meta">' + escapeHtml(formatAgentTime(event.occurredAt)) + '</div></div>';
+      }).join('') : '<div class="agent-event-msg">还没有捕获到 Agent 错误。</div>') +
+    '</div></div>',
   ].join('');
 }
 
@@ -1759,7 +1848,7 @@ async function enableAgentProbe() {
   } catch(e) {
     setAgentStatus('启用失败: ' + e.message, false);
   } finally {
-    if (btn) { btn.textContent = '启用 Agent 错误探索'; btn.disabled = false; }
+    if (btn) { btn.textContent = '安装插件'; btn.disabled = false; }
   }
 }
 
@@ -1784,6 +1873,59 @@ async function setAgentPause(paused) {
     renderAgentStatus(data.status);
   } catch(e) {
     setAgentStatus('操作失败: ' + e.message, false);
+  }
+}
+
+async function startAgentGuardLoop() {
+  try {
+    var res = await fetch('/api/agent/loop/start', { method: 'POST' });
+    var data = await res.json();
+    if (!res.ok || !data.ok) throw new Error(data.error || '启动守护失败');
+    setAgentStatus('持续守护已启动。', true);
+    renderAgentStatus(data.status);
+  } catch(e) {
+    setAgentStatus('启动守护失败: ' + e.message, false);
+  }
+}
+
+async function stopAgentGuardLoop() {
+  try {
+    var res = await fetch('/api/agent/loop/stop', { method: 'POST' });
+    var data = await res.json();
+    if (!res.ok || !data.ok) throw new Error(data.error || '停止守护失败');
+    setAgentStatus('持续守护已停止。', true);
+    renderAgentStatus(data.status);
+  } catch(e) {
+    setAgentStatus('停止守护失败: ' + e.message, false);
+  }
+}
+
+async function runAgentLoopNow() {
+  try {
+    var res = await fetch('/api/agent/loop/run-once', { method: 'POST' });
+    var data = await res.json();
+    if (!res.ok || !data.ok) throw new Error(data.error || '立即分析失败');
+    setAgentStatus('已完成一次即时分析。', true);
+    renderAgentStatus(data.status);
+  } catch(e) {
+    setAgentStatus('立即分析失败: ' + e.message, false);
+  }
+}
+
+async function changeAgentStrategy(strategy) {
+  if (!strategy) return;
+  try {
+    var res = await fetch('/api/agent/strategy', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ strategy: strategy }),
+    });
+    var data = await res.json();
+    if (!res.ok || !data.ok) throw new Error(data.error || '策略切换失败');
+    setAgentStatus('分析策略已切换为 ' + strategy + '。', true);
+    renderAgentStatus(data.status);
+  } catch(e) {
+    setAgentStatus('策略切换失败: ' + e.message, false);
   }
 }
 
@@ -2133,13 +2275,24 @@ function renderAgentTab(): string {
       安装后，插件会在后台实时工作：<br>
       <span style="color:#f9a8d4">1.</span> 自动捕获 Claude Code / OpenClaw 运行时的错误和异常<br>
       <span style="color:#f9a8d4">2.</span> 脱敏后安全上传到 <a href="https://aicoevo.net" target="_blank" rel="noopener" style="color:#ec4899;text-decoration:none;border-bottom:1px solid rgba(236,72,153,.3)">aicoevo.net</a> 云端<br>
-      <span style="color:#f9a8d4">3.</span> 社区和 AI 分析你的问题，给出针对性优化建议
+      <span style="color:#f9a8d4">3.</span> 持续守护会在后台汇总信号、识别退化并给出针对性优化建议
     </div>
     <div class="agent-actions">
       <button class="scan-btn" id="agent-enable-btn" onclick="enableAgentProbe()" style="margin:0;background:linear-gradient(135deg,rgba(236,72,153,.2),rgba(236,72,153,.08));border-color:rgba(236,72,153,.3);color:#f9a8d4">安装插件</button>
       <button class="scan-btn secondary" onclick="syncAgentNow()" style="margin:0">立即同步</button>
       <button class="scan-btn secondary" onclick="setAgentPause(true)" style="margin:0">暂停上传</button>
       <button class="scan-btn secondary" onclick="setAgentPause(false)" style="margin:0">恢复上传</button>
+    </div>
+    <div class="agent-toolbar">
+      <button class="scan-btn secondary" onclick="startAgentGuardLoop()" style="margin:0">开启持续守护</button>
+      <button class="scan-btn secondary" onclick="stopAgentGuardLoop()" style="margin:0">停止守护</button>
+      <button class="scan-btn secondary" onclick="runAgentLoopNow()" style="margin:0">立即分析一次</button>
+      <select id="agent-strategy" class="agent-select" onchange="changeAgentStrategy(this.value)">
+        <option value="balanced">balanced</option>
+        <option value="harden">harden</option>
+        <option value="repair-only">repair-only</option>
+        <option value="innovate">innovate</option>
+      </select>
     </div>
     <div id="agent-action-status" class="feedback-status"></div>
   </div>
@@ -2150,13 +2303,13 @@ function renderAgentTab(): string {
     </a>
     <div style="flex:1;padding:16px;border-radius:12px;border:1px solid var(--border);background:rgba(7,11,24,.55)">
       <div style="font-size:.82rem;font-weight:700;color:var(--text-mid);margin-bottom:4px">插件原理</div>
-      <div style="font-size:.74rem;color:var(--text-dim)">纯 Node.js，29KB，零依赖。安装到 ~/.aicoevo/agent/，Claude Code 使用 settings hook，OpenClaw 使用 PowerShell hook。</div>
+      <div style="font-size:.74rem;color:var(--text-dim)">纯 Node.js，零依赖。安装到 ~/.aicoevo/agent/，Claude Code 使用 settings hook，OpenClaw 使用 PowerShell hook；持续守护会读取 outbox、生成 signals.jsonl，并做轻量环境巡检。</div>
     </div>
   </div>
   <div id="agent-status-root">
     <div class="card">
       <div class="section-title">正在读取 <span class="badge">本地</span></div>
-      <div class="agent-event-msg">正在读取本地 Agent 问题包、上传清单和最新建议。</div>
+      <div class="agent-event-msg">正在读取本地 Agent 问题包、守护状态、最近信号和最新建议。</div>
     </div>
   </div>`;
 }

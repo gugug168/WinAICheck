@@ -27,8 +27,16 @@ describe('web ui html generation', () => {
     expect(html).toContain('Agent 进化');
     expect(html).toContain('/api/agent/enable');
     expect(html).toContain('/api/agent/status');
+    expect(html).toContain('/api/agent/loop/start');
+    expect(html).toContain('/api/agent/loop/stop');
+    expect(html).toContain('/api/agent/loop/run-once');
+    expect(html).toContain('/api/agent/strategy');
+    expect(html).toContain('开启持续守护');
+    expect(html).toContain('立即分析一次');
+    expect(html).toContain('agent-strategy');
     expect(html).toContain('setScanRunning');
     expect(html).toContain('scanEndedWithDone');
+    expect(html).toContain('data.success && data.verified !== false && fix.scannerId');
     expect(html).not.toContain("card.scrollIntoView({behavior:'smooth',block:'end'});");
   }, 10_000);
 });

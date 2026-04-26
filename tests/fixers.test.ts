@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { _test } from '../src/executor/index';
-import { _testHelpers, getFixerByScannerId } from '../src/fixers/index';
+import { _testHelpers, executeFix, getFixerByScannerId } from '../src/fixers/index';
 import { createCommandMock, teardownMock, withEnv } from './integration/mock-helper';
 import '../src/scanners/index';
 
@@ -65,5 +65,29 @@ describe('git-path fixer helpers', () => {
         expect(result.message).toContain('c:\\tools');
       },
     );
+  });
+
+  test('需要新终端生效的修复会延迟验证而不是误判失败', async () => {
+    const fix = getFixerByScannerId('powershell-version')!.getFix({
+      id: 'powershell-version',
+      name: 'PowerShell 版本检测',
+      category: 'toolchain',
+      status: 'warn',
+      message: '仅安装了 Windows PowerShell 5.1',
+    });
+
+    _test.mockExecSync = createCommandMock(new Map([
+      ['where.exe winget', { stdout: 'C:\\Windows\\System32\\winget.exe', exitCode: 0 }],
+      ['pwsh --version', { exitCode: 1 }],
+      [fix.commands![0], { stdout: 'Installed', exitCode: 0 }],
+      ['where.exe wt', { exitCode: 1 }],
+    ]));
+
+    const result = await executeFix(fix);
+
+    expect(result.success).toBe(true);
+    expect(result.verified).toBe(false);
+    expect(result.message).toContain('当前进程内无法准确验证');
+    expect(result.message).toContain('需要重新打开终端窗口才能生效');
   });
 });
