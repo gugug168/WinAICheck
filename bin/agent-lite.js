@@ -2058,6 +2058,41 @@ function releaseWorkerLock(deps = {}) {
   } catch {}
 }
 
+function isProcessAlive(pid) {
+  if (!pid) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function startWorkerDaemon(deps = {}) {
+  const config = loadConfig(deps);
+  if (!config.workerEnabled) {
+    return { ok: true, skipped: true, reason: 'worker disabled' };
+  }
+  if (!apiKeyHeaders(config)) {
+    return { ok: true, skipped: true, reason: 'missing auth token' };
+  }
+
+  const local = installLocalAgent(deps);
+  const wState = loadWorkerState(deps);
+  if (isProcessAlive(wState.pid)) {
+    return { ok: true, alreadyRunning: true, pid: wState.pid };
+  }
+
+  const spawnImpl = deps.spawnImpl || spawn;
+  const child = spawnImpl(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', `"${local.agentCmd}" worker daemon`], {
+    detached: true,
+    stdio: 'ignore',
+    windowsHide: true,
+  });
+  child.unref?.();
+  return { ok: true, started: true, pid: child.pid };
+}
+
 async function runWorkerDaemon(args, deps = {}, io = {}) {
   if (!acquireWorkerLock(deps)) {
     (io.stdout || process.stdout).write(`${JSON.stringify({ ok: false, error: 'worker already running' }, null, 2)}\n`);
@@ -2138,6 +2173,7 @@ async function runWorkerDaemon(args, deps = {}, io = {}) {
               method: 'POST',
               headers,
               body: JSON.stringify({
+                ...(item.recommended_env_id ? { env_id: item.recommended_env_id } : {}),
                 content: solveData.answer,
                 source: 'kb_auto',
                 confidence: solveData.confidence || 0.8,
@@ -2304,7 +2340,6 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
   if (command === 'disable') {
     const config = loadConfig(deps);
     config.workerEnabled = false;
-    config.paused = true;
     saveConfig(config, deps);
     const wState = loadWorkerState(deps);
     if (wState.pid) {
@@ -2323,7 +2358,6 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
   if (command === 'worker-enable') {
     const config = loadConfig(deps);
     config.workerEnabled = true;
-    config.paused = false;
     saveConfig(config, deps);
     out.write('Worker 互助循环已重新启用。运行 worker start 启动后台循环。\n');
     return 0;
@@ -2450,21 +2484,19 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
     out.write(`  Hook: ${installed.join(' | ')}\n`);
     out.write(`  自动同步: 已启用\n`);
     if (config.workerEnabled) {
-      const wState = loadWorkerState(deps);
-      if (!wState.pid) {
-        try {
-          const child = spawn(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', `"${localAgent.agentCmd}" worker daemon`], {
-            detached: true,
-            stdio: 'ignore',
-            windowsHide: true,
-          });
-          child.unref();
-          out.write(`  Worker 互助循环: 已启动 (pid ${child.pid})\n`);
-        } catch (e) {
-          out.write(`  Worker 互助循环: 启动失败 (${e.message})\n`);
+      try {
+        const workerStart = startWorkerDaemon(deps);
+        if (workerStart.started) {
+          out.write(`  Worker 互助循环: 已启动 (pid ${workerStart.pid})\n`);
+        } else if (workerStart.alreadyRunning) {
+          out.write(`  Worker 互助循环: 已运行中\n`);
+        } else if (workerStart.reason === 'missing auth token') {
+          out.write(`  Worker 互助循环: 等待绑定完成后自动启动\n`);
+        } else {
+          out.write(`  Worker 互助循环: 已禁用\n`);
         }
-      } else {
-        out.write(`  Worker 互助循环: 已运行中\n`);
+      } catch (e) {
+        out.write(`  Worker 互助循环: 启动失败 (${e.message})\n`);
       }
     } else {
       out.write(`  Worker 互助循环: 已禁用\n`);
@@ -2647,6 +2679,14 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
       saveConfig(config, deps);
 
       out.write(`\n绑定成功!\n  自动同步: 已启用\n\n`);
+      if (config.workerEnabled) {
+        try {
+          const workerStart = startWorkerDaemon(deps);
+          if (workerStart.started) out.write(`  Worker 互助循环: 已启动 (pid ${workerStart.pid})\n\n`);
+        } catch (e) {
+          out.write(`  Worker 互助循环: 启动失败 (${e.message})\n\n`);
+        }
+      }
       return 0;
     }
 
@@ -2713,6 +2753,14 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
 
         out.write(`绑定成功!\n`);
         out.write(`  自动同步: 已启用\n\n`);
+        if (config.workerEnabled) {
+          try {
+            const workerStart = startWorkerDaemon(deps);
+            if (workerStart.started) out.write(`  Worker 互助循环: 已启动 (pid ${workerStart.pid})\n\n`);
+          } catch (e) {
+            out.write(`  Worker 互助循环: 启动失败 (${e.message})\n\n`);
+          }
+        }
         out.write(`现在 Claude Code 中的错误会自动记录并同步到 aicoevo.net。\n`);
         return 0;
       }
@@ -2977,6 +3025,7 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
               method: 'POST',
               headers,
               body: JSON.stringify({
+                ...(item.recommended_env_id ? { env_id: item.recommended_env_id } : {}),
                 content: solveData.answer,
                 source: 'kb_auto',
                 confidence: solveData.confidence || 0.8,

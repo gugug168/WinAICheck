@@ -47,6 +47,20 @@ function mockResponse(data: any, status = 200) {
   };
 }
 
+function createSpawnStub() {
+  const calls: Array<{ command: string; args: string[]; options: Record<string, any> }> = [];
+  return {
+    calls,
+    spawnImpl(command: string, args: string[], options: Record<string, any>) {
+      calls.push({ command, args, options });
+      return {
+        pid: 43210 + calls.length,
+        unref() {},
+      };
+    },
+  };
+}
+
 describe('agent protocol v2', () => {
   const roots = [];
 
@@ -217,7 +231,7 @@ describe('worker-on (TASK-090)', () => {
         }
 
         if (url.includes('/heartbeat')) {
-          return mockResponse({ recommended_bounties: [{ id: 'bounty_w1' }] });
+          return mockResponse({ recommended_bounties: [{ id: 'bounty_w1', recommended_env_id: 'win-py311' }] });
         }
         if (url.includes('/auto-solve')) {
           return mockResponse({ matched: true, answer: 'KB solution text', confidence: 0.9 });
@@ -235,6 +249,7 @@ describe('worker-on (TASK-090)', () => {
     expect(requests[1].url).toContain('/auto-solve');
     expect(requests[2].url).toContain('/claim-and-submit');
     expect(requests[2].body).toContain('"source":"kb_auto"');
+    expect(requests[2].body).toContain('"env_id":"win-py311"');
 
     const wState = _testHelpers.loadWorkerState({ baseDir: root });
     expect(wState.totalCycles).toBeGreaterThanOrEqual(1);
@@ -292,13 +307,13 @@ describe('worker-on (TASK-090)', () => {
 
     const config = _testHelpers.loadConfig({ baseDir: root });
     expect(config.workerEnabled).toBe(false);
-    expect(config.paused).toBe(true);
+    expect(config.paused).toBe(false);
   });
 
-  test('worker-enable re-enables worker', async () => {
+  test('worker-enable re-enables worker without changing upload pause state', async () => {
     const root = createTempRoot();
     roots.push(root);
-    setupWorkerConfig(root, { workerEnabled: false });
+    setupWorkerConfig(root, { workerEnabled: false, paused: true });
 
     const io = createIo();
     const code = await agentMain(['worker-enable'], { baseDir: root }, io.io);
@@ -308,7 +323,7 @@ describe('worker-on (TASK-090)', () => {
 
     const config = _testHelpers.loadConfig({ baseDir: root });
     expect(config.workerEnabled).toBe(true);
-    expect(config.paused).toBe(false);
+    expect(config.paused).toBe(true);
   });
 
   test('worker daemon never executes local fix commands', async () => {
@@ -384,5 +399,43 @@ describe('worker-on (TASK-090)', () => {
     const wState = _testHelpers.loadWorkerState({ baseDir: root });
     expect(wState.totalSolved).toBe(0);
     expect(wState.totalSkipped).toBeGreaterThanOrEqual(2);
+  });
+
+  test('enable waits for binding before auto-starting worker', async () => {
+    const root = createTempRoot();
+    roots.push(root);
+    const spawn = createSpawnStub();
+
+    const io = createIo();
+    const code = await agentMain(['enable', '--target', 'claude-code'], {
+      baseDir: root,
+      homeDir: root,
+      spawnImpl: spawn.spawnImpl,
+    }, io.io);
+
+    expect(code).toBe(0);
+    expect(io.output).toContain('等待绑定完成后自动启动');
+    expect(spawn.calls).toHaveLength(0);
+  });
+
+  test('bind auto-starts worker after token is granted', async () => {
+    const root = createTempRoot();
+    roots.push(root);
+    const spawn = createSpawnStub();
+    setupWorkerConfig(root, { authToken: undefined });
+
+    const io = createIo();
+    const code = await agentMain(['bind', '--code', '123456'], {
+      baseDir: root,
+      homeDir: root,
+      spawnImpl: spawn.spawnImpl,
+      fetchImpl: async () => mockResponse({ api_key: 'ak_test_123' }),
+    }, io.io);
+
+    expect(code).toBe(0);
+    expect(io.output).toContain('绑定成功');
+    expect(io.output).toContain('Worker 互助循环: 已启动');
+    expect(spawn.calls).toHaveLength(1);
+    expect(spawn.calls[0]?.args.join(' ')).toContain('worker daemon');
   });
 });
