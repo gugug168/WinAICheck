@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { lookup as dnsLookup } from 'node:dns/promises';
 
 const DEFAULT_ORIGIN = 'https://aicoevo.net';
 const MAX_CAPTURE_CHARS = 8000;
@@ -11,6 +12,19 @@ const MAX_UPLOAD_EVENTS = 50;
 const FAILURE_LOOP_THRESHOLD = 5;
 const HOOK_START = '# >>> WinAICheck Agent Hook >>>';
 const HOOK_END = '# <<< WinAICheck Agent Hook <<<';
+const DEFAULT_STRATEGY = 'balanced';
+const LOOP_HOOK_STALE_MS = 24 * 60 * 60 * 1000;
+const SIGNAL_HISTORY_LIMIT = 10;
+const SIGNAL_SUPPRESSION_WINDOW = 8;
+const SIGNAL_SUPPRESSION_THRESHOLD = 3;
+const LOOP_SCHEDULE_MS = {
+  hot: 30 * 1000,
+  warm: 5 * 60 * 1000,
+  cold: 30 * 60 * 1000,
+};
+const MAX_LOOP_BACKOFF_MS = 60 * 60 * 1000;
+const WORKER_DEFAULT_INTERVAL_MS = 5 * 60 * 1000;
+const WORKER_MAX_PARALLEL = 3;
 
 const SENSITIVE_PATTERNS = [
   { regex: /(?:sk-|api[_-]?key[_-]?)([a-zA-Z0-9_-]{20,})/gi, replacement: '<API_KEY>' },
@@ -58,8 +72,14 @@ function paths(deps = {}) {
     agentJs: path.join(base, 'agent', 'agent-lite.js'),
     agentCmd: path.join(base, 'agent', 'winaicheck-agent.cmd'),
     experience: path.join(base, 'experience.jsonl'),
+    signals: path.join(base, 'signals.jsonl'),
+    loopState: path.join(base, 'loop-state.json'),
+    healthBaseline: path.join(base, 'health-baseline.json'),
+    loopLock: path.join(base, 'loop.lock'),
     sessionStartHookJs: path.join(base, 'agent', 'winaicheck-session-start.cjs'),
     postToolHookJs: path.join(base, 'agent', 'winaicheck-post-tool.cjs'),
+    workerState: path.join(base, 'worker-state.json'),
+    workerLock: path.join(base, 'worker.lock'),
   };
 }
 
@@ -110,7 +130,89 @@ function writeJsonl(file, rows) {
   fs.writeFileSync(file, rows.map(row => JSON.stringify(row)).join('\n') + (rows.length ? '\n' : ''), 'utf8');
 }
 
+function readJsonlLines(file) {
+  if (!fs.existsSync(file)) return [];
+  return fs.readFileSync(file, 'utf8').split(/\r?\n/).filter(Boolean);
+}
+
+function parseJsonlLines(lines) {
+  return lines
+    .map(line => {
+      try { return JSON.parse(line); } catch { return null; }
+    })
+    .filter(Boolean);
+}
+
+function readJsonlSince(file, cursor = 0) {
+  const lines = readJsonlLines(file);
+  const safeCursor = Math.max(0, Number(cursor) || 0);
+  return {
+    rows: parseJsonlLines(lines.slice(safeCursor)),
+    nextCursor: lines.length,
+  };
+}
+
 const MAX_LEDGER_ENTRIES = 500;
+
+const STRATEGY_PRESETS = {
+  balanced: {
+    cadenceScale: 1,
+    keywordBias: {},
+    allowExplore: true,
+    allowedSignalKinds: null,
+  },
+  harden: {
+    cadenceScale: 0.5,
+    keywordBias: { network_instability: 1, config_breakage: 1, auth_failure: 1 },
+    allowExplore: false,
+    allowedSignalKinds: null,
+  },
+  'repair-only': {
+    cadenceScale: 1,
+    keywordBias: { tool_missing: 1, config_breakage: 1, auth_failure: 1 },
+    allowExplore: false,
+    allowedSignalKinds: ['tool_missing', 'config_breakage', 'network_instability', 'auth_failure', 'perf_bottleneck', 'failure_loop', 'env_drift'],
+  },
+  innovate: {
+    cadenceScale: 1,
+    keywordBias: { capability_gap: 1, perf_bottleneck: 1 },
+    allowExplore: true,
+    allowedSignalKinds: null,
+  },
+};
+
+const SIGNAL_PROFILES = {
+  tool_missing: {
+    title: '关键命令缺失',
+    keywords: { 'command not found': 5, enoent: 5, 'not found': 4, '不是内部或外部命令': 5, missing: 2, 'no such file': 3 },
+    threshold: 5,
+  },
+  config_breakage: {
+    title: '配置损坏或不兼容',
+    keywords: { config: 2, json: 2, parse: 3, invalid: 3, malformed: 4, mcp: 2, settings: 2, syntaxerror: 4 },
+    threshold: 6,
+  },
+  network_instability: {
+    title: '网络或远端连接不稳定',
+    keywords: { timeout: 4, timed: 2, etimedout: 5, econnrefused: 5, refused: 3, dns: 3, ssl: 2, certificate: 2, network: 2 },
+    threshold: 6,
+  },
+  auth_failure: {
+    title: '认证或权限失败',
+    keywords: { unauthorized: 5, forbidden: 5, auth: 3, token: 2, 'api key': 4, bearer: 3, permission: 3, eacces: 4, denied: 3 },
+    threshold: 5,
+  },
+  perf_bottleneck: {
+    title: '性能瓶颈或资源压力',
+    keywords: { slow: 3, latency: 3, bottleneck: 5, oom: 5, 'out of memory': 5, throttle: 3, retry: 2, hanging: 3 },
+    threshold: 6,
+  },
+  capability_gap: {
+    title: '能力缺口或不支持功能',
+    keywords: { unsupported: 4, 'not supported': 5, 'not implemented': 5, 'unknown flag': 4, 'unknown option': 4, feature: 2, capability: 3 },
+    threshold: 6,
+  },
+};
 
 function appendJsonlWithRotation(file, data) {
   appendJsonl(file, data);
@@ -257,6 +359,14 @@ function shortHash(value) {
   return sha256(value).slice(0, 16);
 }
 
+function unique(values) {
+  return [...new Set((values || []).filter(Boolean))];
+}
+
+function commandHash(value) {
+  return value ? shortHash(String(value).trim().toLowerCase()) : null;
+}
+
 function nowIso(deps = {}) {
   return deps.now ? deps.now().toISOString() : new Date().toISOString();
 }
@@ -268,6 +378,122 @@ function sleep(ms, deps = {}) {
 
 function today(deps = {}) {
   return nowIso(deps).slice(0, 10);
+}
+
+function parseVersionMajor(text) {
+  const match = String(text || '').match(/(\d+)\.(\d+)\.(\d+)|(\d+)\.(\d+)|(\d+)/);
+  if (!match) return null;
+  return Number(match[1] || match[4] || match[6] || 0);
+}
+
+function classifyCoverageStatus(lastSeenAt, staleAfterMs = LOOP_HOOK_STALE_MS, deps = {}) {
+  if (!lastSeenAt) return 'missing';
+  const ageMs = Date.parse(nowIso(deps)) - Date.parse(lastSeenAt);
+  if (!Number.isFinite(ageMs) || ageMs < 0) return 'healthy';
+  return ageMs > staleAfterMs ? 'degraded' : 'healthy';
+}
+
+function defaultLoopState() {
+  return {
+    schemaVersion: 1,
+    enabled: false,
+    strategy: DEFAULT_STRATEGY,
+    status: 'stopped',
+    pid: null,
+    startedAt: null,
+    lastRunAt: null,
+    lastCompletedAt: null,
+    nextRunAt: null,
+    sleepMs: LOOP_SCHEDULE_MS.cold,
+    mode: 'cold',
+    consecutiveErrors: 0,
+    lastError: null,
+    outboxCursor: 0,
+    recentAnalyses: [],
+    activeSignals: {},
+    pendingHealthFailures: {},
+    health: {
+      baselineCreatedAt: null,
+      lastSnapshotAt: null,
+      lastSnapshot: null,
+      lastDrifts: [],
+    },
+  };
+}
+
+function loadLoopState(deps = {}) {
+  const state = readJson(paths(deps).loopState, defaultLoopState());
+  const merged = {
+    ...defaultLoopState(),
+    ...state,
+    health: {
+      ...defaultLoopState().health,
+      ...(state.health || {}),
+    },
+    recentAnalyses: Array.isArray(state.recentAnalyses) ? state.recentAnalyses.slice(-SIGNAL_HISTORY_LIMIT) : [],
+    activeSignals: state.activeSignals && typeof state.activeSignals === 'object' ? state.activeSignals : {},
+    pendingHealthFailures: state.pendingHealthFailures && typeof state.pendingHealthFailures === 'object' ? state.pendingHealthFailures : {},
+  };
+  if (!STRATEGY_PRESETS[merged.strategy]) merged.strategy = DEFAULT_STRATEGY;
+  return merged;
+}
+
+function saveLoopState(state, deps = {}) {
+  writeJson(paths(deps).loopState, {
+    ...defaultLoopState(),
+    ...state,
+    recentAnalyses: Array.isArray(state.recentAnalyses) ? state.recentAnalyses.slice(-SIGNAL_HISTORY_LIMIT) : [],
+  });
+}
+
+function markHookSeen(agent, hookType, deps = {}) {
+  const p = paths(deps);
+  const hooks = readJson(p.hooks, {});
+  if (!hooks.lastSeen || typeof hooks.lastSeen !== 'object') hooks.lastSeen = {};
+  hooks.lastSeen[agent] = {
+    hookType,
+    lastHookSeenAt: nowIso(deps),
+  };
+  hooks.lastHookSeenAt = hooks.lastSeen[agent].lastHookSeenAt;
+  writeJson(p.hooks, hooks);
+  return hooks.lastSeen[agent];
+}
+
+function mergeSignalMap(target, signal) {
+  const current = target[signal.kind];
+  if (!current) {
+    target[signal.kind] = {
+      ...signal,
+      sourceFingerprints: unique(signal.sourceFingerprints),
+    };
+    return;
+  }
+  target[signal.kind] = {
+    ...current,
+    title: signal.title || current.title,
+    confidence: Math.max(current.confidence || 0, signal.confidence || 0),
+    sourceLayers: unique([...(current.sourceLayers || []), ...(signal.sourceLayers || [])]),
+    sourceFingerprints: unique([...(current.sourceFingerprints || []), ...(signal.sourceFingerprints || [])]),
+  };
+}
+
+function makeSignal(kind, init = {}) {
+  return {
+    signalId: `sig_${shortHash(kind)}`,
+    kind,
+    title: init.title || kind,
+    confidence: init.confidence || 0.6,
+    sourceLayers: unique(init.sourceLayers || []),
+    sourceFingerprints: unique(init.sourceFingerprints || []),
+    firstSeenAt: init.firstSeenAt || nowIso(),
+    lastSeenAt: init.lastSeenAt || nowIso(),
+    hitCount: init.hitCount || 1,
+    suppressed: !!init.suppressed,
+  };
+}
+
+function getStrategyPreset(strategy) {
+  return STRATEGY_PRESETS[strategy] || STRATEGY_PRESETS[DEFAULT_STRATEGY];
 }
 
 function computeAgentDeviceId(baseDeviceId, agentType) {
@@ -291,6 +517,10 @@ function loadConfig(deps = {}) {
   if (config.shareData === undefined) config.shareData = false;
   if (config.autoSync === undefined) config.autoSync = false;
   if (config.paused === undefined) config.paused = false;
+  if (config.workerEnabled === undefined) config.workerEnabled = true;
+  if (!config.strategy || !STRATEGY_PRESETS[config.strategy]) config.strategy = DEFAULT_STRATEGY;
+  if (!config.analysis || typeof config.analysis !== 'object') config.analysis = {};
+  if (config.analysis.layer3Enabled === undefined) config.analysis.layer3Enabled = false;
   // If IDs were regenerated, back up old config
   if (oldIds && (oldIds.clientId && oldIds.clientId !== config.clientId)) {
     try {
@@ -353,7 +583,10 @@ export function createEvent(input, deps = {}) {
   const occurredAt = input.occurredAt || nowIso(deps);
   const fingerprint = input.fingerprint || shortHash(`${agent}\n${eventType}\n${sanitizedMessage.replace(/\d+/g, '<N>')}`);
   const agentDeviceId = computeAgentDeviceId(config.deviceId, agent);
-
+  const toolContext = input.toolContext || null;
+  const resolvedToolName = input.toolName || toolContext?.toolName || null;
+  const resolvedExitCode = input.toolExitCode ?? toolContext?.exitCode ?? null;
+  const resolvedCommandHash = input.commandHash || commandHash(input.command || toolContext?.command || toolContext?.original || '');
 
   return {
     schemaVersion: 1,
@@ -367,8 +600,15 @@ export function createEvent(input, deps = {}) {
     fingerprint,
     sanitizedMessage,
     severity: input.severity || severityFromMessage(sanitizedMessage),
+    captureSource: input.captureSource || 'manual',
+    hookType: input.hookType || null,
+    sessionId: input.sessionId || null,
+    toolName: resolvedToolName,
+    toolExitCode: resolvedExitCode,
+    commandHash: resolvedCommandHash,
+    ingestedAt: nowIso(deps),
     localContext: localContext(),
-    toolContext: input.toolContext || null,
+    toolContext,
     syncStatus: 'pending',
   };
 }
@@ -695,6 +935,87 @@ function writeAdvice(advice, deps = {}) {
   return normalized;
 }
 
+function ownerVerifyFiles(bountyId, answerId, deps = {}) {
+  const p = paths(deps);
+  const slug = [bountyId || 'unknown', answerId || 'unknown']
+    .map(value => String(value || '').replace(/[^a-zA-Z0-9_-]+/g, '-'))
+    .join('__');
+  const dir = path.join(p.base, 'owner-verify');
+  return {
+    dir,
+    guideMd: path.join(dir, `${slug}.md`),
+    snapshotJson: path.join(dir, `${slug}.json`),
+  };
+}
+
+function ownerVerifyLocalContext(config = {}) {
+  return {
+    clientId: config.clientId || '',
+    deviceId: config.deviceId || '',
+    autoSync: config.autoSync !== false,
+    paused: !!config.paused,
+    shareData: config.shareData !== false,
+    host: os.hostname(),
+    platform: process.platform,
+    nodeVersion: process.version,
+  };
+}
+
+function writeOwnerVerifyGuide(item, config = {}, deps = {}) {
+  const files = ownerVerifyFiles(item.bounty_id, item.answer_id, deps);
+  const generatedAt = nowIso(deps);
+  const localContext = ownerVerifyLocalContext(config);
+  const verifyCommand = `winaicheck agent owner-verify ${item.bounty_id} --answer ${item.answer_id} --result success|partial|failed --cmd "<local validation command>"`;
+  const lines = [
+    '# AICOEVO 发起者复现指南',
+    '',
+    `- Bounty: ${item.bounty_id}`,
+    `- Answer: ${item.answer_id}`,
+    `- 标题: ${item.title || '(无标题)'}`,
+    `- 提交时间: ${item.submitted_at || '-'}`,
+    `- 截止时间: ${item.deadline_at || '-'}`,
+    '',
+    '## 方案摘要',
+    '',
+    item.solution_summary || '暂无方案摘要。',
+    '',
+    '## 建议操作',
+    '',
+    '1. 在你自己的本地环境里手动复现原问题。',
+    '2. 按方案摘要执行修复或验证命令，确认现象是否消失。',
+    '3. 记录你实际执行过的命令和结果，再提交 owner-verify。',
+    '',
+    '## 提交命令',
+    '',
+    `\`${verifyCommand}\``,
+    '',
+    '默认策略为 prompt：命令会再次要求你确认，不会静默替你提交。',
+    '',
+  ];
+  ensureParent(files.guideMd);
+  fs.writeFileSync(files.guideMd, `${lines.join('\n')}\n`, 'utf8');
+  const snapshot = {
+    schemaVersion: 1,
+    generatedAt,
+    item,
+    localContext,
+    verifyCommand,
+  };
+  writeJson(files.snapshotJson, snapshot);
+  return {
+    ...files,
+    guideSha256: sha256(fs.readFileSync(files.guideMd, 'utf8')),
+    snapshot,
+  };
+}
+
+function loadOwnerVerifySnapshot(bountyId, answerId, deps = {}) {
+  const files = ownerVerifyFiles(bountyId, answerId, deps);
+  const snapshot = readJson(files.snapshotJson, null);
+  const guideSha256 = fs.existsSync(files.guideMd) ? sha256(fs.readFileSync(files.guideMd, 'utf8')) : '';
+  return { ...files, guideSha256, snapshot };
+}
+
 function printHelp(io = {}) {
   const out = io.stdout || process.stdout;
   out.write(`WinAICheck Agent Lite\n\n` +
@@ -708,6 +1029,11 @@ function printHelp(io = {}) {
     `  winaicheck agent sync\n` +
     `  winaicheck agent uploads --local|--remote\n` +
     `  winaicheck agent pause|resume\n` +
+    `  winaicheck agent disable                           — 彻底禁用 Worker 互助循环\n` +
+    `  winaicheck agent worker-enable                    — 重新启用 Worker 互助循环\n` +
+    `  winaicheck agent worker start|stop|status         — Worker 后台循环控制\n` +
+    `  winaicheck agent loop start|stop|status|run-once\n` +
+    `  winaicheck agent strategy get|set <balanced|harden|repair-only|innovate>\n` +
     `  winaicheck agent summary --date today\n` +
     `  winaicheck agent auth --email <addr> start|verify\n` +
     `  winaicheck agent bind [--agent claude-code|openclaw]  (自动打开浏览器确认)\n` +
@@ -923,6 +1249,7 @@ function buildPostToolHookScript(agentCmd, baseDir) {
   return [
     '#!/usr/bin/env node',
     "const { execFileSync } = require('child_process');",
+    "const { createHash } = require('crypto');",
     '',
     'function readStdin() {',
     '  return new Promise(resolve => {',
@@ -946,6 +1273,10 @@ function buildPostToolHookScript(agentCmd, baseDir) {
     '    output.message ||',
     "    ''",
     '  );',
+    '}',
+    '',
+    'function shortHash(value) {',
+    "  return createHash('sha256').update(String(value || '')).digest('hex').slice(0, 16);",
     '}',
     '',
     '(async () => {',
@@ -973,10 +1304,12 @@ function buildPostToolHookScript(agentCmd, baseDir) {
     '    if (toolInput.command) toolCtx.command = String(toolInput.command).slice(0, 500);',
     '    if (toolInput.file_path) toolCtx.filePath = String(toolInput.file_path).slice(0, 300);',
     '    if (exitCode !== undefined) toolCtx.exitCode = exitCode;',
+    '    const sessionId = data.sessionId || data.session_id || data.conversationId || data.conversation_id || null;',
+    '    const cmdHash = toolInput.command ? shortHash(String(toolInput.command)) : null;',
     '',
-    `    execFileSync(${JSON.stringify(agentCmd)}, ['capture', '--agent', 'claude-code', '--tool-context', JSON.stringify(toolCtx)], {`,
-    '      shell: true,',
-    '      input: normalized,',
+    `    execFileSync(${JSON.stringify(agentCmd)}, ['capture', '--agent', 'claude-code', '--capture-source', 'hook', '--hook-type', 'settings-post-tool', '--tool-name', toolName || 'Bash', '--tool-exit-code', String(exitCode ?? ''), ...(sessionId ? ['--session-id', String(sessionId)] : []), ...(cmdHash ? ['--command-hash', String(cmdHash)] : []), '--tool-context', JSON.stringify(toolCtx)], {`,
+      '      shell: true,',
+      '      input: normalized,',
     "      encoding: 'utf8',",
     '      windowsHide: true,',
     '      timeout: 15000,',
@@ -1008,11 +1341,13 @@ function buildPostToolHookScript(agentCmd, baseDir) {
 }
 
 function buildSessionStartHookScript(baseDir) {
+  const agentCmd = path.join(baseDir, 'agent', 'winaicheck-agent.cmd');
   const cacheFile = path.join(baseDir, 'version-cache.json');
   const backgroundScript = [
     "const { execFileSync } = require('child_process');",
     "const { mkdirSync, writeFileSync } = require('fs');",
     "const { dirname } = require('path');",
+    `const agentCmd = ${JSON.stringify(agentCmd)};`,
     `const cacheFile = ${JSON.stringify(cacheFile)};`,
     '',
     'function version(cmd) {',
@@ -1031,6 +1366,10 @@ function buildSessionStartHookScript(baseDir) {
     '  hasUpdate: false,',
     '  lastCheck: new Date().toISOString()',
     '};',
+    '',
+    'try {',
+    "  execFileSync(agentCmd, ['hook-seen', '--agent', 'claude-code', '--hook-type', 'settings-session-start', '--capture-source', 'hook'], { stdio: 'ignore', windowsHide: true, timeout: 5000 });",
+    '} catch {}',
     '',
     'mkdirSync(dirname(cacheFile), { recursive: true });',
     'writeFileSync(cacheFile, JSON.stringify(result, null, 2));',
@@ -1102,6 +1441,7 @@ function verifyAgentIntegrity(deps = {}) {
 async function runOriginalAgent(args, deps = {}) {
   const original = args.original;
   if (!original) throw new Error('缺少 --original');
+  markHookSeen(normalizeAgent(args.agent), 'powershell-wrapper', deps);
   if (!verifyAgentIntegrity(deps)) {
     process.stderr.write('WinAICheck: Agent runner 完整性校验失败，正在重新安装...\n');
     installLocalAgent(deps);
@@ -1162,6 +1502,16 @@ async function runOriginalAgent(args, deps = {}) {
       agent: args.agent,
       message,
       severity: exitCode === 0 && (stderrText.trim() || extractedError) ? 'warn' : 'error',
+      captureSource: 'wrapper',
+      hookType: 'powershell-wrapper',
+      toolName: normalizeAgent(args.agent),
+      toolExitCode: exitCode,
+      commandHash: commandHash(original),
+      toolContext: {
+        original,
+        command: original,
+        exitCode,
+      },
     }, deps), deps);
     const experience = lookupExperience(message);
     if (experience) {
@@ -1212,6 +1562,751 @@ function showAdvice(args, deps = {}, io = {}) {
   const content = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : (format === 'markdown' ? '# AICOEVO 修复建议\n\n暂无建议。\n' : '{}\n');
   (io.stdout || process.stdout).write(content.endsWith('\n') ? content : `${content}\n`);
   return content;
+}
+
+function readRecentEventsForAnalysis(deps = {}, limit = 10) {
+  return readJsonl(paths(deps).outbox, 200)
+    .filter(event => event && event.captureSource !== 'loop' && event.eventType !== 'agent_signal' && event.eventType !== 'env_drift')
+    .slice(-limit);
+}
+
+function extractLayer1Signals(events) {
+  const map = {};
+  for (const event of events) {
+    const text = `${event.sanitizedMessage || ''}\n${event.toolContext?.command || ''}`.toLowerCase();
+    const fingerprints = [event.fingerprint];
+    if (/command not found|not found:|enoent|不是内部或外部命令/.test(text)) {
+      mergeSignalMap(map, makeSignal('tool_missing', { title: '关键命令缺失', confidence: 0.8, sourceLayers: ['regex'], sourceFingerprints: fingerprints }));
+    }
+    if (/mcp|config|json|parse|invalid config|malformed/.test(text)) {
+      mergeSignalMap(map, makeSignal('config_breakage', { title: '配置损坏或不兼容', confidence: 0.74, sourceLayers: ['regex'], sourceFingerprints: fingerprints }));
+    }
+    if (/econnrefused|etimedout|timeout|dns|ssl|certificate|network/.test(text)) {
+      mergeSignalMap(map, makeSignal('network_instability', { title: '网络或远端连接不稳定', confidence: 0.72, sourceLayers: ['regex'], sourceFingerprints: fingerprints }));
+    }
+    if (/unauthorized|forbidden|auth|token|api key|permission denied|eacces/.test(text)) {
+      mergeSignalMap(map, makeSignal('auth_failure', { title: '认证或权限失败', confidence: 0.76, sourceLayers: ['regex'], sourceFingerprints: fingerprints }));
+    }
+    if (/slow|latency|bottleneck|oom|out of memory|throttle/.test(text)) {
+      mergeSignalMap(map, makeSignal('perf_bottleneck', { title: '性能瓶颈或资源压力', confidence: 0.68, sourceLayers: ['regex'], sourceFingerprints: fingerprints }));
+    }
+    if (/unsupported|not supported|not implemented|unknown flag|unknown option|feature/.test(text)) {
+      mergeSignalMap(map, makeSignal('capability_gap', { title: '能力缺口或不支持功能', confidence: 0.67, sourceLayers: ['regex'], sourceFingerprints: fingerprints }));
+    }
+  }
+  return map;
+}
+
+function scoreKeywordSignals(events, strategy) {
+  const strategyPreset = getStrategyPreset(strategy);
+  const corpus = events.map(event => `${event.sanitizedMessage || ''}\n${event.toolContext?.command || ''}`).join('\n').toLowerCase();
+  const map = {};
+  for (const [kind, profile] of Object.entries(SIGNAL_PROFILES)) {
+    let score = 0;
+    for (const [keyword, weight] of Object.entries(profile.keywords)) {
+      const escaped = keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const matches = corpus.match(new RegExp(escaped, 'g'));
+      if (matches) score += matches.length * weight;
+    }
+    score += strategyPreset.keywordBias?.[kind] || 0;
+    if (score >= profile.threshold) {
+      mergeSignalMap(map, makeSignal(kind, {
+        title: profile.title,
+        confidence: Math.min(0.95, 0.55 + score / 20),
+        sourceLayers: ['keyword'],
+        sourceFingerprints: unique(events.map(event => event.fingerprint)),
+      }));
+    }
+  }
+  return map;
+}
+
+function analyzeRecentHistory(recentAnalyses) {
+  const recent = (recentAnalyses || []).slice(-SIGNAL_HISTORY_LIMIT);
+  const suppressionWindow = recent.slice(-SIGNAL_SUPPRESSION_WINDOW);
+  const signalFreq = {};
+  for (const analysis of suppressionWindow) {
+    for (const key of analysis.signalKeys || []) {
+      signalFreq[key] = (signalFreq[key] || 0) + 1;
+    }
+  }
+  const suppressedSignals = new Set(
+    Object.entries(signalFreq)
+      .filter(([, count]) => count >= SIGNAL_SUPPRESSION_THRESHOLD)
+      .map(([key]) => key)
+  );
+
+  let consecutiveEmptyCycles = 0;
+  for (let i = recent.length - 1; i >= 0; i--) {
+    if ((recent[i].actionableCount || 0) === 0) consecutiveEmptyCycles++;
+    else break;
+  }
+
+  let emptyCycleCount = 0;
+  for (const analysis of recent.slice(-SIGNAL_SUPPRESSION_WINDOW)) {
+    if ((analysis.actionableCount || 0) === 0) emptyCycleCount++;
+  }
+
+  return {
+    signalFreq,
+    suppressedSignals,
+    consecutiveEmptyCycles,
+    emptyCycleCount,
+  };
+}
+
+async function collectCommandHealth(name, deps = {}) {
+  const override = deps.healthProbe?.commands?.[name];
+  if (override) {
+    return {
+      name,
+      installed: !!override.installed,
+      resolved: override.resolved || null,
+      version: override.version || null,
+      major: override.major ?? parseVersionMajor(override.version),
+    };
+  }
+
+  let resolved = null;
+  try {
+    resolved = resolveCommand(name);
+  } catch {}
+  const installed = !!resolved && resolved !== name;
+
+  let version = null;
+  if (installed || name === 'node' || name === 'git' || name === 'python') {
+    try {
+      const args = name === 'python' ? ['--version'] : ['--version'];
+      version = execFileSync(name, args, {
+        encoding: 'utf8',
+        windowsHide: true,
+        timeout: 5000,
+        stdio: ['ignore', 'pipe', 'ignore'],
+      }).trim();
+    } catch {}
+  }
+
+  return {
+    name,
+    installed,
+    resolved: installed ? resolved : null,
+    version,
+    major: parseVersionMajor(version),
+  };
+}
+
+async function collectDiskHealth(deps = {}) {
+  if (deps.healthProbe?.disk) return deps.healthProbe.disk;
+  if (process.platform !== 'win32') return { ok: true, percentFree: null, freeBytes: null, totalBytes: null };
+  try {
+    const baseDrive = String(getBaseDir(deps)).slice(0, 2).replace(/\\/g, '');
+    const script = `$d=Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='${baseDrive}'"; if($d){$o=@{free=[double]$d.FreeSpace;total=[double]$d.Size;percent=[math]::Round(($d.FreeSpace/$d.Size)*100,2)};$o|ConvertTo-Json -Compress}`;
+    const raw = execFileSync('powershell.exe', ['-NoProfile', '-Command', script], {
+      encoding: 'utf8',
+      windowsHide: true,
+      timeout: 5000,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    if (!raw) return { ok: true, percentFree: null, freeBytes: null, totalBytes: null };
+    const parsed = JSON.parse(raw);
+    return {
+      ok: true,
+      percentFree: Number(parsed.percent),
+      freeBytes: Number(parsed.free),
+      totalBytes: Number(parsed.total),
+    };
+  } catch {
+    return { ok: true, percentFree: null, freeBytes: null, totalBytes: null };
+  }
+}
+
+async function collectHealthSnapshot(deps = {}) {
+  const commands = {};
+  for (const name of ['claude', 'openclaw', 'git', 'node', 'python']) {
+    commands[name] = await collectCommandHealth(name, deps);
+  }
+
+  let dnsOk = true;
+  if (deps.healthProbe?.dnsOk !== undefined) {
+    dnsOk = !!deps.healthProbe.dnsOk;
+  } else {
+    try {
+      await dnsLookup('aicoevo.net');
+      dnsOk = true;
+    } catch {
+      dnsOk = false;
+    }
+  }
+
+  let siteReachable = true;
+  if (deps.healthProbe?.siteReachable !== undefined) {
+    siteReachable = !!deps.healthProbe.siteReachable;
+  } else {
+    try {
+      const fetchImpl = deps.fetchImpl || fetch;
+      const res = await fetchImpl('https://aicoevo.net', { method: 'HEAD', signal: AbortSignal.timeout(5000) });
+      siteReachable = !!res && res.status < 500;
+    } catch {
+      siteReachable = false;
+    }
+  }
+
+  const p = paths(deps);
+  const hooks = readJson(p.hooks, {});
+  const disk = await collectDiskHealth(deps);
+  return {
+    capturedAt: nowIso(deps),
+    dnsOk,
+    siteReachable,
+    commands,
+    disk,
+    localRunnerPresent: fs.existsSync(p.agentCmd),
+    hookFilesPresent: {
+      sessionStart: fs.existsSync(p.sessionStartHookJs),
+      postTool: fs.existsSync(p.postToolHookJs),
+    },
+    hookLastSeen: hooks.lastSeen || {},
+  };
+}
+
+function describeHealthDrifts(baseline, current) {
+  const drifts = [];
+  for (const name of Object.keys(current.commands || {})) {
+    const before = baseline.commands?.[name];
+    const after = current.commands?.[name];
+    if (before?.installed && !after?.installed) {
+      drifts.push({
+        key: `env_drift_command_missing_${name}`,
+        title: `${name} 已从环境中消失`,
+        detail: `${name} 在基线中存在，但当前检测不到。`,
+      });
+    } else if (before?.major != null && after?.major != null && before.major !== after.major) {
+      drifts.push({
+        key: `env_drift_version_changed_${name}`,
+        title: `${name} 主版本发生变化`,
+        detail: `${name} 已从 ${before.major} 变为 ${after.major}。`,
+      });
+    }
+  }
+  if (current.disk?.percentFree != null && current.disk.percentFree < 10) {
+    drifts.push({
+      key: 'env_drift_disk_low',
+      title: '系统磁盘可用空间过低',
+      detail: `当前可用空间约 ${current.disk.percentFree}%`,
+    });
+  }
+  if (baseline.dnsOk && !current.dnsOk) {
+    drifts.push({
+      key: 'env_drift_dns_unavailable',
+      title: 'DNS 解析出现异常',
+      detail: '当前无法解析 aicoevo.net。',
+    });
+  }
+  if (baseline.siteReachable && !current.siteReachable) {
+    drifts.push({
+      key: 'env_drift_site_unreachable',
+      title: 'AICOEVO 站点当前不可达',
+      detail: '当前无法连通 https://aicoevo.net。',
+    });
+  }
+  if (baseline.localRunnerPresent && !current.localRunnerPresent) {
+    drifts.push({
+      key: 'env_drift_runner_missing',
+      title: '本地 Agent runner 已丢失',
+      detail: 'winaicheck-agent.cmd 不存在。',
+    });
+  }
+  return drifts;
+}
+
+function appendSignalSnapshot(signal, deps = {}) {
+  appendJsonl(paths(deps).signals, signal);
+}
+
+function createDerivedLoopEvent(signal, deps = {}, overrides = {}) {
+  return createEvent({
+    agent: overrides.agent || 'custom',
+    message: `${signal.title}${signal.detail ? `\n${signal.detail}` : ''}`,
+    eventType: overrides.eventType || 'agent_signal',
+    severity: overrides.severity || 'warn',
+    captureSource: 'loop',
+    hookType: 'loop',
+    toolName: 'winaicheck-loop',
+    sessionId: overrides.sessionId || null,
+    toolContext: {
+      signalKind: signal.kind,
+      confidence: signal.confidence,
+      sourceLayers: signal.sourceLayers,
+      detail: signal.detail || null,
+    },
+  }, deps);
+}
+
+async function runLoopAnalysis(deps = {}) {
+  const config = loadConfig(deps);
+  const strategy = STRATEGY_PRESETS[config.strategy] ? config.strategy : DEFAULT_STRATEGY;
+  const strategyPreset = getStrategyPreset(strategy);
+  const p = paths(deps);
+  const state = loadLoopState(deps);
+  state.strategy = strategy;
+  state.lastRunAt = nowIso(deps);
+
+  const { rows: newRows, nextCursor } = readJsonlSince(p.outbox, state.outboxCursor || 0);
+  const recentEvents = readRecentEventsForAnalysis(deps, 10);
+  const eventsForSignals = recentEvents.length > 0 ? recentEvents : newRows.filter(event => event && event.captureSource !== 'loop');
+
+  const layer1 = extractLayer1Signals(eventsForSignals);
+  const layer2 = scoreKeywordSignals(eventsForSignals, strategy);
+  const combined = {};
+  for (const signal of Object.values(layer1)) mergeSignalMap(combined, signal);
+  for (const signal of Object.values(layer2)) mergeSignalMap(combined, signal);
+
+  const previousHistory = Array.isArray(state.recentAnalyses) ? state.recentAnalyses : [];
+  const currentKinds = Object.keys(combined);
+  const tentativeAnalysis = { at: nowIso(deps), signalKeys: currentKinds, actionableCount: currentKinds.length };
+  const history = analyzeRecentHistory([...previousHistory, tentativeAnalysis]);
+  const previousSignalKeys = new Set((previousHistory[previousHistory.length - 1]?.signalKeys) || []);
+  const derivedSignals = [];
+
+  let actionableSignals = Object.values(combined).map(signal => {
+    const suppressed = history.suppressedSignals.has(signal.kind);
+    return {
+      ...signal,
+      suppressed,
+      title: signal.title,
+      lastSeenAt: nowIso(deps),
+    };
+  });
+
+  actionableSignals = actionableSignals.filter(signal => {
+    if (!strategyPreset.allowedSignalKinds) return true;
+    return strategyPreset.allowedSignalKinds.includes(signal.kind);
+  });
+
+  if (history.consecutiveEmptyCycles >= 3 && strategyPreset.allowExplore) {
+    actionableSignals.push(makeSignal('explore_opportunity', {
+      title: '近期没有新问题，建议主动探索潜在机会',
+      confidence: 0.62,
+      sourceLayers: ['history'],
+    }));
+  }
+  if (history.emptyCycleCount >= 4) {
+    actionableSignals.push(makeSignal('stagnation', {
+      title: '近期问题发现进入停滞状态',
+      confidence: 0.71,
+      sourceLayers: ['history'],
+    }));
+  }
+
+  const currentSnapshot = await collectHealthSnapshot(deps);
+  let baseline = readJson(p.healthBaseline, null);
+  const confirmedHealthDrifts = [];
+  if (!baseline) {
+    baseline = currentSnapshot;
+    writeJson(p.healthBaseline, baseline);
+    state.health.baselineCreatedAt = currentSnapshot.capturedAt;
+  } else {
+    const driftCandidates = describeHealthDrifts(baseline, currentSnapshot);
+    const nextCounters = {};
+    for (const drift of driftCandidates) {
+      const count = Number(state.pendingHealthFailures?.[drift.key] || 0) + 1;
+      nextCounters[drift.key] = count;
+      if (count >= 2) confirmedHealthDrifts.push(drift);
+    }
+    state.pendingHealthFailures = nextCounters;
+  }
+
+  for (const drift of confirmedHealthDrifts) {
+    actionableSignals.push(makeSignal(drift.key, {
+      title: drift.title,
+      confidence: 0.84,
+      sourceLayers: ['health'],
+    }));
+  }
+
+  const finalizedAnalysis = {
+    at: nowIso(deps),
+    signalKeys: actionableSignals.filter(signal => !signal.suppressed).map(signal => signal.kind),
+    actionableCount: actionableSignals.filter(signal => !signal.suppressed).length,
+  };
+  state.recentAnalyses = [...previousHistory, finalizedAnalysis].slice(-SIGNAL_HISTORY_LIMIT);
+
+  for (const signal of actionableSignals) {
+    const current = state.activeSignals[signal.kind];
+    const hitCount = (current?.hitCount || 0) + 1;
+    const enriched = {
+      ...current,
+      ...signal,
+      hitCount,
+      firstSeenAt: current?.firstSeenAt || nowIso(deps),
+      lastSeenAt: nowIso(deps),
+      sourceLayers: unique([...(current?.sourceLayers || []), ...(signal.sourceLayers || [])]),
+      sourceFingerprints: unique([...(current?.sourceFingerprints || []), ...(signal.sourceFingerprints || [])]),
+    };
+    state.activeSignals[signal.kind] = enriched;
+
+    if (!signal.suppressed && !previousSignalKeys.has(signal.kind)) {
+      appendSignalSnapshot(enriched, deps);
+      const eventType = signal.kind.startsWith('env_drift_') ? 'env_drift' : 'agent_signal';
+      const derivedEvent = createDerivedLoopEvent({
+        ...enriched,
+        detail: confirmedHealthDrifts.find(item => item.key === signal.kind)?.detail || null,
+      }, deps, { eventType });
+      storeEvent(derivedEvent, deps);
+      derivedSignals.push(enriched.kind);
+    }
+  }
+
+  const activeSignalKeys = new Set(actionableSignals.map(signal => signal.kind));
+  for (const kind of Object.keys(state.activeSignals)) {
+    if (!activeSignalKeys.has(kind) && !kind.startsWith('env_drift_')) delete state.activeSignals[kind];
+  }
+
+  state.health.lastSnapshotAt = currentSnapshot.capturedAt;
+  state.health.lastSnapshot = currentSnapshot;
+  state.health.lastDrifts = confirmedHealthDrifts;
+  state.outboxCursor = nextCursor;
+  state.lastCompletedAt = nowIso(deps);
+  state.status = 'running';
+  state.consecutiveErrors = 0;
+  state.lastError = null;
+  saveLoopState(state, deps);
+
+  const recentProblemEvent = [...newRows].reverse().find(event => event && event.captureSource !== 'loop');
+  const recentAgeMs = recentProblemEvent?.occurredAt ? Date.parse(nowIso(deps)) - Date.parse(recentProblemEvent.occurredAt) : Number.POSITIVE_INFINITY;
+  let mode = 'cold';
+  if (newRows.length > 0 || finalizedAnalysis.actionableCount > 0 || recentAgeMs <= 10 * 60 * 1000) mode = 'hot';
+  else if (recentAgeMs <= 2 * 60 * 60 * 1000) mode = 'warm';
+  const sleepMs = Math.max(1000, Math.round(LOOP_SCHEDULE_MS[mode] * strategyPreset.cadenceScale));
+
+  state.mode = mode;
+  state.sleepMs = sleepMs;
+  state.nextRunAt = new Date(Date.now() + sleepMs).toISOString();
+  saveLoopState(state, deps);
+
+  if (config.autoSync && config.shareData && !config.paused) {
+    await bestEffortSync(deps);
+  }
+
+  return {
+    ok: true,
+    strategy,
+    mode,
+    sleepMs,
+    derivedSignals,
+    confirmedHealthDrifts: confirmedHealthDrifts.map(item => item.key),
+    status: state,
+  };
+}
+
+function acquireLoopLock(deps = {}) {
+  const lockPath = paths(deps).loopLock;
+  const now = Date.now();
+  try {
+    ensureParent(lockPath);
+    fs.writeFileSync(lockPath, JSON.stringify({ pid: process.pid, acquiredAt: nowIso(deps), expiresAt: new Date(now + MAX_LOOP_BACKOFF_MS).toISOString() }), { flag: 'wx', encoding: 'utf8' });
+    return true;
+  } catch {
+    try {
+      const existing = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+      if (!existing?.pid) return false;
+      try {
+        process.kill(existing.pid, 0);
+        return false;
+      } catch {
+        fs.unlinkSync(lockPath);
+        fs.writeFileSync(lockPath, JSON.stringify({ pid: process.pid, acquiredAt: nowIso(deps), expiresAt: new Date(now + MAX_LOOP_BACKOFF_MS).toISOString() }), { flag: 'wx', encoding: 'utf8' });
+        return true;
+      }
+    } catch {
+      return false;
+    }
+  }
+}
+
+function releaseLoopLock(deps = {}) {
+  try {
+    const lockPath = paths(deps).loopLock;
+    if (fs.existsSync(lockPath)) {
+      const existing = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+      if (!existing?.pid || existing.pid === process.pid) fs.unlinkSync(lockPath);
+    }
+  } catch {}
+}
+
+async function runLoopDaemon(args, deps = {}, io = {}) {
+  if (!acquireLoopLock(deps)) {
+    (io.stdout || process.stdout).write(`${JSON.stringify({ ok: false, error: 'loop already running' }, null, 2)}\n`);
+    return 1;
+  }
+
+  const state = loadLoopState(deps);
+  state.enabled = true;
+  state.status = 'running';
+  state.pid = process.pid;
+  state.startedAt = state.startedAt || nowIso(deps);
+  saveLoopState(state, deps);
+
+  const maxCycles = args.maxCycles ? Number(args.maxCycles) : null;
+  let cycles = 0;
+  try {
+    while (true) {
+      const current = loadLoopState(deps);
+      if (current.enabled === false || current.stopRequestedAt) break;
+      try {
+        const result = await runLoopAnalysis(deps);
+        cycles += 1;
+        if (maxCycles && cycles >= maxCycles) break;
+        await sleep(result.sleepMs, deps);
+      } catch (error) {
+        const failed = loadLoopState(deps);
+        failed.status = 'backoff';
+        failed.consecutiveErrors = (failed.consecutiveErrors || 0) + 1;
+        failed.lastError = error instanceof Error ? error.message : String(error);
+        const backoffMs = Math.min(MAX_LOOP_BACKOFF_MS, LOOP_SCHEDULE_MS.warm * Math.max(1, failed.consecutiveErrors));
+        failed.sleepMs = backoffMs;
+        failed.nextRunAt = new Date(Date.now() + backoffMs).toISOString();
+        saveLoopState(failed, deps);
+        await sleep(backoffMs, deps);
+      }
+    }
+  } finally {
+    const finalState = loadLoopState(deps);
+    finalState.status = 'stopped';
+    finalState.pid = null;
+    finalState.nextRunAt = null;
+    finalState.stopRequestedAt = null;
+    saveLoopState(finalState, deps);
+    releaseLoopLock(deps);
+  }
+  (io.stdout || process.stdout).write(`${JSON.stringify({ ok: true, status: loadLoopState(deps) }, null, 2)}\n`);
+  return 0;
+}
+
+function loopStatus(deps = {}) {
+  const state = loadLoopState(deps);
+  return {
+    ...state,
+    lockPresent: fs.existsSync(paths(deps).loopLock),
+  };
+}
+
+// ── Worker state management ──
+
+function defaultWorkerState() {
+  return {
+    schemaVersion: 1,
+    enabled: false,
+    status: 'stopped',
+    pid: null,
+    startedAt: null,
+    lastCycleAt: null,
+    lastCycleResult: null,
+    nextCycleAt: null,
+    totalCycles: 0,
+    totalSolved: 0,
+    totalSkipped: 0,
+    consecutiveErrors: 0,
+    lastError: null,
+  };
+}
+
+function loadWorkerState(deps = {}) {
+  return readJson(paths(deps).workerState, defaultWorkerState());
+}
+
+function saveWorkerState(state, deps = {}) {
+  writeJson(paths(deps).workerState, state);
+}
+
+function acquireWorkerLock(deps = {}) {
+  const lockPath = paths(deps).workerLock;
+  try {
+    const existing = readJson(lockPath, {});
+    if (existing.pid && existing.pid !== process.pid) {
+      try { process.kill(existing.pid, 0); return false; } catch {
+        fs.unlinkSync(lockPath);
+      }
+    }
+    if (existing.pid === process.pid) return true;
+  } catch {}
+  writeJson(lockPath, { pid: process.pid, startedAt: nowIso(deps) });
+  return true;
+}
+
+function releaseWorkerLock(deps = {}) {
+  try {
+    const lockPath = paths(deps).workerLock;
+    const existing = readJson(lockPath, {});
+    if (!existing?.pid || existing.pid === process.pid) fs.unlinkSync(lockPath);
+  } catch {}
+}
+
+function isProcessAlive(pid) {
+  if (!pid) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function startWorkerDaemon(deps = {}) {
+  const config = loadConfig(deps);
+  if (!config.workerEnabled) {
+    return { ok: true, skipped: true, reason: 'worker disabled' };
+  }
+  if (!apiKeyHeaders(config)) {
+    return { ok: true, skipped: true, reason: 'missing auth token' };
+  }
+
+  const local = installLocalAgent(deps);
+  const wState = loadWorkerState(deps);
+  if (isProcessAlive(wState.pid)) {
+    return { ok: true, alreadyRunning: true, pid: wState.pid };
+  }
+
+  const spawnImpl = deps.spawnImpl || spawn;
+  const child = spawnImpl(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', `"${local.agentCmd}" worker daemon`], {
+    detached: true,
+    stdio: 'ignore',
+    windowsHide: true,
+  });
+  child.unref?.();
+  return { ok: true, started: true, pid: child.pid };
+}
+
+async function runWorkerDaemon(args, deps = {}, io = {}) {
+  if (!acquireWorkerLock(deps)) {
+    (io.stdout || process.stdout).write(`${JSON.stringify({ ok: false, error: 'worker already running' }, null, 2)}\n`);
+    return 1;
+  }
+
+  const config = loadConfig(deps);
+  const apiKey = apiKeyHeaders(config);
+  if (!apiKey) {
+    releaseWorkerLock(deps);
+    (io.stdout || process.stdout).write('Worker 需要 Agent API Key，请先运行 winaicheck agent bind\n');
+    return 1;
+  }
+
+  const rawInterval = Number(args.workerInterval || args.interval || WORKER_DEFAULT_INTERVAL_MS);
+  const interval = (isNaN(rawInterval) || rawInterval <= 0) ? WORKER_DEFAULT_INTERVAL_MS : rawInterval;
+  const maxPerCycle = Number(args.maxParallelTasks || args.limit || WORKER_MAX_PARALLEL);
+  const _fetch = deps.fetchImpl || fetch;
+  const headers = { ...apiKey, 'Content-Type': 'application/json' };
+  const out = io.stdout || process.stdout;
+
+  const state = loadWorkerState(deps);
+  state.enabled = true;
+  state.status = 'running';
+  state.pid = process.pid;
+  state.startedAt = state.startedAt || nowIso(deps);
+  saveWorkerState(state, deps);
+
+  out.write(`[Worker] 启动 (间隔 ${Math.round(interval / 1000)}s, 每轮最多 ${maxPerCycle})\n`);
+
+  try {
+    while (true) {
+      const currentConfig = loadConfig(deps);
+      const currentState = loadWorkerState(deps);
+
+      if (!currentConfig.workerEnabled || currentState.enabled === false) {
+        out.write('[Worker] 已禁用，退出\n');
+        break;
+      }
+
+      if (currentConfig.paused) {
+        out.write('[Worker] 已暂停，等待恢复...\n');
+        const pauseCheckInterval = Math.min(interval, 10 * 1000);
+        await new Promise(r => setTimeout(r, pauseCheckInterval));
+        continue;
+      }
+
+      try {
+        const heartbeat = await heartbeatAgentV2(headers, {
+          body: { max_parallel_tasks: maxPerCycle, worker_status: 'active' },
+        }, deps);
+        const recData = heartbeat.data || {};
+        const items = (recData.recommended_bounties || []).slice(0, maxPerCycle);
+
+        let solved = 0;
+        let skipped = 0;
+
+        if (items.length === 0) {
+          // silent, no output for empty cycles to reduce noise
+        } else {
+          out.write(`[Worker] 发现 ${items.length} 个推荐任务\n`);
+          for (const item of items) {
+            if (!/^[a-zA-Z0-9_-]+$/.test(item.id)) { skipped++; continue; }
+            // KB auto-solve only — never execute local fix commands
+            const solveRes = await _fetch(`${agentApiBase('v1')}/bounties/${item.id}/auto-solve`, {
+              method: 'POST', headers,
+            });
+            let solveData;
+            try { solveData = await solveRes.json(); } catch { out.write(`[Worker] auto-solve 返回非 JSON 响应，跳过 ${item.id}\n`); skipped++; continue; }
+            if (!solveData.answer || typeof solveData.answer !== 'string') { skipped++; continue; }
+
+            if (!solveData.matched) {
+              skipped++;
+              continue;
+            }
+
+            const submitRes = await _fetch(`${agentApiBase('v2')}/bounties/${item.id}/claim-and-submit`, {
+              method: 'POST',
+              headers,
+              body: JSON.stringify({
+                ...(item.recommended_env_id ? { env_id: item.recommended_env_id } : {}),
+                content: solveData.answer,
+                source: 'kb_auto',
+                confidence: solveData.confidence || 0.8,
+                execution_mode: 'agent',
+              }),
+            });
+
+            if (submitRes.ok) {
+              solved++;
+            }
+          }
+        }
+
+        const updatedState = loadWorkerState(deps);
+        updatedState.lastCycleAt = nowIso(deps);
+        updatedState.lastCycleResult = { solved, skipped, total: items.length };
+        updatedState.totalCycles = (updatedState.totalCycles || 0) + 1;
+        updatedState.totalSolved = (updatedState.totalSolved || 0) + solved;
+        updatedState.totalSkipped = (updatedState.totalSkipped || 0) + skipped;
+        updatedState.consecutiveErrors = 0;
+        updatedState.lastError = null;
+        updatedState.nextCycleAt = new Date(Date.now() + interval).toISOString();
+        saveWorkerState(updatedState, deps);
+      } catch (e) {
+        const failed = loadWorkerState(deps);
+        failed.consecutiveErrors = (failed.consecutiveErrors || 0) + 1;
+        failed.totalCycles = (failed.totalCycles || 0) + 1;
+        failed.lastError = e instanceof Error ? e.message : String(e);
+        const backoff = Math.min(interval * Math.pow(2, failed.consecutiveErrors - 1), 60 * 60 * 1000);
+        failed.nextCycleAt = new Date(Date.now() + backoff).toISOString();
+        saveWorkerState(failed, deps);
+        out.write(`[Worker] 循环错误: ${failed.lastError}\n`);
+      }
+
+      const st = loadWorkerState(deps);
+      const sleepMs = st.consecutiveErrors > 0
+        ? Math.min(interval * Math.pow(2, st.consecutiveErrors - 1), 60 * 60 * 1000)
+        : interval;
+      await new Promise(r => setTimeout(r, sleepMs));
+    }
+  } finally {
+    const finalState = loadWorkerState(deps);
+    finalState.status = 'stopped';
+    finalState.pid = null;
+    finalState.nextCycleAt = null;
+    saveWorkerState(finalState, deps);
+    releaseWorkerLock(deps);
+  }
+  return 0;
 }
 
 async function authStart(args, deps = {}, io = {}) {
@@ -1265,12 +2360,35 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
     if (args.toolContext) {
       try { toolContext = JSON.parse(args.toolContext); } catch {}
     }
-    const event = storeEvent(createEvent({ agent: args.agent, message, severity: args.severity, toolContext }, deps), deps);
+    if (args.hookType) {
+      markHookSeen(normalizeAgent(args.agent), String(args.hookType), deps);
+    }
+    const rawExitCode = args.toolExitCode;
+    const parsedExitCode = rawExitCode === undefined || rawExitCode === '' ? null : Number(rawExitCode);
+    const event = storeEvent(createEvent({
+      agent: args.agent,
+      message,
+      severity: args.severity,
+      captureSource: args.captureSource || (args.hookType ? 'hook' : 'manual'),
+      hookType: args.hookType || null,
+      sessionId: args.sessionId || null,
+      toolName: args.toolName || toolContext?.toolName || null,
+      toolExitCode: Number.isFinite(parsedExitCode) ? parsedExitCode : null,
+      commandHash: args.commandHash || null,
+      toolContext,
+    }, deps), deps);
     const experience = lookupExperience(message);
     if (experience) appendExperience(event, experience, deps);
     const config = loadConfig(deps);
     if (config.autoSync && config.shareData && !config.paused) await bestEffortSync(deps);
     out.write(`${JSON.stringify({ ok: true, eventId: event.eventId, fingerprint: event.fingerprint }, null, 2)}\n`);
+    return 0;
+  }
+
+  if (command === 'hook-seen') {
+    const agent = normalizeAgent(args.agent);
+    const seen = markHookSeen(agent, String(args.hookType || 'hook'), deps);
+    out.write(`${JSON.stringify({ ok: true, agent, ...seen }, null, 2)}\n`);
     return 0;
   }
 
@@ -1299,8 +2417,117 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
     const config = loadConfig(deps);
     config.paused = command === 'pause';
     saveConfig(config, deps);
-    out.write(command === 'pause' ? '已暂停自动上传。\n' : '已恢复自动上传。\n');
+    out.write(command === 'pause' ? '已暂停自动上传和 Worker 互助循环。\n' : '已恢复自动上传和 Worker 互助循环。\n');
     return 0;
+  }
+
+  if (command === 'disable') {
+    const config = loadConfig(deps);
+    config.workerEnabled = false;
+    saveConfig(config, deps);
+    const wState = loadWorkerState(deps);
+    if (wState.pid) {
+      try { process.kill(wState.pid); } catch {}
+    }
+    wState.enabled = false;
+    wState.status = 'stopped';
+    wState.pid = null;
+    wState.nextCycleAt = null;
+    saveWorkerState(wState, deps);
+    releaseWorkerLock(deps);
+    out.write('已彻底禁用 Worker 互助循环。使用 worker-enable 可重新开启。\n');
+    return 0;
+  }
+
+  if (command === 'worker-enable') {
+    const config = loadConfig(deps);
+    config.workerEnabled = true;
+    saveConfig(config, deps);
+    out.write('Worker 互助循环已重新启用。运行 worker start 启动后台循环。\n');
+    return 0;
+  }
+
+  if (command === 'strategy') {
+    const [subcommand] = rest;
+    const config = loadConfig(deps);
+    if (!subcommand || subcommand === 'get') {
+      out.write(`${JSON.stringify({ ok: true, strategy: config.strategy || DEFAULT_STRATEGY }, null, 2)}\n`);
+      return 0;
+    }
+    if (subcommand === 'set') {
+      const strategy = String(args._[1] || args.value || '').trim();
+      if (!STRATEGY_PRESETS[strategy]) {
+        throw new Error(`不支持的策略: ${strategy}`);
+      }
+      config.strategy = strategy;
+      saveConfig(config, deps);
+      const state = loadLoopState(deps);
+      state.strategy = strategy;
+      saveLoopState(state, deps);
+      out.write(`${JSON.stringify({ ok: true, strategy }, null, 2)}\n`);
+      return 0;
+    }
+  }
+
+  if (command === 'loop') {
+    const [subcommand] = rest;
+    if (subcommand === 'status') {
+      out.write(`${JSON.stringify({ ok: true, loop: loopStatus(deps) }, null, 2)}\n`);
+      return 0;
+    }
+    if (subcommand === 'run-once') {
+      const state = loadLoopState(deps);
+      state.enabled = true;
+      state.status = 'running';
+      state.pid = process.pid;
+      saveLoopState(state, deps);
+      const result = await runLoopAnalysis(deps);
+      out.write(`${JSON.stringify(result, null, 2)}\n`);
+      return 0;
+    }
+    if (subcommand === 'daemon') {
+      return runLoopDaemon(args, deps, io);
+    }
+    if (subcommand === 'start') {
+      const local = installLocalAgent(deps);
+      const state = loadLoopState(deps);
+      if (state.pid) {
+        try {
+          process.kill(state.pid, 0);
+          out.write(`${JSON.stringify({ ok: true, alreadyRunning: true, loop: loopStatus(deps) }, null, 2)}\n`);
+          return 0;
+        } catch {}
+      }
+      state.enabled = true;
+      state.status = 'starting';
+      state.startedAt = state.startedAt || nowIso(deps);
+      saveLoopState(state, deps);
+      const child = spawn(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', `"${local.agentCmd}" loop daemon`], {
+        detached: true,
+        stdio: 'ignore',
+        windowsHide: true,
+      });
+      child.unref();
+      out.write(`${JSON.stringify({ ok: true, started: true, pid: child.pid, loop: loopStatus(deps) }, null, 2)}\n`);
+      return 0;
+    }
+    if (subcommand === 'stop') {
+      const state = loadLoopState(deps);
+      state.enabled = false;
+      state.stopRequestedAt = nowIso(deps);
+      saveLoopState(state, deps);
+      if (state.pid) {
+        try { process.kill(state.pid); } catch {}
+      }
+      releaseLoopLock(deps);
+      const next = loadLoopState(deps);
+      next.status = 'stopped';
+      next.pid = null;
+      next.nextRunAt = null;
+      saveLoopState(next, deps);
+      out.write(`${JSON.stringify({ ok: true, stopped: true, loop: loopStatus(deps) }, null, 2)}\n`);
+      return 0;
+    }
   }
 
   if (command === 'install-hook') {
@@ -1334,11 +2561,30 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
     config.shareData = true;
     config.autoSync = true;
     config.paused = false;
+    if (config.workerEnabled === undefined) config.workerEnabled = true;
     saveConfig(config, deps);
     out.write(`WinAICheck Agent Lite 已启用\n`);
     out.write(`  Agent Runner: ${localAgent.agentJs}\n`);
     out.write(`  Hook: ${installed.join(' | ')}\n`);
     out.write(`  自动同步: 已启用\n`);
+    if (config.workerEnabled) {
+      try {
+        const workerStart = startWorkerDaemon(deps);
+        if (workerStart.started) {
+          out.write(`  Worker 互助循环: 已启动 (pid ${workerStart.pid})\n`);
+        } else if (workerStart.alreadyRunning) {
+          out.write(`  Worker 互助循环: 已运行中\n`);
+        } else if (workerStart.reason === 'missing auth token') {
+          out.write(`  Worker 互助循环: 等待绑定完成后自动启动\n`);
+        } else {
+          out.write(`  Worker 互助循环: 已禁用\n`);
+        }
+      } catch (e) {
+        out.write(`  Worker 互助循环: 启动失败 (${e.message})\n`);
+      }
+    } else {
+      out.write(`  Worker 互助循环: 已禁用\n`);
+    }
     out.write(`\nClaude Code 请重启会话；OpenClaw 请重启 PowerShell 或重新加载 profile。\n`);
     return 0;
   }
@@ -1517,6 +2763,14 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
       saveConfig(config, deps);
 
       out.write(`\n绑定成功!\n  自动同步: 已启用\n\n`);
+      if (config.workerEnabled) {
+        try {
+          const workerStart = startWorkerDaemon(deps);
+          if (workerStart.started) out.write(`  Worker 互助循环: 已启动 (pid ${workerStart.pid})\n\n`);
+        } catch (e) {
+          out.write(`  Worker 互助循环: 启动失败 (${e.message})\n\n`);
+        }
+      }
       return 0;
     }
 
@@ -1583,6 +2837,14 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
 
         out.write(`绑定成功!\n`);
         out.write(`  自动同步: 已启用\n\n`);
+        if (config.workerEnabled) {
+          try {
+            const workerStart = startWorkerDaemon(deps);
+            if (workerStart.started) out.write(`  Worker 互助循环: 已启动 (pid ${workerStart.pid})\n\n`);
+          } catch (e) {
+            out.write(`  Worker 互助循环: 启动失败 (${e.message})\n\n`);
+          }
+        }
         out.write(`现在 Claude Code 中的错误会自动记录并同步到 aicoevo.net。\n`);
         return 0;
       }
@@ -1615,6 +2877,73 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
       out.write(`${JSON.stringify(data, null, 2)}\n`);
     } catch (e) { out.write(`获取悬赏列表失败: ${e.message}\n`); return 1; }
     return 0;
+  }
+
+  // ── Worker commands ──
+  if (command === 'worker') {
+    const [subcommand] = rest;
+    if (subcommand === 'status') {
+      const config = loadConfig(deps);
+      const wState = loadWorkerState(deps);
+      out.write(`${JSON.stringify({
+        ok: true,
+        workerEnabled: config.workerEnabled,
+        paused: config.paused,
+        worker: wState,
+        lockPresent: fs.existsSync(paths(deps).workerLock),
+      }, null, 2)}\n`);
+      return 0;
+    }
+    if (subcommand === 'start') {
+      const config = loadConfig(deps);
+      if (!config.workerEnabled) {
+        out.write('Worker 已被禁用。使用 worker-enable 重新启用。\n');
+        return 1;
+      }
+      const local = installLocalAgent(deps);
+      const wState = loadWorkerState(deps);
+      if (wState.pid) {
+        try {
+          process.kill(wState.pid, 0);
+          out.write(`${JSON.stringify({ ok: true, alreadyRunning: true, worker: loadWorkerState(deps) }, null, 2)}\n`);
+          return 0;
+        } catch {}
+      }
+      wState.enabled = true;
+      wState.status = 'starting';
+      wState.startedAt = wState.startedAt || nowIso(deps);
+      saveWorkerState(wState, deps);
+      const child = spawn(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', `"${local.agentCmd}" worker daemon`], {
+        detached: true,
+        stdio: 'ignore',
+        windowsHide: true,
+      });
+      child.unref();
+      out.write(`${JSON.stringify({ ok: true, started: true, pid: child.pid, worker: loadWorkerState(deps) }, null, 2)}\n`);
+      return 0;
+    }
+    if (subcommand === 'stop') {
+      const wState = loadWorkerState(deps);
+      wState.enabled = false;
+      wState.stopRequestedAt = nowIso(deps);
+      saveWorkerState(wState, deps);
+      if (wState.pid) {
+        try { process.kill(wState.pid); } catch {}
+      }
+      releaseWorkerLock(deps);
+      const next = loadWorkerState(deps);
+      next.status = 'stopped';
+      next.pid = null;
+      next.nextCycleAt = null;
+      saveWorkerState(next, deps);
+      out.write(`${JSON.stringify({ ok: true, stopped: true, worker: loadWorkerState(deps) }, null, 2)}\n`);
+      return 0;
+    }
+    if (subcommand === 'daemon') {
+      return runWorkerDaemon(args, deps, io);
+    }
+    out.write('用法: worker start|stop|status|daemon\n');
+    return 1;
   }
 
   if (command === 'bounty-recommended') {
@@ -1780,6 +3109,7 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
               method: 'POST',
               headers,
               body: JSON.stringify({
+                ...(item.recommended_env_id ? { env_id: item.recommended_env_id } : {}),
                 content: solveData.answer,
                 source: 'kb_auto',
                 confidence: solveData.confidence || 0.8,
@@ -1827,12 +3157,15 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
       }
       out.write(`待复现确认 (${pending.length}):\n\n`);
       for (const item of pending) {
+        const guide = writeOwnerVerifyGuide(item, config, deps);
         out.write(`## ${item.title || '(无标题)'}\n`);
         out.write(`  Bounty:   ${item.bounty_id}\n`);
         out.write(`  Answer:   ${item.answer_id}\n`);
         out.write(`  方案摘要: ${item.solution_summary}\n`);
         out.write(`  提交时间: ${item.submitted_at}\n`);
         out.write(`  截止时间: ${item.deadline_at}\n\n`);
+        out.write(`  指南:     ${guide.guideMd}\n`);
+        out.write(`  快照:     ${guide.snapshotJson}\n\n`);
         out.write(`  → winaicheck agent owner-verify ${item.bounty_id} --answer ${item.answer_id} --result success|partial|failed\n\n`);
       }
     } catch (e) { out.write(`获取待复现列表失败: ${e.message}\n`); return 1; }
@@ -1854,6 +3187,18 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
     }
     const notes = String(args.notes || '');
     const commandsRun = args.cmd ? String(args.cmd).split(',').map(s => s.trim()).filter(Boolean) : [];
+    const fallbackItem = {
+      bounty_id: bountyId,
+      answer_id: answerId,
+      title: '待确认方案',
+      solution_summary: notes || '请在本地环境确认问题是否已消失。',
+      submitted_at: '',
+      deadline_at: '',
+    };
+    let guideRecord = loadOwnerVerifySnapshot(bountyId, answerId, deps);
+    if (!guideRecord.snapshot) {
+      guideRecord = writeOwnerVerifyGuide(fallbackItem, config, deps);
+    }
 
     // prompt 策略: 默认必须提示用户确认
     const skipPrompt = args.yes === true || args.yes === 'true';
@@ -1873,6 +3218,15 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
     }
 
     try {
+      const submittedAt = nowIso(deps);
+      const afterContext = {
+        submitted_at: submittedAt,
+        confirmation_mode: skipPrompt ? 'flag_yes' : 'interactive_prompt',
+        result: resultValue,
+        notes,
+        commands_run: commandsRun,
+        local_context: ownerVerifyLocalContext(config),
+      };
       const res = await requestJson(`${agentApiBase('v2')}/bounties/${bountyId}/owner-verify`, {
         method: 'POST',
         headers,
@@ -1881,8 +3235,31 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
           result: resultValue,
           notes,
           commands_run: commandsRun,
-          proof_payload: {},
-          artifacts: {},
+          proof_payload: {
+            summary: `Owner verification for ${bountyId}/${answerId}`,
+            steps: [
+              `读取本地指南: ${guideRecord.guideMd}`,
+              commandsRun.length
+                ? `本地执行验证命令: ${commandsRun.join(' ; ')}`
+                : '按本地指南手动确认问题是否消失。',
+              `用户确认结果: ${resultValue}`,
+            ],
+            before_context: guideRecord.snapshot || {},
+            after_context: afterContext,
+            validation_cmd: commandsRun[0] || '',
+            expected_output:
+              resultValue === 'success'
+                ? '问题已消失或行为符合预期'
+                : resultValue === 'partial'
+                  ? '问题部分缓解，但仍有残留'
+                  : '问题仍然可复现',
+          },
+          artifacts: {
+            owner_reproduction_guide_path: guideRecord.guideMd,
+            owner_reproduction_snapshot_path: guideRecord.snapshotJson,
+            owner_reproduction_guide_sha256: guideRecord.guideSha256,
+            owner_reproduction_snapshot_generated_at: guideRecord.snapshot?.generatedAt || '',
+          },
         },
       }, { fetchImpl: _fetch });
       if (res.status !== 200) {
@@ -1963,10 +3340,24 @@ export const _testHelpers = {
   readJsonl,
   readJson,
   writeJson,
+  readJsonlSince,
   updateDaily,
+  loadLoopState,
+  saveLoopState,
+  runLoopAnalysis,
+  collectHealthSnapshot,
+  describeHealthDrifts,
+  loopStatus,
+  markHookSeen,
   lookupExperience,
   apiKeyHeaders,
   agentApiBase,
+  loadWorkerState,
+  saveWorkerState,
+  defaultWorkerState,
+  loadConfig,
+  saveConfig,
+  heartbeatAgentV2,
 };
 
 let isDirectExecution = false;
