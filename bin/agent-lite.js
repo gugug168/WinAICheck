@@ -27,6 +27,8 @@ const WORKER_DEFAULT_INTERVAL_MS = 5 * 60 * 1000;
 const WORKER_MAX_PARALLEL = 3;
 const WORKER_START_TIMEOUT_MS = 5 * 1000;
 const WORKER_START_POLL_MS = 100;
+const UPDATE_CHECK_TTL_MS = 60 * 60 * 1000;
+const UPDATE_AVAILABLE_TTL_MS = 12 * 60 * 60 * 1000;
 
 const SENSITIVE_PATTERNS = [
   { regex: /(?:sk-|api[_-]?key[_-]?)([a-zA-Z0-9_-]{20,})/gi, replacement: '<API_KEY>' },
@@ -1041,6 +1043,7 @@ function printHelp(io = {}) {
     `  winaicheck agent bind [--agent claude-code|openclaw]  (自动打开浏览器确认)\n` +
     `  winaicheck agent diagnose\n` +
     `  winaicheck agent check-update\n` +
+    `  winaicheck agent auto-update status|on|off|notify\n` +
     `  winaicheck agent advice --format json|markdown\n` +
     `  winaicheck agent bounty-list [--sort reward|created] [--limit N]\n` +
     `  winaicheck agent bounty-recommended [--strategy balanced|quality_first|speed_first] [--limit N]\n` +
@@ -1097,6 +1100,174 @@ function targetIncludesClaude(target) {
 
 function targetIncludesOpenClaw(target) {
   return !target || target === 'all' || target === 'openclaw';
+}
+
+function normalizeUpdateTarget(target) {
+  if (!target || target === 'all') return 'all';
+  if (target === 'claude' || target === 'claude-code') return 'claude-code';
+  if (target === 'openclaw') return 'openclaw';
+  throw new Error(`不支持的更新目标: ${target}`);
+}
+
+function runtimeUpdateTargetForAgent(agent) {
+  const normalized = normalizeAgent(agent);
+  return normalized === 'openclaw' ? 'openclaw' : 'claude-code';
+}
+
+function updateCachePath(deps = {}) {
+  return path.join(paths(deps).base, 'version-cache.json');
+}
+
+function loadUpdateCache(deps = {}) {
+  return readJson(updateCachePath(deps), {});
+}
+
+function saveUpdateCache(cache, deps = {}) {
+  writeJson(updateCachePath(deps), cache);
+}
+
+function normalizeUpdateMode(value) {
+  const mode = String(value || '').trim().toLowerCase();
+  if (mode === 'off') return 'off';
+  if (mode === 'auto' || mode === 'on') return 'auto';
+  return 'notify';
+}
+
+function localWinAICheckVersion(deps = {}) {
+  if (deps.currentVersion) return String(deps.currentVersion).trim();
+  try {
+    const selfPath = fileURLToPath(import.meta.url);
+    const versionFile = path.join(path.dirname(selfPath), '..', 'VERSION');
+    if (fs.existsSync(versionFile)) {
+      return fs.readFileSync(versionFile, 'utf8').trim() || '0.0.0';
+    }
+  } catch {}
+  return '0.0.0';
+}
+
+function compareVersions(left, right) {
+  const leftParts = String(left || '0.0.0').split('.').map(part => Number(part) || 0);
+  const rightParts = String(right || '0.0.0').split('.').map(part => Number(part) || 0);
+  const size = Math.max(leftParts.length, rightParts.length);
+  for (let i = 0; i < size; i++) {
+    const l = leftParts[i] || 0;
+    const r = rightParts[i] || 0;
+    if (l < r) return -1;
+    if (l > r) return 1;
+  }
+  return 0;
+}
+
+function isFreshUpdateCache(cache, localVersion, nowMs = Date.now()) {
+  if (!cache?.winaicheckLatest || !cache?.winaicheckUpdateCheck) return false;
+  const checkedAt = new Date(cache.winaicheckUpdateCheck).getTime();
+  if (!Number.isFinite(checkedAt)) return false;
+  const ttl = cache.winaicheckHasUpdate ? UPDATE_AVAILABLE_TTL_MS : UPDATE_CHECK_TTL_MS;
+  if ((nowMs - checkedAt) >= ttl) return false;
+  if (!cache.winaicheckVersion) return true;
+  return compareVersions(cache.winaicheckVersion, localVersion) === 0;
+}
+
+function buildUpdateResult(cache, localVersion, target, extras = {}) {
+  const latest = cache.winaicheckLatest || localVersion;
+  const hasUpdate = compareVersions(localVersion, latest) < 0;
+  return {
+    hasUpdate,
+    current: localVersion,
+    latest,
+    mode: normalizeUpdateMode(cache.winaicheckUpdateMode),
+    target: normalizeUpdateTarget(target),
+    autoUpdated: false,
+    autoUpdateError: null,
+    runtimeMessage: '',
+    ...extras,
+  };
+}
+
+function updateRuntimeMessage(result) {
+  if (result.mode === 'off') return '';
+  if (result.autoUpdated) {
+    return `已自动更新 WinAICheck v${result.updatedFrom} → v${result.current}，重启当前会话后生效。`;
+  }
+  if (result.autoUpdateError) {
+    return `发现新版本 v${result.current} → v${result.latest}，自动更新失败（${result.autoUpdateError}），可运行 npx winaicheck@latest agent enable 更新。`;
+  }
+  if (result.hasUpdate) {
+    return `发现新版本 v${result.current} → v${result.latest}，运行 npx winaicheck@latest agent enable 更新，或运行 winaicheck agent auto-update on 开启自动更新。`;
+  }
+  return '';
+}
+
+function runLatestSelfUpdate(target, deps = {}) {
+  const execImpl = deps.execFileSyncImpl || execFileSync;
+  const command = process.platform === 'win32' ? 'npx.cmd' : 'npx';
+  const args = ['--yes', 'winaicheck@latest', 'agent', 'self-update', '--target', normalizeUpdateTarget(target)];
+  execImpl(command, args, {
+    encoding: 'utf8',
+    windowsHide: true,
+    timeout: 60 * 1000,
+    shell: process.platform === 'win32',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+}
+
+async function resolveUpdateState(args = {}, deps = {}) {
+  const target = normalizeUpdateTarget(args.target);
+  const cache = loadUpdateCache(deps);
+  const localVersion = localWinAICheckVersion(deps) || cache.winaicheckVersion || '0.0.0';
+  cache.winaicheckVersion = localVersion;
+  cache.winaicheckUpdateMode = normalizeUpdateMode(args.mode || cache.winaicheckUpdateMode);
+
+  if (!isFreshUpdateCache(cache, localVersion)) {
+    try {
+      const fetchImpl = deps.fetchImpl || fetch;
+      const response = await fetchImpl(
+        'https://raw.githubusercontent.com/gugug168/WinAICheck/main/VERSION',
+        { signal: AbortSignal.timeout(5000) },
+      );
+      const remoteVersion = (await response.text()).trim();
+      if (/^\d+\.\d+\.\d+(?:\.\d+)?$/.test(remoteVersion)) {
+        cache.winaicheckLatest = remoteVersion;
+        cache.winaicheckHasUpdate = compareVersions(localVersion, remoteVersion) < 0;
+      } else {
+        cache.winaicheckLatest = cache.winaicheckLatest || localVersion;
+        cache.winaicheckHasUpdate = compareVersions(localVersion, cache.winaicheckLatest) < 0;
+      }
+      cache.winaicheckUpdateCheck = nowIso(deps);
+      saveUpdateCache(cache, deps);
+    } catch {
+      cache.winaicheckLatest = cache.winaicheckLatest || localVersion;
+      cache.winaicheckHasUpdate = compareVersions(localVersion, cache.winaicheckLatest) < 0;
+    }
+  }
+
+  let result = buildUpdateResult(cache, localVersion, target);
+  if (result.mode === 'auto' && result.hasUpdate) {
+    try {
+      runLatestSelfUpdate(target, deps);
+      const nextVersion = cache.winaicheckLatest || result.latest;
+      cache.winaicheckVersion = nextVersion;
+      cache.winaicheckLatest = nextVersion;
+      cache.winaicheckHasUpdate = false;
+      cache.winaicheckUpdateCheck = nowIso(deps);
+      cache.winaicheckLastAutoUpdate = nowIso(deps);
+      saveUpdateCache(cache, deps);
+      result = buildUpdateResult(cache, nextVersion, target, {
+        autoUpdated: true,
+        updatedFrom: localVersion,
+      });
+    } catch (error) {
+      const autoUpdateError = error?.message || String(error);
+      cache.winaicheckLastAutoUpdateError = autoUpdateError;
+      saveUpdateCache(cache, deps);
+      result = buildUpdateResult(cache, localVersion, target, {
+        autoUpdateError,
+      });
+    }
+  }
+
+  result.runtimeMessage = updateRuntimeMessage(result);
+  return result;
 }
 
 function buildHookBlock(agents) {
@@ -1321,7 +1492,7 @@ function buildPostToolHookScript(agentCmd, baseDir) {
     '',
     '    // Check for WinAICheck updates after capture',
     '    try {',
-    `      const updateRaw = execFileSync(${JSON.stringify(agentCmd)}, ['check-update'], {`,
+    `      const updateRaw = execFileSync(${JSON.stringify(agentCmd)}, ['check-update', '--target', 'claude-code'], {`,
     '        shell: true,',
     "        encoding: 'utf8',",
     '        windowsHide: true,',
@@ -1330,8 +1501,8 @@ function buildPostToolHookScript(agentCmd, baseDir) {
     `        env: { ...process.env, WINAICHECK_AGENT_BASE_DIR: ${JSON.stringify(baseDir)} },`,
     '      });',
     '      const update = JSON.parse(updateRaw);',
-    '      if (update.hasUpdate) {',
-    `        process.stdout.write("[WinAICheck] 发现新版本 v" + update.current + " → v" + update.latest + "，运行 npx winaicheck@latest agent enable 更新\\n");`,
+    '      if (update.runtimeMessage) {',
+    `        process.stdout.write("[WinAICheck] " + update.runtimeMessage + "\\n");`,
     '      }',
     '    } catch {}',
     '  } catch {',
@@ -1344,51 +1515,33 @@ function buildPostToolHookScript(agentCmd, baseDir) {
 
 function buildSessionStartHookScript(baseDir) {
   const agentCmd = path.join(baseDir, 'agent', 'winaicheck-agent.cmd');
-  const cacheFile = path.join(baseDir, 'version-cache.json');
-  const backgroundScript = [
-    "const { execFileSync } = require('child_process');",
-    "const { mkdirSync, writeFileSync } = require('fs');",
-    "const { dirname } = require('path');",
-    `const agentCmd = ${JSON.stringify(agentCmd)};`,
-    `const cacheFile = ${JSON.stringify(cacheFile)};`,
-    '',
-    'function version(cmd) {',
-    '  try {',
-    "    const out = execFileSync(cmd, ['--version'], { encoding: 'utf8', timeout: 5000, windowsHide: true });",
-    '    const match = out.match(/(\\d+\\.\\d+\\.\\d+)/);',
-    "    return match ? match[1] : 'unknown';",
-    '  } catch {',
-    "    return 'unknown';",
-    '  }',
-    '}',
-    '',
-    'const result = {',
-    "  current: 'node:' + process.version.replace(/^v/, '') + '|claude:' + version('claude'),",
-    "  latest: 'unchecked',",
-    '  hasUpdate: false,',
-    '  lastCheck: new Date().toISOString()',
-    '};',
-    '',
-    'try {',
-    "  execFileSync(agentCmd, ['hook-seen', '--agent', 'claude-code', '--hook-type', 'settings-session-start', '--capture-source', 'hook'], { stdio: 'ignore', windowsHide: true, timeout: 5000 });",
-    '} catch {}',
-    '',
-    'mkdirSync(dirname(cacheFile), { recursive: true });',
-    'writeFileSync(cacheFile, JSON.stringify(result, null, 2));',
-    '',
-  ].join('\n');
-
   return [
     '#!/usr/bin/env node',
-    "const { spawn } = require('child_process');",
+    "const { execFileSync } = require('child_process');",
     '',
     'try {',
-    `  const child = spawn(process.execPath, ['-e', ${JSON.stringify(backgroundScript)}], {`,
+    `  execFileSync(${JSON.stringify(agentCmd)}, ['hook-seen', '--agent', 'claude-code', '--hook-type', 'settings-session-start', '--capture-source', 'hook'], {`,
     "    stdio: 'ignore',",
-    '    detached: true,',
+    '    shell: true,',
     '    windowsHide: true,',
+    '    timeout: 5000,',
+    `    env: { ...process.env, WINAICHECK_AGENT_BASE_DIR: ${JSON.stringify(baseDir)} },`,
     '  });',
-    '  child.unref();',
+    '} catch {}',
+    '',
+    'try {',
+    `  const updateRaw = execFileSync(${JSON.stringify(agentCmd)}, ['check-update', '--target', 'claude-code'], {`,
+    '    shell: true,',
+    "    encoding: 'utf8',",
+    '    windowsHide: true,',
+    '    timeout: 8000,',
+    "    stdio: ['ignore', 'pipe', 'ignore'],",
+    `    env: { ...process.env, WINAICHECK_AGENT_BASE_DIR: ${JSON.stringify(baseDir)} },`,
+    '  });',
+    '  const update = JSON.parse(updateRaw);',
+    '  if (update.runtimeMessage) {',
+    `    process.stdout.write("[WinAICheck] " + update.runtimeMessage + "\\n");`,
+    '  }',
     '} catch {}',
     '',
   ].join('\n');
@@ -1415,13 +1568,11 @@ function installLocalAgent(deps = {}) {
 
   // Write WinAICheck version to version-cache.json for check-update
   try {
-    const versionFile = path.join(path.dirname(selfPath), '..', 'VERSION');
-    const localVersion = fs.existsSync(versionFile) ? fs.readFileSync(versionFile, 'utf8').trim() : '0.0.0';
-    const cacheFile = path.join(p.base, 'version-cache.json');
-    const cache = readJson(cacheFile, {});
+    const localVersion = localWinAICheckVersion(deps);
+    const cache = loadUpdateCache(deps);
     cache.winaicheckVersion = localVersion;
-    ensureDir(p.base);
-    writeJson(cacheFile, cache);
+    cache.winaicheckUpdateMode = normalizeUpdateMode(cache.winaicheckUpdateMode);
+    saveUpdateCache(cache, deps);
   } catch { /* version write is non-critical */ }
 
   return {
@@ -1443,15 +1594,18 @@ function verifyAgentIntegrity(deps = {}) {
 async function runOriginalAgent(args, deps = {}) {
   const original = args.original;
   if (!original) throw new Error('缺少 --original');
+  const stdoutStream = deps.processStdout || process.stdout;
+  const stderrStream = deps.processStderr || process.stderr;
+  const spawnImpl = deps.spawnImpl || spawn;
   markHookSeen(normalizeAgent(args.agent), 'powershell-wrapper', deps);
   if (!verifyAgentIntegrity(deps)) {
-    process.stderr.write('WinAICheck: Agent runner 完整性校验失败，正在重新安装...\n');
+    stderrStream.write('WinAICheck: Agent runner 完整性校验失败，正在重新安装...\n');
     installLocalAgent(deps);
   }
   const passthrough = args._ || [];
   const stderrChunks = [];
   const stdoutChunks = [];
-  const child = spawn(original, passthrough, {
+  const child = spawnImpl(original, passthrough, {
     stdio: ['inherit', 'pipe', 'pipe'],
     shell: process.platform === 'win32' && (!/[\\/]/.test(original) || /\.(cmd|bat)$/i.test(original)),
     windowsHide: false,
@@ -1459,12 +1613,12 @@ async function runOriginalAgent(args, deps = {}) {
   child.stdout.on('data', chunk => {
     const buf = Buffer.from(chunk);
     stdoutChunks.push(buf);
-    process.stdout.write(buf);
+    stdoutStream.write(buf);
   });
   child.stderr.on('data', chunk => {
     const buf = Buffer.from(chunk);
     stderrChunks.push(buf);
-    process.stderr.write(buf);
+    stderrStream.write(buf);
   });
   const exitCode = await new Promise((resolve) => {
     child.on('error', error => {
@@ -1518,16 +1672,24 @@ async function runOriginalAgent(args, deps = {}) {
     const experience = lookupExperience(message);
     if (experience) {
       appendExperience(event, experience, deps);
-      process.stderr.write('\nWinAICheck 经验库建议:\n');
-      process.stderr.write(`  ${experience.title}\n`);
-      process.stderr.write(`  ${experience.advice}\n`);
+      stderrStream.write('\nWinAICheck 经验库建议:\n');
+      stderrStream.write(`  ${experience.title}\n`);
+      stderrStream.write(`  ${experience.advice}\n`);
       if (experience.commands.length > 0) {
-        process.stderr.write(`  可尝试: ${experience.commands.join(' | ')}\n`);
+        stderrStream.write(`  可尝试: ${experience.commands.join(' | ')}\n`);
       }
     }
     const config = loadConfig(deps);
     if (config.autoSync && config.shareData && !config.paused) await bestEffortSync(deps);
-    process.stderr.write(`\nWinAICheck: 已记录 Agent 问题 ${event.eventId}\n`);
+    stderrStream.write(`\nWinAICheck: 已记录 Agent 问题 ${event.eventId}\n`);
+  }
+  try {
+    const update = await resolveUpdateState({ target: runtimeUpdateTargetForAgent(args.agent) }, deps);
+    if (update.runtimeMessage) {
+      stderrStream.write(`\n[WinAICheck] ${update.runtimeMessage}\n`);
+    }
+  } catch {
+    // Update checks must stay best-effort in wrapper mode.
   }
   return exitCode;
 }
@@ -2754,56 +2916,70 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
     return 0;
   }
 
+  if (command === 'self-update') {
+    const target = normalizeUpdateTarget(args.target);
+    const localAgent = installLocalAgent(deps);
+    const refreshed = [];
+    if (targetIncludesClaude(target)) {
+      const settingsHook = installSettingsHook({ target: 'claude-code' }, deps);
+      refreshed.push(settingsHook.hooks.join(', '));
+    }
+    if (targetIncludesOpenClaw(target)) {
+      const hook = installHook({ target: 'openclaw' }, deps);
+      refreshed.push(`PowerShell Hook: ${hook.agents.map(agent => agent.target).join(', ')}`);
+    }
+    const cache = loadUpdateCache(deps);
+    const version = localWinAICheckVersion(deps);
+    cache.winaicheckVersion = version;
+    cache.winaicheckLatest = version;
+    cache.winaicheckHasUpdate = false;
+    cache.winaicheckUpdateCheck = nowIso(deps);
+    cache.winaicheckLastSelfUpdate = nowIso(deps);
+    cache.winaicheckUpdateMode = normalizeUpdateMode(cache.winaicheckUpdateMode);
+    saveUpdateCache(cache, deps);
+    out.write(`${JSON.stringify({
+      ok: true,
+      target,
+      version,
+      agentJs: localAgent.agentJs,
+      hooks: refreshed,
+    }, null, 2)}\n`);
+    return 0;
+  }
+
+  if (command === 'auto-update') {
+    const [subcommand = 'status'] = rest;
+    const cache = loadUpdateCache(deps);
+    if (subcommand === 'status') {
+      const mode = normalizeUpdateMode(cache.winaicheckUpdateMode);
+      out.write(`${JSON.stringify({ ok: true, mode }, null, 2)}\n`);
+      return 0;
+    }
+    const nextMode = subcommand === 'on'
+      ? 'auto'
+      : subcommand === 'off'
+        ? 'off'
+        : subcommand === 'notify'
+          ? 'notify'
+          : null;
+    if (!nextMode) {
+      out.write('用法: winaicheck agent auto-update status|on|off|notify\n');
+      return 1;
+    }
+    cache.winaicheckUpdateMode = nextMode;
+    cache.winaicheckVersion = cache.winaicheckVersion || localWinAICheckVersion(deps);
+    saveUpdateCache(cache, deps);
+    out.write(`${JSON.stringify({ ok: true, mode: nextMode }, null, 2)}\n`);
+    return 0;
+  }
+
   if (command === 'run') {
     return runOriginalAgent(args, deps);
   }
 
   if (command === 'check-update') {
-    const p = paths(deps);
-    const cacheFile = path.join(p.base, 'version-cache.json');
-    const cache = readJson(cacheFile, {});
-    const ONE_HOUR_MS = 60 * 60 * 1000;
-    const localVersion = cache.winaicheckVersion || '0.0.0';
-
-    // 1-hour TTL cache
-    const lastCheck = cache.winaicheckUpdateCheck ? new Date(cache.winaicheckUpdateCheck).getTime() : 0;
-    if ((Date.now() - lastCheck) < ONE_HOUR_MS && cache.winaicheckLatest !== undefined) {
-      // Re-evaluate hasUpdate in case local version was updated since last check
-      const cachedHasUpdate = cache.winaicheckLatest !== localVersion;
-      out.write(`${JSON.stringify({ hasUpdate: cachedHasUpdate, current: localVersion, latest: cache.winaicheckLatest }, null, 2)}\n`);
-      return 0;
-    }
-
-    // Fetch remote VERSION
-    try {
-      const fetchImpl = deps.fetchImpl || fetch;
-      const response = await fetchImpl(
-        'https://raw.githubusercontent.com/gugug168/WinAICheck/main/VERSION',
-        { signal: AbortSignal.timeout(5000) },
-      );
-      const remoteVersion = (await response.text()).trim();
-
-      // Simple semver comparison: split on '.' and compare numerically
-      const localParts = localVersion.split('.').map(Number);
-      const remoteParts = remoteVersion.split('.').map(Number);
-      let hasUpdate = false;
-      for (let i = 0; i < Math.max(localParts.length, remoteParts.length); i++) {
-        const l = localParts[i] || 0;
-        const r = remoteParts[i] || 0;
-        if (r > l) { hasUpdate = true; break; }
-        if (r < l) break;
-      }
-
-      cache.winaicheckVersion = localVersion;
-      cache.winaicheckLatest = remoteVersion;
-      cache.winaicheckHasUpdate = hasUpdate;
-      cache.winaicheckUpdateCheck = nowIso(deps);
-      writeJson(cacheFile, cache);
-
-      out.write(`${JSON.stringify({ hasUpdate, current: localVersion, latest: remoteVersion }, null, 2)}\n`);
-    } catch {
-      out.write(`${JSON.stringify({ hasUpdate: false, current: localVersion, latest: localVersion }, null, 2)}\n`);
-    }
+    const result = await resolveUpdateState({ target: args.target || 'all', mode: args.mode }, deps);
+    out.write(`${JSON.stringify(result, null, 2)}\n`);
     return 0;
   }
 
