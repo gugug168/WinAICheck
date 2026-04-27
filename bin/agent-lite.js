@@ -25,6 +25,8 @@ const LOOP_SCHEDULE_MS = {
 const MAX_LOOP_BACKOFF_MS = 60 * 60 * 1000;
 const WORKER_DEFAULT_INTERVAL_MS = 5 * 60 * 1000;
 const WORKER_MAX_PARALLEL = 3;
+const WORKER_START_TIMEOUT_MS = 5 * 1000;
+const WORKER_START_POLL_MS = 100;
 
 const SENSITIVE_PATTERNS = [
   { regex: /(?:sk-|api[_-]?key[_-]?)([a-zA-Z0-9_-]{20,})/gi, replacement: '<API_KEY>' },
@@ -2142,8 +2144,15 @@ function releaseWorkerLock(deps = {}) {
   } catch {}
 }
 
-function isProcessAlive(pid) {
+function isProcessAlive(pid, deps = {}) {
   if (!pid) return false;
+  if (typeof deps.isProcessAliveImpl === 'function') {
+    try {
+      return !!deps.isProcessAliveImpl(pid);
+    } catch {
+      return false;
+    }
+  }
   try {
     process.kill(pid, 0);
     return true;
@@ -2152,7 +2161,75 @@ function isProcessAlive(pid) {
   }
 }
 
-function startWorkerDaemon(deps = {}) {
+function activeWorkerLockPid(deps = {}) {
+  try {
+    const existing = readJson(paths(deps).workerLock, {});
+    return isProcessAlive(existing.pid, deps) ? existing.pid : null;
+  } catch {
+    return null;
+  }
+}
+
+function buildWorkerSpawnOptions(deps = {}) {
+  return {
+    detached: true,
+    stdio: 'ignore',
+    windowsHide: true,
+    env: {
+      ...process.env,
+      WINAICHECK_AGENT_BASE_DIR: getBaseDir(deps),
+    },
+  };
+}
+
+function spawnWorkerViaCmd(local, deps = {}, spawnImpl = spawn) {
+  return spawnImpl(
+    process.env.ComSpec || 'cmd.exe',
+    ['/d', '/s', '/c', `"${local.agentCmd}" worker daemon`],
+    buildWorkerSpawnOptions(deps),
+  );
+}
+
+function spawnWorkerViaNode(local, deps = {}, spawnImpl = spawn) {
+  return spawnImpl(
+    process.execPath,
+    [local.agentJs, 'worker', 'daemon'],
+    buildWorkerSpawnOptions(deps),
+  );
+}
+
+async function waitForWorkerReady(deps = {}, options = {}) {
+  const timeoutMs = Number(options.timeoutMs || deps.workerStartTimeoutMs || WORKER_START_TIMEOUT_MS);
+  const pollMs = Number(options.pollMs || deps.workerStartPollMs || WORKER_START_POLL_MS);
+  const deadline = Date.now() + Math.max(1, timeoutMs);
+
+  while (Date.now() <= deadline) {
+    const state = loadWorkerState(deps);
+    if (state.status === 'running' && isProcessAlive(state.pid, deps)) {
+      return { ok: true, worker: state };
+    }
+    await sleep(Math.max(1, pollMs), deps);
+  }
+
+  return { ok: false, worker: loadWorkerState(deps) };
+}
+
+function markWorkerStartFailure(message, deps = {}) {
+  releaseWorkerLock(deps);
+  const failed = loadWorkerState(deps);
+  failed.enabled = true;
+  failed.status = 'stopped';
+  failed.pid = null;
+  failed.nextCycleAt = null;
+  failed.lastCycleAt = null;
+  failed.lastCycleResult = null;
+  failed.consecutiveErrors = (failed.consecutiveErrors || 0) + 1;
+  failed.lastError = message;
+  saveWorkerState(failed, deps);
+  return failed;
+}
+
+async function startWorkerDaemon(deps = {}) {
   const config = loadConfig(deps);
   if (!config.workerEnabled) {
     return { ok: true, skipped: true, reason: 'worker disabled' };
@@ -2163,18 +2240,61 @@ function startWorkerDaemon(deps = {}) {
 
   const local = installLocalAgent(deps);
   const wState = loadWorkerState(deps);
-  if (isProcessAlive(wState.pid)) {
+  if (isProcessAlive(wState.pid, deps)) {
     return { ok: true, alreadyRunning: true, pid: wState.pid };
   }
 
+  wState.enabled = true;
+  wState.status = 'starting';
+  wState.startedAt = wState.startedAt || nowIso(deps);
+  wState.stopRequestedAt = null;
+  wState.pid = null;
+  wState.lastError = null;
+  saveWorkerState(wState, deps);
+
   const spawnImpl = deps.spawnImpl || spawn;
-  const child = spawnImpl(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', `"${local.agentCmd}" worker daemon`], {
-    detached: true,
-    stdio: 'ignore',
-    windowsHide: true,
-  });
-  child.unref?.();
-  return { ok: true, started: true, pid: child.pid };
+  const launchers = [
+    { mode: 'cmd', spawnChild: () => spawnWorkerViaCmd(local, deps, spawnImpl) },
+    { mode: 'node', spawnChild: () => spawnWorkerViaNode(local, deps, spawnImpl) },
+  ];
+  const launchedChildren = [];
+
+  for (const launcher of launchers) {
+    const child = launcher.spawnChild();
+    child.unref?.();
+    launchedChildren.push({ mode: launcher.mode, pid: child.pid });
+    const ready = await waitForWorkerReady(deps);
+    if (ready.ok) {
+      return {
+        ok: true,
+        started: true,
+        pid: ready.worker.pid || child.pid,
+        launchPid: child.pid,
+        launchMode: launcher.mode,
+        worker: ready.worker,
+      };
+    }
+  }
+
+  const currentState = loadWorkerState(deps);
+  const activeLockPid = activeWorkerLockPid(deps);
+  const pendingLaunch = launchedChildren.find(child => isProcessAlive(child.pid, deps));
+  if (activeLockPid || pendingLaunch) {
+    return {
+      ok: true,
+      started: true,
+      pending: true,
+      pid: currentState.pid || activeLockPid || pendingLaunch?.pid || null,
+      launchPid: launchedChildren[launchedChildren.length - 1]?.pid || null,
+      launchMode: launchedChildren[launchedChildren.length - 1]?.mode || null,
+      warning: 'Worker 正在启动，请稍后运行 `winaicheck agent worker status` 确认状态。',
+      worker: currentState,
+    };
+  }
+
+  const message = 'Worker daemon 未能进入 running 状态，请运行 `winaicheck agent worker daemon` 查看前台日志。';
+  const failed = markWorkerStartFailure(message, deps);
+  return { ok: false, started: false, error: message, worker: failed };
 }
 
 async function runWorkerDaemon(args, deps = {}, io = {}) {
@@ -2203,6 +2323,9 @@ async function runWorkerDaemon(args, deps = {}, io = {}) {
   state.status = 'running';
   state.pid = process.pid;
   state.startedAt = state.startedAt || nowIso(deps);
+  state.stopRequestedAt = null;
+  state.lastError = null;
+  state.consecutiveErrors = 0;
   saveWorkerState(state, deps);
 
   out.write(`[Worker] 启动 (间隔 ${Math.round(interval / 1000)}s, 每轮最多 ${maxPerCycle})\n`);
@@ -2569,13 +2692,17 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
     out.write(`  自动同步: 已启用\n`);
     if (config.workerEnabled) {
       try {
-        const workerStart = startWorkerDaemon(deps);
-        if (workerStart.started) {
+        const workerStart = await startWorkerDaemon(deps);
+        if (workerStart.pending) {
+          out.write(`  Worker 互助循环: 启动中，请稍后运行 worker status 确认\n`);
+        } else if (workerStart.started) {
           out.write(`  Worker 互助循环: 已启动 (pid ${workerStart.pid})\n`);
         } else if (workerStart.alreadyRunning) {
           out.write(`  Worker 互助循环: 已运行中\n`);
         } else if (workerStart.reason === 'missing auth token') {
           out.write(`  Worker 互助循环: 等待绑定完成后自动启动\n`);
+        } else if (workerStart.error) {
+          out.write(`  Worker 互助循环: 启动失败 (${workerStart.error})\n`);
         } else {
           out.write(`  Worker 互助循环: 已禁用\n`);
         }
@@ -2765,8 +2892,10 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
       out.write(`\n绑定成功!\n  自动同步: 已启用\n\n`);
       if (config.workerEnabled) {
         try {
-          const workerStart = startWorkerDaemon(deps);
-          if (workerStart.started) out.write(`  Worker 互助循环: 已启动 (pid ${workerStart.pid})\n\n`);
+          const workerStart = await startWorkerDaemon(deps);
+          if (workerStart.pending) out.write(`  Worker 互助循环: 启动中，请稍后运行 worker status 确认\n\n`);
+          else if (workerStart.started) out.write(`  Worker 互助循环: 已启动 (pid ${workerStart.pid})\n\n`);
+          else if (workerStart.error) out.write(`  Worker 互助循环: 启动失败 (${workerStart.error})\n\n`);
         } catch (e) {
           out.write(`  Worker 互助循环: 启动失败 (${e.message})\n\n`);
         }
@@ -2839,8 +2968,10 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
         out.write(`  自动同步: 已启用\n\n`);
         if (config.workerEnabled) {
           try {
-            const workerStart = startWorkerDaemon(deps);
-            if (workerStart.started) out.write(`  Worker 互助循环: 已启动 (pid ${workerStart.pid})\n\n`);
+            const workerStart = await startWorkerDaemon(deps);
+            if (workerStart.pending) out.write(`  Worker 互助循环: 启动中，请稍后运行 worker status 确认\n\n`);
+            else if (workerStart.started) out.write(`  Worker 互助循环: 已启动 (pid ${workerStart.pid})\n\n`);
+            else if (workerStart.error) out.write(`  Worker 互助循环: 启动失败 (${workerStart.error})\n\n`);
           } catch (e) {
             out.write(`  Worker 互助循环: 启动失败 (${e.message})\n\n`);
           }
@@ -2900,27 +3031,13 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
         out.write('Worker 已被禁用。使用 worker-enable 重新启用。\n');
         return 1;
       }
-      const local = installLocalAgent(deps);
-      const wState = loadWorkerState(deps);
-      if (wState.pid) {
-        try {
-          process.kill(wState.pid, 0);
-          out.write(`${JSON.stringify({ ok: true, alreadyRunning: true, worker: loadWorkerState(deps) }, null, 2)}\n`);
-          return 0;
-        } catch {}
-      }
-      wState.enabled = true;
-      wState.status = 'starting';
-      wState.startedAt = wState.startedAt || nowIso(deps);
-      saveWorkerState(wState, deps);
-      const child = spawn(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', `"${local.agentCmd}" worker daemon`], {
-        detached: true,
-        stdio: 'ignore',
-        windowsHide: true,
-      });
-      child.unref();
-      out.write(`${JSON.stringify({ ok: true, started: true, pid: child.pid, worker: loadWorkerState(deps) }, null, 2)}\n`);
-      return 0;
+      const result = await startWorkerDaemon(deps);
+      const payload = {
+        ...result,
+        worker: result.worker || loadWorkerState(deps),
+      };
+      out.write(`${JSON.stringify(payload, null, 2)}\n`);
+      return result.ok === false ? 1 : 0;
     }
     if (subcommand === 'stop') {
       const wState = loadWorkerState(deps);

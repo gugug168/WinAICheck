@@ -47,14 +47,17 @@ function mockResponse(data: any, status = 200) {
   };
 }
 
-function createSpawnStub() {
+function createSpawnStub(onSpawn?: (call: { command: string; args: string[]; options: Record<string, any>; pid: number }) => void) {
   const calls: Array<{ command: string; args: string[]; options: Record<string, any> }> = [];
   return {
     calls,
     spawnImpl(command: string, args: string[], options: Record<string, any>) {
+      const pid = 43210 + calls.length + 1;
+      const call = { command, args, options, pid };
       calls.push({ command, args, options });
+      onSpawn?.(call);
       return {
-        pid: 43210 + calls.length,
+        pid,
         unref() {},
       };
     },
@@ -560,6 +563,147 @@ describe('worker-on (TASK-090)', () => {
     expect(wState.totalSkipped).toBeGreaterThanOrEqual(2);
   });
 
+  test('worker start waits for daemon readiness and reports running state', async () => {
+    const root = createTempRoot();
+    roots.push(root);
+    setupWorkerConfig(root);
+
+    const spawn = createSpawnStub(({ pid }) => {
+      queueMicrotask(() => {
+        const state = _testHelpers.loadWorkerState({ baseDir: root });
+        state.enabled = true;
+        state.status = 'running';
+        state.pid = process.pid;
+        state.startedAt = state.startedAt || new Date().toISOString();
+        _testHelpers.saveWorkerState(state, { baseDir: root });
+      });
+    });
+
+    const io = createIo();
+    const code = await agentMain(['worker', 'start'], {
+      baseDir: root,
+      homeDir: root,
+      spawnImpl: spawn.spawnImpl,
+      workerStartTimeoutMs: 50,
+      workerStartPollMs: 1,
+    }, io.io);
+
+    expect(code).toBe(0);
+    const payload = JSON.parse(io.output);
+    expect(payload.ok).toBe(true);
+    expect(payload.started).toBe(true);
+    expect(payload.worker.status).toBe('running');
+    expect(payload.worker.pid).toBe(process.pid);
+    expect(spawn.calls).toHaveLength(1);
+  });
+
+  test('worker start retries with direct node launch when cmd launch never becomes ready', async () => {
+    const root = createTempRoot();
+    roots.push(root);
+    setupWorkerConfig(root);
+
+    const spawn = createSpawnStub(({ command, pid }) => {
+      if (command === process.execPath) {
+        queueMicrotask(() => {
+          const state = _testHelpers.loadWorkerState({ baseDir: root });
+          state.enabled = true;
+          state.status = 'running';
+          state.pid = process.pid;
+          state.startedAt = state.startedAt || new Date().toISOString();
+          _testHelpers.saveWorkerState(state, { baseDir: root });
+        });
+      }
+    });
+
+    const io = createIo();
+    const code = await agentMain(['worker', 'start'], {
+      baseDir: root,
+      homeDir: root,
+      spawnImpl: spawn.spawnImpl,
+      workerStartTimeoutMs: 50,
+      workerStartPollMs: 1,
+    }, io.io);
+
+    expect(code).toBe(0);
+    const payload = JSON.parse(io.output);
+    expect(payload.ok).toBe(true);
+    expect(payload.started).toBe(true);
+    expect(payload.launchMode).toBe('node');
+    expect(spawn.calls).toHaveLength(2);
+    expect(spawn.calls[0]?.command).toContain('cmd');
+    expect(spawn.calls[1]?.command).toBe(process.execPath);
+  });
+
+  test('worker start reports pending instead of false failure for slow daemon startup', async () => {
+    const root = createTempRoot();
+    roots.push(root);
+    setupWorkerConfig(root);
+
+    const alivePids = new Set<number>();
+    const spawn = createSpawnStub(({ command, pid }) => {
+      if (command === process.execPath) {
+        alivePids.add(pid);
+        setTimeout(() => {
+          const state = _testHelpers.loadWorkerState({ baseDir: root });
+          state.enabled = true;
+          state.status = 'running';
+          state.pid = process.pid;
+          state.startedAt = state.startedAt || new Date().toISOString();
+          _testHelpers.saveWorkerState(state, { baseDir: root });
+          alivePids.delete(pid);
+        }, 60);
+      }
+    });
+
+    const io = createIo();
+    const code = await agentMain(['worker', 'start'], {
+      baseDir: root,
+      homeDir: root,
+      spawnImpl: spawn.spawnImpl,
+      isProcessAliveImpl: (pid: number) => alivePids.has(pid) || pid === process.pid,
+      workerStartTimeoutMs: 20,
+      workerStartPollMs: 1,
+    }, io.io);
+
+    expect(code).toBe(0);
+    const payload = JSON.parse(io.output);
+    expect(payload.ok).toBe(true);
+    expect(payload.pending).toBe(true);
+    expect(payload.error).toBeUndefined();
+    expect(payload.worker.status).toBe('starting');
+    expect(payload.worker.lastError).toBeNull();
+
+    await new Promise(resolve => setTimeout(resolve, 100));
+    const finalState = _testHelpers.loadWorkerState({ baseDir: root });
+    expect(finalState.status).toBe('running');
+    expect(finalState.lastError).toBeNull();
+  });
+
+  test('worker start fails cleanly instead of leaving stuck starting state', async () => {
+    const root = createTempRoot();
+    roots.push(root);
+    setupWorkerConfig(root);
+
+    const spawn = createSpawnStub();
+    const io = createIo();
+    const code = await agentMain(['worker', 'start'], {
+      baseDir: root,
+      homeDir: root,
+      spawnImpl: spawn.spawnImpl,
+      isProcessAliveImpl: () => false,
+      workerStartTimeoutMs: 10,
+      workerStartPollMs: 1,
+    }, io.io);
+
+    expect(code).toBe(1);
+    const payload = JSON.parse(io.output);
+    expect(payload.ok).toBe(false);
+    expect(payload.worker.status).toBe('stopped');
+    expect(payload.worker.pid).toBeNull();
+    expect(String(payload.worker.lastError || '')).toContain('running');
+    expect(spawn.calls).toHaveLength(2);
+  });
+
   test('enable waits for binding before auto-starting worker', async () => {
     const root = createTempRoot();
     roots.push(root);
@@ -580,7 +724,16 @@ describe('worker-on (TASK-090)', () => {
   test('bind auto-starts worker after token is granted', async () => {
     const root = createTempRoot();
     roots.push(root);
-    const spawn = createSpawnStub();
+    const spawn = createSpawnStub(() => {
+      queueMicrotask(() => {
+        const state = _testHelpers.loadWorkerState({ baseDir: root });
+        state.enabled = true;
+        state.status = 'running';
+        state.pid = process.pid;
+        state.startedAt = state.startedAt || new Date().toISOString();
+        _testHelpers.saveWorkerState(state, { baseDir: root });
+      });
+    });
     setupWorkerConfig(root, { authToken: undefined });
 
     const io = createIo();
