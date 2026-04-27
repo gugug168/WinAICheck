@@ -634,6 +634,51 @@ describe('worker-on (TASK-090)', () => {
     expect(spawn.calls[1]?.command).toBe(process.execPath);
   });
 
+  test('worker start reports pending instead of false failure for slow daemon startup', async () => {
+    const root = createTempRoot();
+    roots.push(root);
+    setupWorkerConfig(root);
+
+    const alivePids = new Set<number>();
+    const spawn = createSpawnStub(({ command, pid }) => {
+      if (command === process.execPath) {
+        alivePids.add(pid);
+        setTimeout(() => {
+          const state = _testHelpers.loadWorkerState({ baseDir: root });
+          state.enabled = true;
+          state.status = 'running';
+          state.pid = process.pid;
+          state.startedAt = state.startedAt || new Date().toISOString();
+          _testHelpers.saveWorkerState(state, { baseDir: root });
+          alivePids.delete(pid);
+        }, 60);
+      }
+    });
+
+    const io = createIo();
+    const code = await agentMain(['worker', 'start'], {
+      baseDir: root,
+      homeDir: root,
+      spawnImpl: spawn.spawnImpl,
+      isProcessAliveImpl: (pid: number) => alivePids.has(pid) || pid === process.pid,
+      workerStartTimeoutMs: 20,
+      workerStartPollMs: 1,
+    }, io.io);
+
+    expect(code).toBe(0);
+    const payload = JSON.parse(io.output);
+    expect(payload.ok).toBe(true);
+    expect(payload.pending).toBe(true);
+    expect(payload.error).toBeUndefined();
+    expect(payload.worker.status).toBe('starting');
+    expect(payload.worker.lastError).toBeNull();
+
+    await new Promise(resolve => setTimeout(resolve, 100));
+    const finalState = _testHelpers.loadWorkerState({ baseDir: root });
+    expect(finalState.status).toBe('running');
+    expect(finalState.lastError).toBeNull();
+  });
+
   test('worker start fails cleanly instead of leaving stuck starting state', async () => {
     const root = createTempRoot();
     roots.push(root);
@@ -645,6 +690,7 @@ describe('worker-on (TASK-090)', () => {
       baseDir: root,
       homeDir: root,
       spawnImpl: spawn.spawnImpl,
+      isProcessAliveImpl: () => false,
       workerStartTimeoutMs: 10,
       workerStartPollMs: 1,
     }, io.io);
