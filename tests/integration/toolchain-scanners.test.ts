@@ -262,3 +262,48 @@ describe('unix-commands scanner', () => {
     expect(result.status).toBe('fail');
   });
 });
+
+describe('gpu-driver scanner', () => {
+  afterEach(teardownMock);
+
+  test('驱动 525 → pass', async () => {
+    setupMock(new Map([[
+      'nvidia-smi --query-gpu=name,driver_version --format=csv,noheader',
+      { stdout: 'NVIDIA GeForce RTX 4060, 525.60\n', exitCode: 0 },
+    ]]));
+    const scanner = getScannerById('gpu-driver')!;
+    const result = await scanner.scan();
+    expect(result.status).toBe('pass');
+  });
+
+  test('驱动 524 → warn', async () => {
+    setupMock(new Map([[
+      'nvidia-smi --query-gpu=name,driver_version --format=csv,noheader',
+      { stdout: 'NVIDIA GeForce RTX 3060, 524.99\n', exitCode: 0 },
+    ]]));
+    const scanner = getScannerById('gpu-driver')!;
+    const result = await scanner.scan();
+    expect(result.status).toBe('warn');
+    expect(result.message).toContain('525+');
+  });
+
+  test('无 NVIDIA GPU → unknown', async () => {
+    setupMock(new Map([[
+      'nvidia-smi --query-gpu=name,driver_version --format=csv,noheader',
+      { exitCode: 1 },
+    ]]));
+    const scanner = getScannerById('gpu-driver')!;
+    const result = await scanner.scan();
+    expect(result.status).toBe('unknown');
+  });
+
+  test('多 GPU 混合版本 → warn（任一过旧）', async () => {
+    setupMock(new Map([[
+      'nvidia-smi --query-gpu=name,driver_version --format=csv,noheader',
+      { stdout: 'RTX 4090, 550.12\nRTX 3060, 470.50\n', exitCode: 0 },
+    ]]));
+    const scanner = getScannerById('gpu-driver')!;
+    const result = await scanner.scan();
+    expect(result.status).toBe('warn');
+  });
+});
