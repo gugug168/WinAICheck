@@ -35,6 +35,29 @@ describe('git scanner', () => {
     expect(result.status).toBe('pass');
     expect(result.message).toContain('2.45.0');
   });
+
+  test('版本刚好 2.30 → pass', async () => {
+    setupMock(new Map([['git --version', { stdout: 'git version 2.30.0', exitCode: 0 }]]));
+    const scanner = getScannerById('git')!;
+    const result = await scanner.scan();
+    expect(result.status).toBe('pass');
+  });
+
+  test('版本 2.29.9 → warn', async () => {
+    setupMock(new Map([['git --version', { stdout: 'git version 2.29.9', exitCode: 0 }]]));
+    const scanner = getScannerById('git')!;
+    const result = await scanner.scan();
+    expect(result.status).toBe('warn');
+    expect(result.message).toContain('过旧');
+  });
+
+  test('版本 1.99.0 → warn', async () => {
+    setupMock(new Map([['git --version', { stdout: 'git version 1.99.0', exitCode: 0 }]]));
+    const scanner = getScannerById('git')!;
+    const result = await scanner.scan();
+    expect(result.status).toBe('warn');
+    expect(result.message).toContain('过旧');
+  });
 });
 
 describe('node-version scanner', () => {
