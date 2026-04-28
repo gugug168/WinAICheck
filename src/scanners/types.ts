@@ -36,6 +36,30 @@ export interface ScanResult {
   error_type?: ErrorType;
 }
 
+/** 诊断：单个检测步骤记录 */
+export interface DecisionStep {
+  action: 'command' | 'file_check' | 'registry_check' | 'parse' | 'compare';
+  input: string;
+  rawOutput?: string;
+  exitCode?: number;
+  parsed?: string;
+  conclusion: string;
+}
+
+/** 诊断：完整扫描决策链 */
+export interface ScanDiagnostic {
+  scannerId: string;
+  steps: DecisionStep[];
+  finalStatus: ScanStatus;
+  finalReason: string;
+  environment: {
+    os: string;
+    arch: string;
+    admin: boolean;
+    timestamp: number;
+  };
+}
+
 /** Scanner 接口 */
 export interface Scanner {
   id: string;

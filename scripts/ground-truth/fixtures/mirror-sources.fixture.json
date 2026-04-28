@@ -1,0 +1,7 @@
+{
+  "scannerId": "mirror-sources",
+  "commands": {
+    "net session": { "exitCode": 0 },
+    "ver": { "stdout": "Microsoft Windows [Version 10.0.22631]", "exitCode": 0 }
+  }
+}

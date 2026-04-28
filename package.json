@@ -1,6 +1,6 @@
 {
   "name": "winaicheck",
-  "version": "0.3.13",
+  "version": "0.3.14",
   "description": "Windows AI 开发环境一键诊断与修复工具 - 扫描 37 个维度，反馈收集，社区悬赏，经验值系统",
   "type": "module",
   "bin": {

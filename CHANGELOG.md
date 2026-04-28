@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.3.14] - 2026-04-28
+
+### Added
+- 集中式扫描器阈值配置 (`src/scanners/thresholds.ts`)：Git 最低版本、GPU 驱动最低主版本号、Node.js 最低主版本号、镜像源正则模式，统一管理不再各文件硬编码
+- 语义化版本比较函数 `compareVersions()`，支持不等长版本号、"unknown" 边界、非数字段
+- 执行器诊断钩子 (`_diag`)：`onCommand`/`onReg`/`onPS` 观察者回调，不干扰执行，与 `_test` mock 共存
+- 扫描决策链类型 `ScanDiagnostic`/`DecisionStep`，以及 `scanWithDiagnostic()` 包装器，可捕获完整扫描决策过程
+- 114 行阈值配置测试 + 91 行诊断钩子测试 + 7 个扫描器边界测试用例
+
+### Changed
+- `git.ts` 使用 `compareVersions` + `THRESHOLDS.git.minVersion` 替代硬编码的 `major < 2 || (major === 2 && minor < 30)` 逻辑，并新增 unknown 版本保护
+- `gpu-driver.ts` 使用 `THRESHOLDS.gpu_driver.minDriverMajor` 替代硬编码 `525`，新增 `isNaN` 保护
+- `node-version.ts` 使用 `THRESHOLDS.node.minMajor` 替代硬编码 `18`，新增 `isNaN` 保护
+- `mirror-sources.ts` 使用 `THRESHOLDS.mirror_sources` 集中正则模式替代内联正则
+
 ## [0.3.6] - 2026-04-18
 
 ### Added
