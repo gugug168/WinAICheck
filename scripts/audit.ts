@@ -18,7 +18,7 @@ export function parseArgs(args: string[]): AuditConfig {
     mode: (args.find(a => a.startsWith('--mode='))?.split('=')[1] as AuditConfig['mode']) || 'scanners',
     ci: args.includes('--ci'),
     json: args.includes('--json'),
-    outputPath: args[args.indexOf('--output') + 1],
+    outputPath: args.includes('--output') ? args[args.indexOf('--output') + 1] : undefined,
   };
 }
 

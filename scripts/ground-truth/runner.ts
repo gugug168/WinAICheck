@@ -1,6 +1,6 @@
 // scripts/ground-truth/runner.ts
 
-import { readdirSync, readFileSync } from 'fs';
+import { readdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { runCommand } from '../../src/executor/index';
@@ -55,8 +55,9 @@ export async function discoverValidators(dir?: string): Promise<TruthValidator[]
       const validator: TruthValidator | undefined = mod.default
         || Object.values(mod).find((v: any) => v && typeof (v as any).validate === 'function') as TruthValidator | undefined;
       if (validator) validators.push(validator);
-    } catch {
-      // skip invalid validators
+    } catch (err) {
+      env?.degradedMethods?.push(`validator-load:${file}`);
+      if (process.env.DEBUG_VALIDATORS) console.warn(`[validator] 加载失败 ${file}:`, err);
     }
   }
   return validators;
@@ -79,7 +80,8 @@ export async function runAllValidators(
       const report = await validator.validate(realEnv);
       reports.push(report);
     } catch (err) {
-      // 验证器出错不阻塞其他验证器
+      realEnv.degradedMethods.push(`validator-run:${validator.id}`);
+      if (process.env.DEBUG_VALIDATORS) console.warn(`[validator] 运行失败 ${validator.id}:`, err);
     }
   }
   return reports;
