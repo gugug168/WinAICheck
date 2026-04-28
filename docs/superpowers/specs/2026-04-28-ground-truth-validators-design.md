@@ -107,8 +107,9 @@ interface TruthValidator {
    → 记录到 ValidatorEnv
 
 2. 获取真实值（独立方法，不同于扫描器用的命令）
+   → 通过 tryMethods() 执行降级链
    → 首选方法不可用 → 降级到备选 → 都不行 → 标记 skipped
-   → 记录使用了哪些降级方法
+   → 自动记录使用了哪些降级方法
 
 3. 运行扫描器（通过 scanWithDiagnostic）
    → 获取 ScanResult + ScanDiagnostic
@@ -118,6 +119,7 @@ interface TruthValidator {
    → 每个检查点独立判定 correct/incorrect/partial/skipped
 
 5. 输出 ValidationReport
+   → 通过 aggregateVerdict() 计算整体判定
 ```
 
 ## 降级链规则
@@ -186,6 +188,73 @@ CI 审计: 8/8 验证器判定逻辑正确
 - 不改扫描器逻辑（只发现问题，不修复）
 - 不加遥测/上报
 - 不覆盖全部 48 个扫描器
+
+## 审查修订（eng-review 2026-04-28）
+
+### 修订 1：统一降级链执行器 `tryMethods()`
+
+在 `runner.ts` 中提供统一工具函数，消除 8 个验证器的降级链重复代码：
+
+```typescript
+/** 降级链方法定义 */
+interface DegradableMethod<T> {
+  name: string;          // "where git"
+  execute: () => T;      // 执行检测
+  isAvailable: boolean;  // 是否可用（如命令是否存在）
+}
+
+/**
+ * 按优先级尝试多个检测方法，自动降级。
+ * 返回第一个成功的结果，记录使用的方法名。
+ * 全部失败时返回 null 并标记所有尝试过的方法。
+ */
+function tryMethods<T>(
+  methods: DegradableMethod<T>[],
+  env: ValidatorEnv
+): { result: T | null; usedMethod: string | null };
+```
+
+### 修订 2：CI 模式复用 `_test.mockExecSync`
+
+验证器通过 `runCommand` 执行命令，CI 模式由 `audit.ts` 在运行前设置 `_test.mockExecSync`，验证器代码无需感知 mock。fixture JSON 文件定义每个命令的 mock 返回值。
+
+```typescript
+// audit.ts CI 模式核心逻辑
+const fixture = JSON.parse(readFileSync(fixturePath, 'utf-8'));
+_test.mockExecSync = createCommandMock(new Map(
+  Object.entries(fixture.commands).map(([cmd, resp]) => [cmd, resp])
+));
+// 运行验证器...
+_test.mockExecSync = null; // 清理
+```
+
+### 修订 3：新增 `_test.mockReadFileSync`
+
+在 `src/executor/index.ts` 的 `_test` 对象中新增 `mockReadFileSync`，支持 mirror-sources 等文件系统扫描器的 CI 验证：
+
+```typescript
+export const _test = {
+  mockExecSync: null as ((cmd: string, opts: any) => Buffer) | null,
+  mockExistsSync: null as ((path: string) => boolean) | null,
+  mockReadFileSync: null as ((path: string) => string | null) | null,  // 新增
+};
+```
+
+### 修订 4：整体判定聚合规则 `aggregateVerdict()`
+
+在 `runner.ts` 中定义明确的聚合规则：
+
+```typescript
+function aggregateVerdict(checks: ValidationCheck[]): CheckVerdict {
+  if (checks.length === 0) return 'skipped';
+  if (checks.some(c => c.verdict === 'incorrect')) return 'incorrect';
+  if (checks.some(c => c.verdict === 'partial')) return 'partial';
+  if (checks.every(c => c.verdict === 'skipped')) return 'skipped';
+  return 'correct';
+}
+```
+
+规则优先级：incorrect > partial > correct > skipped。
 
 ## 验证器与测试文件的关系
 
