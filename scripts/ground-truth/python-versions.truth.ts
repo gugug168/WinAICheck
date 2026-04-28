@@ -1,8 +1,6 @@
 // scripts/ground-truth/python-versions.truth.ts
 import { runCommand } from '../../src/executor/index';
-import { getScannerById } from '../../src/scanners/registry';
-import { scanWithDiagnostic } from '../../src/scanners/diagnostic';
-import { aggregateVerdict } from './runner';
+import { aggregateVerdict, runScannerOrFallback } from './runner';
 import type { TruthValidator, ValidatorEnv, ValidationReport, ValidationCheck } from './types';
 
 export const pythonVersionsValidator: TruthValidator = {
@@ -25,19 +23,7 @@ export const pythonVersionsValidator: TruthValidator = {
     }
 
     // Step 3: 运行扫描器
-    const scanner = getScannerById('python-versions');
-    const { result: scannerResult, diagnostic: scannerDiag } = scanner
-      ? await scanWithDiagnostic(scanner)
-      : {
-          result: {
-            id: 'python-versions',
-            name: 'Python 版本检测',
-            category: 'toolchain' as const,
-            status: 'unknown' as const,
-            message: 'scanner not found',
-          },
-          diagnostic: undefined,
-        };
+    const { result: scannerResult, diagnostic: scannerDiag } = await runScannerOrFallback('python-versions', 'Python 版本检测', 'toolchain');
 
     // Step 4: 逐步比对
     // 检查点 1: 安装状态

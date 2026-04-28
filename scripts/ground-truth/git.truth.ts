@@ -1,9 +1,7 @@
 // scripts/ground-truth/git.truth.ts
 import { runCommand } from '../../src/executor/index';
-import { getScannerById } from '../../src/scanners/registry';
-import { scanWithDiagnostic } from '../../src/scanners/diagnostic';
 import { compareVersions, THRESHOLDS } from '../../src/scanners/thresholds';
-import { aggregateVerdict } from './runner';
+import { aggregateVerdict, runScannerOrFallback } from './runner';
 import type { TruthValidator, ValidatorEnv, ValidationReport, ValidationCheck } from './types';
 
 export const gitValidator: TruthValidator = {
@@ -26,19 +24,7 @@ export const gitValidator: TruthValidator = {
     }
 
     // Step 3: 运行扫描器
-    const scanner = getScannerById('git');
-    const { result: scannerResult, diagnostic: scannerDiag } = scanner
-      ? await scanWithDiagnostic(scanner)
-      : {
-          result: {
-            id: 'git',
-            name: 'Git 检测',
-            category: 'toolchain' as const,
-            status: 'unknown' as const,
-            message: 'scanner not found',
-          },
-          diagnostic: undefined,
-        };
+    const { result: scannerResult, diagnostic: scannerDiag } = await runScannerOrFallback('git', 'Git 检测', 'toolchain');
 
     // Step 4: 逐步比对
     // 检查点 1: 安装状态

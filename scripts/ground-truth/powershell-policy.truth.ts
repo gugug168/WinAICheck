@@ -1,8 +1,6 @@
 // scripts/ground-truth/powershell-policy.truth.ts
 import { runPS } from '../../src/executor/index';
-import { getScannerById } from '../../src/scanners/registry';
-import { scanWithDiagnostic } from '../../src/scanners/diagnostic';
-import { aggregateVerdict } from './runner';
+import { aggregateVerdict, runScannerOrFallback } from './runner';
 import type { TruthValidator, ValidatorEnv, ValidationReport, ValidationCheck } from './types';
 
 export const powershellPolicyValidator: TruthValidator = {
@@ -30,19 +28,7 @@ export const powershellPolicyValidator: TruthValidator = {
     }
 
     // Step 3: 运行扫描器
-    const scanner = getScannerById('powershell-policy');
-    const { result: scannerResult, diagnostic: scannerDiag } = scanner
-      ? await scanWithDiagnostic(scanner)
-      : {
-          result: {
-            id: 'powershell-policy',
-            name: 'PowerShell 执行策略检测',
-            category: 'permission' as const,
-            status: 'unknown' as const,
-            message: 'scanner not found',
-          },
-          diagnostic: undefined,
-        };
+    const { result: scannerResult, diagnostic: scannerDiag } = await runScannerOrFallback('powershell-policy', 'PowerShell 执行策略检测', 'permission');
 
     // Step 4: 比对
     // 检查点 1: 执行策略值

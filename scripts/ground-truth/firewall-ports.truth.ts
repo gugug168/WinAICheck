@@ -1,8 +1,6 @@
 // scripts/ground-truth/firewall-ports.truth.ts
 import { runCommand } from '../../src/executor/index';
-import { getScannerById } from '../../src/scanners/registry';
-import { scanWithDiagnostic } from '../../src/scanners/diagnostic';
-import { aggregateVerdict } from './runner';
+import { aggregateVerdict, runScannerOrFallback } from './runner';
 import type { TruthValidator, ValidatorEnv, ValidationReport, ValidationCheck } from './types';
 
 /** AI 常用端口列表，与扫描器保持一致 */
@@ -28,19 +26,7 @@ export const firewallPortsValidator: TruthValidator = {
 
     // 非管理员或命令失败 → 标记为 skipped
     if (netshResult.exitCode !== 0) {
-      const scanner = getScannerById('firewall-ports');
-      const { result: scannerResult, diagnostic: scannerDiag } = scanner
-        ? await scanWithDiagnostic(scanner)
-        : {
-            result: {
-              id: 'firewall-ports',
-              name: '防火墙端口检测',
-              category: 'permission' as const,
-              status: 'unknown' as const,
-              message: 'scanner not found',
-            },
-            diagnostic: undefined,
-          };
+      const { result: scannerResult, diagnostic: scannerDiag } = await runScannerOrFallback('firewall-ports', '防火墙端口检测', 'permission');
 
       checks.push({
         name: '防火墙规则读取',
@@ -87,19 +73,7 @@ export const firewallPortsValidator: TruthValidator = {
     }
 
     // Step 3: 运行扫描器
-    const scanner = getScannerById('firewall-ports');
-    const { result: scannerResult, diagnostic: scannerDiag } = scanner
-      ? await scanWithDiagnostic(scanner)
-      : {
-          result: {
-            id: 'firewall-ports',
-            name: '防火墙端口检测',
-            category: 'permission' as const,
-            status: 'unknown' as const,
-            message: 'scanner not found',
-          },
-          diagnostic: undefined,
-        };
+    const { result: scannerResult, diagnostic: scannerDiag } = await runScannerOrFallback('firewall-ports', '防火墙端口检测', 'permission');
 
     // 检查点 1: 防火墙规则读取
     const expectedRead = '成功读取';

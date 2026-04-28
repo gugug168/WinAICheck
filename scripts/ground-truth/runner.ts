@@ -4,6 +4,9 @@ import { readdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { runCommand } from '../../src/executor/index';
+import { getScannerById } from '../../src/scanners/registry';
+import { scanWithDiagnostic } from '../../src/scanners/diagnostic';
+import type { ScanResult, ScanDiagnostic, ScannerCategory } from '../../src/scanners/types';
 import type { ValidationCheck, CheckVerdict, ValidatorEnv, ValidationReport, TruthValidator, DegradableMethod } from './types';
 
 /** 整体判定聚合：incorrect > partial > correct > skipped */
@@ -33,6 +36,28 @@ export function tryMethods<T>(
     }
   }
   return { result: null, usedMethod: null };
+}
+
+/** 运行扫描器，scanner 未注册时返回 fallback 结果 */
+export async function runScannerOrFallback(
+  scannerId: string,
+  scannerName: string,
+  category: ScannerCategory,
+): Promise<{ result: ScanResult; diagnostic: ScanDiagnostic | undefined }> {
+  const scanner = getScannerById(scannerId);
+  if (scanner) {
+    return scanWithDiagnostic(scanner);
+  }
+  return {
+    result: {
+      id: scannerId,
+      name: scannerName,
+      category,
+      status: 'unknown',
+      message: 'scanner not found',
+    },
+    diagnostic: undefined,
+  };
 }
 
 /** 动态发现所有 .truth.ts 验证器 */

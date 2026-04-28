@@ -1,8 +1,6 @@
 // scripts/ground-truth/wsl-version.truth.ts
 import { runCommand } from '../../src/executor/index';
-import { getScannerById } from '../../src/scanners/registry';
-import { scanWithDiagnostic } from '../../src/scanners/diagnostic';
-import { aggregateVerdict } from './runner';
+import { aggregateVerdict, runScannerOrFallback } from './runner';
 import type { TruthValidator, ValidatorEnv, ValidationReport, ValidationCheck } from './types';
 
 export const wslVersionValidator: TruthValidator = {
@@ -23,19 +21,7 @@ export const wslVersionValidator: TruthValidator = {
     }
 
     // Step 3: 运行扫描器
-    const scanner = getScannerById('wsl-version');
-    const { result: scannerResult, diagnostic: scannerDiag } = scanner
-      ? await scanWithDiagnostic(scanner)
-      : {
-          result: {
-            id: 'wsl-version',
-            name: 'WSL 版本检测',
-            category: 'gpu' as const,
-            status: 'unknown' as const,
-            message: 'scanner not found',
-          },
-          diagnostic: undefined,
-        };
+    const { result: scannerResult, diagnostic: scannerDiag } = await runScannerOrFallback('wsl-version', 'WSL 版本检测', 'gpu');
 
     // 检查点 1: 安装状态
     const expectedInstalled = isInstalled ? '已安装' : '未安装';

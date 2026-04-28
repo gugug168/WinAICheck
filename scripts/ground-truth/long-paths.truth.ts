@@ -1,8 +1,6 @@
 // scripts/ground-truth/long-paths.truth.ts
 import { runReg } from '../../src/executor/index';
-import { getScannerById } from '../../src/scanners/registry';
-import { scanWithDiagnostic } from '../../src/scanners/diagnostic';
-import { aggregateVerdict } from './runner';
+import { aggregateVerdict, runScannerOrFallback } from './runner';
 import type { TruthValidator, ValidatorEnv, ValidationReport, ValidationCheck } from './types';
 
 export const longPathsValidator: TruthValidator = {
@@ -27,19 +25,7 @@ export const longPathsValidator: TruthValidator = {
     }
 
     // Step 2: 运行扫描器
-    const scanner = getScannerById('long-paths');
-    const { result: scannerResult, diagnostic: scannerDiag } = scanner
-      ? await scanWithDiagnostic(scanner)
-      : {
-          result: {
-            id: 'long-paths',
-            name: '长路径支持检测',
-            category: 'path' as const,
-            status: 'unknown' as const,
-            message: 'scanner not found',
-          },
-          diagnostic: undefined,
-        };
+    const { result: scannerResult, diagnostic: scannerDiag } = await runScannerOrFallback('long-paths', '长路径支持检测', 'path');
 
     // Step 3: 比对
     if (!regReadOk) {

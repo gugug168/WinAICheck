@@ -1,9 +1,7 @@
 // scripts/ground-truth/node-version.truth.ts
 import { runCommand } from '../../src/executor/index';
-import { getScannerById } from '../../src/scanners/registry';
-import { scanWithDiagnostic } from '../../src/scanners/diagnostic';
 import { THRESHOLDS } from '../../src/scanners/thresholds';
-import { aggregateVerdict } from './runner';
+import { aggregateVerdict, runScannerOrFallback } from './runner';
 import type { TruthValidator, ValidatorEnv, ValidationReport, ValidationCheck } from './types';
 
 export const nodeVersionValidator: TruthValidator = {
@@ -26,19 +24,7 @@ export const nodeVersionValidator: TruthValidator = {
     }
 
     // Step 3: 运行扫描器
-    const scanner = getScannerById('node-version');
-    const { result: scannerResult, diagnostic: scannerDiag } = scanner
-      ? await scanWithDiagnostic(scanner)
-      : {
-          result: {
-            id: 'node-version',
-            name: 'Node.js 版本检测',
-            category: 'toolchain' as const,
-            status: 'unknown' as const,
-            message: 'scanner not found',
-          },
-          diagnostic: undefined,
-        };
+    const { result: scannerResult, diagnostic: scannerDiag } = await runScannerOrFallback('node-version', 'Node.js 版本检测', 'toolchain');
 
     // Step 4: 逐步比对
     // 检查点 1: 安装状态
