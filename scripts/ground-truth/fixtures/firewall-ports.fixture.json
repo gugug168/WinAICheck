@@ -1,0 +1,11 @@
+{
+  "scannerId": "firewall-ports",
+  "commands": {
+    "netsh advfirewall firewall show rule name=all verbose": {
+      "stdout": "Rule Name: SSH Allow\nDirection: In\nAction: Allow\nEnabled: Yes\nLocal Port: 22\n\nRule Name: HTTPS Allow\nDirection: In\nAction: Allow\nEnabled: Yes\nLocal Port: 443",
+      "exitCode": 0
+    },
+    "net session": { "exitCode": 0 },
+    "ver": { "stdout": "Microsoft Windows [Version 10.0.22631]", "exitCode": 0 }
+  }
+}

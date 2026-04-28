@@ -1,0 +1,11 @@
+{
+  "scannerId": "long-paths",
+  "commands": {
+    "reg query \"HKLM\\SYSTEM\\CurrentControlSet\\Control\\FileSystem\" /v \"LongPathsEnabled\"": {
+      "stdout": "LongPathsEnabled    REG_DWORD    0x1",
+      "exitCode": 0
+    },
+    "net session": { "exitCode": 0 },
+    "ver": { "stdout": "Microsoft Windows [Version 10.0.22631]", "exitCode": 0 }
+  }
+}

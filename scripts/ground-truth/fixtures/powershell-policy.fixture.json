@@ -1,0 +1,11 @@
+{
+  "scannerId": "powershell-policy",
+  "commands": {
+    "powershell -NoProfile -Command \"Get-ExecutionPolicy\"": {
+      "stdout": "RemoteSigned",
+      "exitCode": 0
+    },
+    "net session": { "exitCode": 0 },
+    "ver": { "stdout": "Microsoft Windows [Version 10.0.22631]", "exitCode": 0 }
+  }
+}

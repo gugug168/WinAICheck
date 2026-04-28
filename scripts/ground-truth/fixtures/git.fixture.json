@@ -1,0 +1,9 @@
+{
+  "scannerId": "git",
+  "commands": {
+    "git --version": { "stdout": "git version 2.45.0", "exitCode": 0 },
+    "where git": { "stdout": "C:\\Program Files\\Git\\cmd\\git.exe", "exitCode": 0 },
+    "net session": { "exitCode": 0 },
+    "ver": { "stdout": "Microsoft Windows [Version 10.0.22631]", "exitCode": 0 }
+  }
+}

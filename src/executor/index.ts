@@ -7,6 +7,7 @@ const DEFAULT_TIMEOUT = 15_000;
 export const _test = {
   mockExecSync: null as ((cmd: string, opts: any) => Buffer) | null,
   mockExistsSync: null as ((path: string) => boolean) | null,
+  mockReadFileSync: null as ((path: string) => string | null) | null,
 };
 
 /** 诊断钩子：观察命令执行过程（不干扰执行，与 _test 共存） */
