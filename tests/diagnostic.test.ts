@@ -1,5 +1,6 @@
 import { describe, it, expect, afterEach } from 'bun:test';
 import { _diag, _test, runCommand, runReg, runPS } from '../src/executor/index';
+import '../src/scanners/index';
 
 describe('_diag diagnostic hooks', () => {
   afterEach(() => {
@@ -58,5 +59,33 @@ describe('_diag diagnostic hooks', () => {
     expect(diagCalled).toBe(true);
     expect(result.stdout).toBe('mocked');
     expect(result.exitCode).toBe(0);
+  });
+});
+
+describe('scanWithDiagnostic', () => {
+  afterEach(() => {
+    _test.mockExecSync = null;
+  });
+
+  it('为 git 扫描器捕获决策步骤', async () => {
+    _test.mockExecSync = (cmd: string) => {
+      if (cmd.includes('git --version')) return Buffer.from('git version 2.45.0');
+      if (cmd.includes('net session')) throw Object.assign(new Error(), { status: 1 });
+      return Buffer.from('');
+    };
+
+    const { scanWithDiagnostic } = await import('../src/scanners/diagnostic');
+    const { getScannerById } = await import('../src/scanners/registry');
+
+    const scanner = getScannerById('git')!;
+    const { result, diagnostic } = await scanWithDiagnostic(scanner);
+
+    expect(result.status).toBe('pass');
+    expect(diagnostic.scannerId).toBe('git');
+    expect(diagnostic.steps.length).toBeGreaterThan(0);
+    expect(diagnostic.steps[0].action).toBe('command');
+    expect(diagnostic.steps[0].input).toContain('git --version');
+    expect(diagnostic.finalStatus).toBe('pass');
+    expect(diagnostic.environment.os).toBeDefined();
   });
 });
