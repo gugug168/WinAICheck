@@ -1,6 +1,9 @@
 import { describe, it, expect } from 'bun:test';
+import { mkdtempSync, rmSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import { aggregateVerdict, tryMethods } from '../scripts/ground-truth/runner';
-import { formatReport } from '../scripts/ground-truth/runner';
+import { discoverValidators, formatReport, runAllValidators } from '../scripts/ground-truth/runner';
 import type { ValidationCheck } from '../scripts/ground-truth/types';
 
 describe('formatReport', () => {
@@ -42,5 +45,46 @@ describe('formatReport', () => {
     const output = formatReport(reports);
     expect(output).toContain('2.45.0');
     expect(output).toContain('2.30.0');
+  });
+
+  it('validator 加载失败时显式报错', async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'winaicheck-validator-'));
+    try {
+      writeFileSync(join(tempDir, 'bad.truth.ts'), "throw new Error('boom');\n", 'utf8');
+      let error: Error | null = null;
+      try {
+        await discoverValidators(tempDir);
+      } catch (err) {
+        error = err as Error;
+      }
+      expect(error).not.toBeNull();
+      expect(error!.message).toContain('验证器加载失败');
+      expect(error!.message).toContain('bad.truth.ts');
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('validator 运行失败时显式报错', async () => {
+    const env = { windowsVersion: '10.0.22631', isAdmin: true, degradedMethods: [] as string[] };
+    const validators = [{
+      id: 'boom',
+      name: 'Boom Validator',
+      validate: async () => {
+        throw new Error('validator broke');
+      },
+    }];
+
+    let error: Error | null = null;
+    try {
+      await runAllValidators(validators, env);
+    } catch (err) {
+      error = err as Error;
+    }
+
+    expect(error).not.toBeNull();
+    expect(error!.message).toContain('验证器运行失败');
+    expect(error!.message).toContain('boom');
+    expect(env.degradedMethods).toContain('validator-run:boom');
   });
 });

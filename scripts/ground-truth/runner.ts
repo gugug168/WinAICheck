@@ -74,6 +74,7 @@ export async function discoverValidators(dir?: string): Promise<TruthValidator[]
   }
 
   const validators: TruthValidator[] = [];
+  const loadErrors: string[] = [];
   for (const file of files) {
     try {
       const mod = await import(join(validatorDir, file));
@@ -81,9 +82,13 @@ export async function discoverValidators(dir?: string): Promise<TruthValidator[]
         || Object.values(mod).find((v: any) => v && typeof (v as any).validate === 'function') as TruthValidator | undefined;
       if (validator) validators.push(validator);
     } catch (err) {
-      env?.degradedMethods?.push(`validator-load:${file}`);
+      const message = err instanceof Error ? err.message : String(err);
+      loadErrors.push(`${file}: ${message}`);
       if (process.env.DEBUG_VALIDATORS) console.warn(`[validator] 加载失败 ${file}:`, err);
     }
+  }
+  if (loadErrors.length > 0) {
+    throw new Error(`验证器加载失败:\n${loadErrors.join('\n')}`);
   }
   return validators;
 }
@@ -100,14 +105,20 @@ export async function runAllValidators(
   };
 
   const reports: ValidationReport[] = [];
+  const runErrors: string[] = [];
   for (const validator of validators) {
     try {
       const report = await validator.validate(realEnv);
       reports.push(report);
     } catch (err) {
       realEnv.degradedMethods.push(`validator-run:${validator.id}`);
+      const message = err instanceof Error ? err.message : String(err);
+      runErrors.push(`${validator.id}: ${message}`);
       if (process.env.DEBUG_VALIDATORS) console.warn(`[validator] 运行失败 ${validator.id}:`, err);
     }
+  }
+  if (runErrors.length > 0) {
+    throw new Error(`验证器运行失败:\n${runErrors.join('\n')}`);
   }
   return reports;
 }

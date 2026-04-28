@@ -38,12 +38,14 @@ export async function scanWithDiagnostic(scanner: Scanner): Promise<{
   };
 
   // 运行扫描
-  const result = await scanner.scan();
-
-  // 清理钩子
-  _diag.onCommand = undefined;
-  _diag.onReg = undefined;
-  _diag.onPS = undefined;
+  let result: ScanResult;
+  try {
+    result = await scanner.scan();
+  } finally {
+    _diag.onCommand = undefined;
+    _diag.onReg = undefined;
+    _diag.onPS = undefined;
+  }
 
   // 收集环境信息
   const admin = runCommand('net session', 5000).exitCode === 0;

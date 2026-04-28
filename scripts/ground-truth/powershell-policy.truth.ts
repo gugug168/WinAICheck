@@ -1,7 +1,14 @@
 // scripts/ground-truth/powershell-policy.truth.ts
-import { runPS } from '../../src/executor/index';
-import { aggregateVerdict, runScannerOrFallback } from './runner';
+import { runCommand, runPS } from '../../src/executor/index';
+import { aggregateVerdict, runScannerOrFallback, tryMethods } from './runner';
 import type { TruthValidator, ValidatorEnv, ValidationReport, ValidationCheck } from './types';
+
+function readPolicyFromReg(cmd: string): string {
+  const output = runCommand(cmd, 5000).stdout;
+  const match = output.match(/ExecutionPolicy\s+REG_SZ\s+(\S+)/);
+  if (!match) throw new Error('policy not found');
+  return match[1];
+}
 
 export const powershellPolicyValidator: TruthValidator = {
   id: 'powershell-policy',
@@ -10,9 +17,29 @@ export const powershellPolicyValidator: TruthValidator = {
   async validate(env: ValidatorEnv): Promise<ValidationReport> {
     const checks: ValidationCheck[] = [];
 
-    // Step 1: 独立获取执行策略
-    const psOutput = runPS('Get-ExecutionPolicy', 5000).trim();
-    const policy = psOutput || 'unknown';
+    // Step 1: 独立获取执行策略，支持 PowerShell → HKLM → HKCU 降级
+    const { result: policyResult } = tryMethods<string>([
+      {
+        name: 'powershell:Get-ExecutionPolicy',
+        isAvailable: true,
+        execute: () => {
+          const output = runPS('Get-ExecutionPolicy', 5000).trim();
+          if (!output) throw new Error('empty result');
+          return output;
+        },
+      },
+      {
+        name: 'reg:hklm-policy',
+        isAvailable: true,
+        execute: () => readPolicyFromReg('reg query "HKLM\\SOFTWARE\\Policies\\Microsoft\\Windows\\PowerShell" /v ExecutionPolicy 2>nul'),
+      },
+      {
+        name: 'reg:hkcu-policy',
+        isAvailable: true,
+        execute: () => readPolicyFromReg('reg query "HKCU\\SOFTWARE\\Microsoft\\PowerShell\\1\\ShellIds\\Microsoft.PowerShell" /v ExecutionPolicy 2>nul'),
+      },
+    ], env);
+    const policy = policyResult || 'unknown';
 
     // Step 2: 独立判定预期状态
     const failPolicies = ['Restricted', 'AllSigned'];

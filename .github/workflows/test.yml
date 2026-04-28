@@ -20,3 +20,6 @@ jobs:
 
       - name: Run tests
         run: bun run test:all
+
+      - name: Run ground truth audit
+        run: bun run scripts/audit.ts --ci

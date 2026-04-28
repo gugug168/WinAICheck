@@ -64,6 +64,9 @@ describe('_diag diagnostic hooks', () => {
 
 describe('scanWithDiagnostic', () => {
   afterEach(() => {
+    _diag.onCommand = undefined;
+    _diag.onReg = undefined;
+    _diag.onPS = undefined;
     _test.mockExecSync = null;
   });
 
@@ -87,5 +90,29 @@ describe('scanWithDiagnostic', () => {
     expect(diagnostic.steps[0].input).toContain('git --version');
     expect(diagnostic.finalStatus).toBe('pass');
     expect(diagnostic.environment.os).toBeDefined();
+  });
+
+  it('scanner 抛错后仍会清理 _diag 钩子', async () => {
+    const { scanWithDiagnostic } = await import('../src/scanners/diagnostic');
+    let caught: Error | null = null;
+
+    try {
+      await scanWithDiagnostic({
+        id: 'broken',
+        name: '坏扫描器',
+        category: 'toolchain',
+        async scan() {
+          throw new Error('boom');
+        },
+      });
+    } catch (err) {
+      caught = err as Error;
+    }
+
+    expect(caught).not.toBeNull();
+    expect(caught!.message).toBe('boom');
+    expect(_diag.onCommand).toBeUndefined();
+    expect(_diag.onReg).toBeUndefined();
+    expect(_diag.onPS).toBeUndefined();
   });
 });

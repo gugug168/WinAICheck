@@ -115,6 +115,27 @@ describe('python-versions validator', () => {
     expect(report.scannerId).toBe('python-versions');
     expect(report.overallVerdict).toBe('correct');
   });
+
+  it('多解释器冲突 → correct', async () => {
+    _test.mockExecSync = createCommandMock(new Map([
+      ['python --version', { stdout: 'Python 3.7.0', exitCode: 0 }],
+      ['where python', { stdout: 'D:\\anaconda3\\python.exe\r\nC:\\Python314\\python.exe', exitCode: 0 }],
+      ['where.exe python', { stdout: 'D:\\anaconda3\\python.exe\r\nC:\\Python314\\python.exe', exitCode: 0 }],
+      ['python3 --version', { stdout: '', exitCode: 1 }],
+      ['where.exe python3', { stdout: '', exitCode: 1 }],
+      ['py -V', { stdout: 'Python 3.14.0', exitCode: 0 }],
+      ['where.exe py', { stdout: 'C:\\Windows\\py.exe', exitCode: 0 }],
+      ['py -0p', { stdout: '-V:3.14 *        C:\\Python314\\python.exe\n -V:ContinuumAnalytics/Anaconda37-64 D:\\anaconda3\\python.exe', exitCode: 0 }],
+      ['net session', { exitCode: 0 }],
+    ]));
+
+    const env = { windowsVersion: '10.0.22631', isAdmin: true, degradedMethods: [] };
+    const report = await pythonVersionsValidator.validate(env);
+
+    expect(report.overallVerdict).toBe('correct');
+    expect(report.checks[1].name).toBe('多版本冲突判定');
+    expect(report.checks[1].verdict).toBe('correct');
+  });
 });
 
 describe('wsl-version validator', () => {
@@ -190,6 +211,24 @@ describe('powershell-policy validator', () => {
     const env = { windowsVersion: '10.0.22631', isAdmin: true, degradedMethods: [] };
     const report = await powershellPolicyValidator.validate(env);
     expect(report.overallVerdict).toBe('correct');
+  });
+
+  it('PowerShell 命令失败时回退到 HKCU 注册表 → correct', async () => {
+    _test.mockExecSync = createCommandMock(new Map([
+      ['powershell -NoProfile -Command "Get-ExecutionPolicy"', { stdout: '', exitCode: 1 }],
+      ['reg query "HKLM\\SOFTWARE\\Policies\\Microsoft\\Windows\\PowerShell" /v ExecutionPolicy 2>nul', { stdout: '', exitCode: 1 }],
+      ['reg query "HKCU\\SOFTWARE\\Microsoft\\PowerShell\\1\\ShellIds\\Microsoft.PowerShell" /v ExecutionPolicy 2>nul', {
+        stdout: 'HKEY_CURRENT_USER\\SOFTWARE\\Microsoft\\PowerShell\\1\\ShellIds\\Microsoft.PowerShell\n    ExecutionPolicy    REG_SZ    RemoteSigned',
+        exitCode: 0,
+      }],
+      ['net session', { exitCode: 0 }],
+    ]));
+
+    const env = { windowsVersion: '10.0.22631', isAdmin: true, degradedMethods: [] as string[] };
+    const report = await powershellPolicyValidator.validate(env);
+
+    expect(report.overallVerdict).toBe('correct');
+    expect(env.degradedMethods).toContain('powershell:Get-ExecutionPolicy');
   });
 });
 

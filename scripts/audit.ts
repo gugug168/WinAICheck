@@ -59,13 +59,15 @@ async function main() {
   }
 
   // 运行
-  const reports = await runAllValidators(validators);
-
-  // 清理 mock
-  if (config.ci) {
-    _test.mockExecSync = null;
-    _test.mockReadFileSync = null;
-    _test.mockExistsSync = null;
+  let reports: ValidationReport[];
+  try {
+    reports = await runAllValidators(validators);
+  } finally {
+    if (config.ci) {
+      _test.mockExecSync = null;
+      _test.mockReadFileSync = null;
+      _test.mockExistsSync = null;
+    }
   }
 
   // 输出
