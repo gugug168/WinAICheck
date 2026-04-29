@@ -370,6 +370,119 @@ describe('worker-on (TASK-090)', () => {
     expect(io.output).toContain('"status": "stopped"');
   });
 
+  test('draft-organizer run-once requests scheduled work, fetches only its own batch, and submits one payload', async () => {
+    const root = createTempRoot();
+    roots.push(root);
+    setupWorkerConfig(root, {
+      authToken: 'ak_test_profile',
+      draftOrganizerEnabled: true,
+      draftOrganizerMode: 'apply',
+      draftOrganizerTriggerMode: 'hybrid',
+      draftOrganizerScheduleDays: 7,
+      profileId: 'prof_win',
+    });
+
+    const requests: Array<{ url: string; body?: string }> = [];
+    const io = createIo();
+    const code = await agentMain(['draft-organizer', 'run-once'], {
+      baseDir: root,
+      fetchImpl: async (url, init) => {
+        requests.push({ url: String(url), body: init?.body ? String(init.body) : undefined });
+        if (String(url).endsWith('/api/v2/agent/draft-reconcile/request-scheduled')) {
+          return mockResponse({ ok: true, queued_batch_count: 1 });
+        }
+        if (String(url).endsWith('/api/v2/agent/status')) {
+          return mockResponse({
+            owner_metrics: {},
+            worker_metrics: {},
+            pending_owner_verifications: [],
+            pending_draft_reconcile_batches: [
+              {
+                id: 'batch_win_1',
+                title: 'Windows Claude draft reconcile',
+                profile_id: 'prof_win',
+                profile_label: 'Windows Claude',
+                draft_count: 2,
+                requested_at: '2026-04-29T08:00:00Z',
+                trigger: 'manual',
+                status: 'queued',
+              },
+            ],
+            timestamp: '2026-04-29T08:00:00Z',
+          });
+        }
+        if (String(url).endsWith('/api/v2/agent/draft-reconcile-batches/batch_win_1')) {
+          return mockResponse({
+            id: 'batch_win_1',
+            profile_id: 'prof_win',
+            drafts: [
+              {
+                id: 'draft_1',
+                title: 'TypeError in build',
+                source_data: {
+                  origin_profile_id: 'prof_win',
+                  origin_device_id: 'device-test',
+                  origin_agent_type: 'claude-code',
+                  event_ids: ['evt_1'],
+                },
+              },
+            ],
+          });
+        }
+        if (String(url).endsWith('/api/v2/agent/draft-reconcile-batches/batch_win_1/submit')) {
+          return mockResponse({ ok: true, accepted: 1 });
+        }
+        throw new Error(`unexpected request ${String(url)}`);
+      },
+    }, io.io);
+
+    expect(code).toBe(0);
+    expect(requests.map((item) => item.url)).toContain('https://aicoevo.net/api/v2/agent/draft-reconcile/request-scheduled');
+    expect(requests.map((item) => item.url)).toContain('https://aicoevo.net/api/v2/agent/status');
+    expect(requests.map((item) => item.url)).toContain('https://aicoevo.net/api/v2/agent/draft-reconcile-batches/batch_win_1');
+    expect(requests.map((item) => item.url)).toContain('https://aicoevo.net/api/v2/agent/draft-reconcile-batches/batch_win_1/submit');
+    expect(requests.find((item) => item.url.endsWith('/submit'))?.body).toContain('"draft_id":"draft_1"');
+  });
+
+  test('worker daemon triggers draft organizer without crossing profile boundaries', async () => {
+    const root = createTempRoot();
+    roots.push(root);
+    setupWorkerConfig(root, {
+      authToken: 'ak_test_profile',
+      draftOrganizerEnabled: true,
+      draftOrganizerMode: 'apply',
+      draftOrganizerTriggerMode: 'manual_only',
+      profileId: 'prof_win',
+    });
+
+    const requests: string[] = [];
+    const io = createIo();
+    const code = await agentMain(['worker', 'daemon', '--worker-interval', '1', '--run-once'], {
+      baseDir: root,
+      fetchImpl: async (url) => {
+        requests.push(String(url));
+        if (String(url).endsWith('/api/v2/agent/status')) {
+          return mockResponse({
+            owner_metrics: {},
+            worker_metrics: {
+              recommended_tasks: 0,
+              active_solver_leases: 0,
+              pending_review_leases: 0,
+              worker_xp: 0,
+            },
+            pending_owner_verifications: [],
+            pending_draft_reconcile_batches: [],
+            timestamp: '2026-04-29T08:00:00Z',
+          });
+        }
+        return mockResponse({ recommended_bounties: [] });
+      },
+    }, io.io);
+
+    expect(code).toBe(0);
+    expect(requests.filter((url) => url.endsWith('/api/v2/agent/status')).length).toBeGreaterThan(0);
+  });
+
   test('worker daemon performs heartbeat and processes recommended_bounties', async () => {
     const root = createTempRoot();
     roots.push(root);
