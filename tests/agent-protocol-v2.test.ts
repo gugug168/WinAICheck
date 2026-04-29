@@ -854,7 +854,7 @@ describe('worker-on (TASK-090)', () => {
       baseDir: root,
       homeDir: root,
       spawnImpl: spawn.spawnImpl,
-      fetchImpl: async () => mockResponse({ api_key: 'ak_test_123' }),
+      fetchImpl: async () => mockResponse({ api_key: 'ak_test_123', profile_id: 'prof_win' }),
     }, io.io);
 
     expect(code).toBe(0);
@@ -862,5 +862,6 @@ describe('worker-on (TASK-090)', () => {
     expect(io.output).toContain('Worker 互助循环: 已启动');
     expect(spawn.calls).toHaveLength(1);
     expect(spawn.calls[0]?.args.join(' ')).toContain('worker daemon');
+    expect(_testHelpers.loadConfig({ baseDir: root }).profileId).toBe('prof_win');
   });
 });
