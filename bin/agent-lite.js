@@ -2391,6 +2391,14 @@ function draftOrganizerFailure(reason, state, deps = {}, io = {}) {
   return { ok: false, reason, state: nextState };
 }
 
+function draftOrganizerTriggerAllowed(triggerMode, batchTrigger) {
+  const mode = String(triggerMode || 'hybrid');
+  const trigger = String(batchTrigger || 'manual') === 'scheduled' ? 'scheduled' : 'manual';
+  if (mode === 'manual_only') return trigger === 'manual';
+  if (mode === 'scheduled_only') return trigger === 'scheduled';
+  return true;
+}
+
 async function runDraftOrganizerOnce(deps = {}, io = {}) {
   const config = loadConfig(deps);
   const state = loadDraftOrganizerState(deps);
@@ -2440,12 +2448,16 @@ async function runDraftOrganizerOnce(deps = {}, io = {}) {
     const pending = Array.isArray(status.data?.pending_draft_reconcile_batches)
       ? status.data.pending_draft_reconcile_batches
       : [];
-    const batches = pending.slice(0, Number(config.draftOrganizerMaxPerCycle || 10));
+    const batches = pending
+      .filter(batch =>
+        String(batch?.profile_id || '') === String(config.profileId || '')
+        && draftOrganizerTriggerAllowed(config.draftOrganizerTriggerMode, batch?.trigger),
+      )
+      .slice(0, Number(config.draftOrganizerMaxPerCycle || 10));
     const acceptedBatchIds = [];
     let submittedCount = 0;
 
     for (const batch of batches) {
-      if (String(batch?.profile_id || '') !== String(config.profileId || '')) continue;
       const detail = await requestJson(
         `${agentApiBase('v2')}/draft-reconcile-batches/${batch.id}`,
         { headers },

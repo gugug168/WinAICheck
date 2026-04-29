@@ -483,6 +483,89 @@ describe('worker-on (TASK-090)', () => {
     expect(requests.filter((url) => url.endsWith('/api/v2/agent/status')).length).toBeGreaterThan(0);
   });
 
+  test('draft-organizer scheduled_only ignores manual batches and consumes scheduled batches', async () => {
+    const root = createTempRoot();
+    roots.push(root);
+    setupWorkerConfig(root, {
+      authToken: 'ak_test_profile',
+      draftOrganizerEnabled: true,
+      draftOrganizerMode: 'apply',
+      draftOrganizerTriggerMode: 'scheduled_only',
+      draftOrganizerScheduleDays: 7,
+      profileId: 'prof_win',
+    });
+
+    const requests: Array<{ url: string; body?: string }> = [];
+    const io = createIo();
+    const code = await agentMain(['draft-organizer', 'run-once'], {
+      baseDir: root,
+      fetchImpl: async (url, init) => {
+        requests.push({ url: String(url), body: init?.body ? String(init.body) : undefined });
+        if (String(url).endsWith('/api/v2/agent/draft-reconcile/request-scheduled')) {
+          return mockResponse({ ok: true, queued_batch_count: 1 });
+        }
+        if (String(url).endsWith('/api/v2/agent/status')) {
+          return mockResponse({
+            owner_metrics: {},
+            worker_metrics: {},
+            pending_owner_verifications: [],
+            pending_draft_reconcile_batches: [
+              {
+                id: 'batch_manual_1',
+                title: 'Windows manual draft reconcile',
+                profile_id: 'prof_win',
+                profile_label: 'Windows Claude',
+                draft_count: 1,
+                requested_at: '2026-04-29T08:00:00Z',
+                trigger: 'manual',
+                status: 'queued',
+              },
+              {
+                id: 'batch_scheduled_1',
+                title: 'Windows scheduled draft reconcile',
+                profile_id: 'prof_win',
+                profile_label: 'Windows Claude',
+                draft_count: 1,
+                requested_at: '2026-04-29T08:10:00Z',
+                trigger: 'scheduled',
+                status: 'queued',
+              },
+            ],
+            timestamp: '2026-04-29T08:00:00Z',
+          });
+        }
+        if (String(url).endsWith('/api/v2/agent/draft-reconcile-batches/batch_scheduled_1')) {
+          return mockResponse({
+            id: 'batch_scheduled_1',
+            profile_id: 'prof_win',
+            drafts: [
+              {
+                id: 'draft_scheduled_1',
+                title: 'Scheduled draft',
+                source_data: {
+                  origin_profile_id: 'prof_win',
+                  origin_device_id: 'device-test',
+                  origin_agent_type: 'claude-code',
+                  event_ids: ['evt_scheduled_1'],
+                },
+              },
+            ],
+          });
+        }
+        if (String(url).endsWith('/api/v2/agent/draft-reconcile-batches/batch_scheduled_1/submit')) {
+          return mockResponse({ ok: true, accepted: 1 });
+        }
+        throw new Error(`unexpected request ${String(url)}`);
+      },
+    }, io.io);
+
+    expect(code).toBe(0);
+    expect(requests.map((item) => item.url)).toContain('https://aicoevo.net/api/v2/agent/draft-reconcile/request-scheduled');
+    expect(requests.map((item) => item.url)).toContain('https://aicoevo.net/api/v2/agent/draft-reconcile-batches/batch_scheduled_1');
+    expect(requests.map((item) => item.url)).toContain('https://aicoevo.net/api/v2/agent/draft-reconcile-batches/batch_scheduled_1/submit');
+    expect(requests.some((item) => item.url.includes('batch_manual_1'))).toBe(false);
+  });
+
   test('worker daemon performs heartbeat and processes recommended_bounties', async () => {
     const root = createTempRoot();
     roots.push(root);
