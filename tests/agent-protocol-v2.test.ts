@@ -250,6 +250,16 @@ describe('agent protocol v2', () => {
               solution_summary: 'Run pip install --upgrade pip',
               submitted_at: '2026-04-26T00:00:00Z',
               deadline_at: '2026-04-28T00:00:00Z',
+              execution_decision: {
+                decision: 'ask_user_run',
+                phase: 'owner_verification',
+                current_profile_is_target: true,
+                target_route: {
+                  profile_id: 'prof_001',
+                  device_id: 'device_001',
+                  agent_type: 'claude-code',
+                },
+              },
             }],
             timestamp: '2026-04-26T00:00:00Z',
           }),
@@ -263,6 +273,8 @@ describe('agent protocol v2', () => {
     expect(io.output).toContain('a_001');
     expect(io.output).toContain('pip install fails');
     expect(io.output).toContain('owner-verify');
+    expect(io.output).toContain('执行决策: ask_user_run');
+    expect(io.output).toContain('目标机器: profile=prof_001 / device=device_001 / agent=claude-code');
     expect(io.output).toContain('自动验证: blocked');
     expect(io.output).toContain('阻塞原因: missing_validation_command');
     const guidePath = join(root, 'owner-verify', 'b_001__a_001.md');
@@ -1177,6 +1189,61 @@ describe('worker-on (TASK-090)', () => {
     const body = JSON.parse(requests[3]?.body || '{}');
     expect(body.artifacts.owner_reproduction_project_dir).toBe(projectRoot);
     expect(body.proof_payload.after_context.local_context.project_dir).toBe(projectRoot);
+  });
+
+  test('worker daemon writes owner prompt when platform routes execution back to the origin machine', async () => {
+    const root = createTempRoot();
+    roots.push(root);
+    setupWorkerConfig(root);
+
+    const requests = [];
+    let fetchCount = 0;
+    const io = createIo();
+    const code = await agentMain(['worker', 'daemon', '--worker-interval', '10'], {
+      baseDir: root,
+      execImpl: (command) => {
+        throw new Error(`unexpected exec: ${command}`);
+      },
+      fetchImpl: async (url) => {
+        requests.push(url);
+        fetchCount++;
+        if (fetchCount >= 2) {
+          const config = _testHelpers.loadConfig({ baseDir: root });
+          config.workerEnabled = false;
+          _testHelpers.saveConfig(config, { baseDir: root });
+        }
+        if (url.includes('/heartbeat')) return mockResponse({ recommended_bounties: [] });
+        if (url.includes('/status')) {
+          return mockResponse({
+            pending_owner_verifications: [{
+              bounty_id: 'b_owner_prompt',
+              answer_id: 'a_owner_prompt',
+              title: 'prompt owner on origin machine',
+              solution_summary: 'Please verify on the original machine',
+              submitted_at: '2026-04-30T00:00:00Z',
+              deadline_at: '2026-05-02T00:00:00Z',
+              execution_decision: {
+                decision: 'ask_user_run',
+                phase: 'owner_verification',
+                current_profile_is_target: true,
+                target_route: {
+                  profile_id: 'prof-owner',
+                  device_id: 'device-owner',
+                  agent_type: 'claude-code',
+                },
+              },
+            }],
+          });
+        }
+        return mockResponse({});
+      },
+    }, io.io);
+
+    expect(code).toBe(0);
+    expect(requests.some(url => url.includes('/owner-verify'))).toBe(false);
+    expect(io.output).toContain('owner-prompt 待人工确认 b_owner_prompt/a_owner_prompt');
+    const wState = _testHelpers.loadWorkerState({ baseDir: root });
+    expect(wState.totalOwnerSkipped).toBeGreaterThanOrEqual(1);
   });
 
   test('worker daemon skips owner verification when only unsafe commands are available', async () => {
