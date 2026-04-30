@@ -96,6 +96,45 @@ function ensureParent(file) {
   ensureDir(path.dirname(file));
 }
 
+function normalizeAbsoluteFilePath(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  if (raw.startsWith('file://')) {
+    try {
+      return fileURLToPath(raw);
+    } catch {
+      return '';
+    }
+  }
+  return path.isAbsolute(raw) ? raw : '';
+}
+
+function currentModuleFilePath(deps = {}) {
+  const explicit = normalizeAbsoluteFilePath(deps.currentFilePath);
+  if (explicit && fs.existsSync(explicit)) return explicit;
+  for (const candidate of [
+    import.meta.filename,
+    import.meta.path,
+    import.meta.url,
+    process.argv[1],
+  ]) {
+    const resolved = normalizeAbsoluteFilePath(candidate);
+    if (resolved && fs.existsSync(resolved)) return resolved;
+  }
+  return '';
+}
+
+function currentModuleHref(deps = {}) {
+  const filePath = currentModuleFilePath(deps);
+  if (filePath) {
+    try {
+      return pathToFileURL(filePath).href;
+    } catch {}
+  }
+  const raw = String(import.meta.url || '').trim();
+  return raw.startsWith('file://') ? raw : '';
+}
+
 function readJson(file, fallback) {
   try {
     if (!fs.existsSync(file)) return fallback;
@@ -991,10 +1030,641 @@ function ownerVerifyLocalContext(config = {}) {
   };
 }
 
+const VALIDATION_PROJECT_ROOT_MARKERS = [
+  '.git',
+  'package.json',
+  'pnpm-workspace.yaml',
+  'bunfig.toml',
+  'turbo.json',
+  'pyproject.toml',
+  'requirements.txt',
+  'setup.py',
+  'Pipfile',
+  'Cargo.toml',
+  'go.mod',
+  'pom.xml',
+  'build.gradle',
+  'build.gradle.kts',
+  'settings.gradle',
+  'settings.gradle.kts',
+];
+
+function hasValidationProjectRootMarker(dir) {
+  return VALIDATION_PROJECT_ROOT_MARKERS.some(marker => fs.existsSync(path.join(dir, marker)));
+}
+
+function resolveValidationProjectDir(filePath) {
+  const raw = String(filePath || '').trim();
+  if (!raw) return '';
+  let current = raw;
+  try {
+    if (fs.existsSync(current) && !fs.statSync(current).isDirectory()) current = path.dirname(current);
+    else if (!fs.existsSync(current)) current = path.dirname(current);
+  } catch {
+    current = path.dirname(current);
+  }
+  if (!current || current === '.' || !fs.existsSync(current)) return '';
+  let dir = current;
+  let best = current;
+  while (dir && dir !== path.dirname(dir)) {
+    if (hasValidationProjectRootMarker(dir)) return dir;
+    dir = path.dirname(dir);
+  }
+  return hasValidationProjectRootMarker(dir) ? dir : best;
+}
+
+function validationProjectHint(item = {}) {
+  return item.project_hint && typeof item.project_hint === 'object' ? item.project_hint : {};
+}
+
+function validationProjectHintToolContext(item = {}) {
+  const hint = validationProjectHint(item);
+  return hint.tool_context && typeof hint.tool_context === 'object' ? hint.tool_context : {};
+}
+
+function tokenizeValidationHint(value) {
+  return String(value || '')
+    .toLowerCase()
+    .split(/[^a-z0-9._-]+/i)
+    .filter(token => token.length >= 3);
+}
+
+function validationTokenOverlap(a, b) {
+  if (!a.length || !b.length) return 0;
+  const right = new Set(b);
+  let score = 0;
+  for (const token of a) {
+    if (right.has(token)) score++;
+  }
+  return score;
+}
+
+function buildValidationAutomationAssessment(item = {}, deps = {}) {
+  const selectedCommand = selectOwnerValidationCommand(item);
+  const workdirMatch = resolveValidationWorkdir(item, deps);
+  const blockingReasons = [];
+  const warningReasons = [];
+  if (!selectedCommand) blockingReasons.push('missing_validation_command');
+  if (selectedCommand && !workdirMatch?.cwd) warningReasons.push('missing_local_project_match');
+  const status = blockingReasons.length > 0 ? 'blocked' : warningReasons.length > 0 ? 'degraded' : 'ready';
+  return {
+    status,
+    ready: status === 'ready',
+    selected_command: selectedCommand,
+    suggested_project_dir: String(workdirMatch?.cwd || '').trim(),
+    blocking_reasons: blockingReasons,
+    warning_reasons: warningReasons,
+  };
+}
+
+function buildReviewAutomationTarget(item = {}) {
+  const answer = item?.answer || {};
+  const submissionRun = item?.submission_run || {};
+  const proofPayload = submissionRun?.proof_payload || {};
+  return {
+    validation_cmd: proofPayload.validation_cmd,
+    commands_run: Array.isArray(submissionRun.commands_run) ? submissionRun.commands_run : [],
+    solution_summary: proofPayload.summary || answer.content || '',
+    expected_output: proofPayload.expected_output || '',
+    project_hint: item?.project_hint || {},
+  };
+}
+
+function serverAutomationMode(item = {}) {
+  const contract = item?.automation_contract;
+  if (contract && typeof contract === 'object') {
+    const mode = String(contract.mode || '').trim();
+    if (mode) return mode;
+  }
+  const readiness = item?.automation_readiness;
+  if (readiness && typeof readiness === 'object') {
+    return String(readiness.status || '').trim() === 'ready' ? 'auto' : 'manual_only';
+  }
+  return 'manual_only';
+}
+
+function serverAutomationReady(item = {}) {
+  return serverAutomationMode(item) === 'auto';
+}
+
+function requiresStrictSubmissionAutoContract(item = {}) {
+  if (item.submission_auto_contract_required === true) return true;
+  return String(item.submission_automation_policy || '').trim() === 'strict';
+}
+
+function buildWorkerAutomationStatus(config, state, deps = {}) {
+  const p = paths(deps);
+  const hooks = readJson(p.hooks, {});
+  const lastSeen = hooks.lastSeen && typeof hooks.lastSeen === 'object' ? hooks.lastSeen : {};
+  const claudeLastSeen = lastSeen['claude-code'] && typeof lastSeen['claude-code'] === 'object'
+    ? lastSeen['claude-code']
+    : null;
+  const hookCoverage = classifyCoverageStatus(claudeLastSeen?.lastHookSeenAt || null, LOOP_HOOK_STALE_MS, deps);
+  const settings = readJson(settingsFilePath(deps), {});
+  const settingsHooks = settings.hooks && typeof settings.hooks === 'object' ? settings.hooks : {};
+  const sessionEntries = Array.isArray(settingsHooks.SessionStart) ? settingsHooks.SessionStart : [];
+  const postToolEntries = Array.isArray(settingsHooks.PostToolUse) ? settingsHooks.PostToolUse : [];
+  const hasSessionHook = sessionEntries.some(entry =>
+    Array.isArray(entry?.hooks)
+    && entry.hooks.some(hook =>
+      String(hook?.command || '').includes('winaicheck-session-start.cjs') || String(hook?.command || '').includes('winaicheck')
+    )
+  );
+  const hasPostToolHook = postToolEntries.some(entry =>
+    Array.isArray(entry?.hooks)
+    && entry.hooks.some(hook =>
+      String(hook?.command || '').includes('winaicheck-post-tool.cjs') || String(hook?.command || '').includes('winaicheck')
+    )
+  );
+  const apiKeyBound = !!apiKeyHeaders(config);
+  const workerEnabled = config.workerEnabled !== false;
+  const workerRunning = state.status === 'running' && !!state.pid;
+  const blockers = [];
+  const warnings = [];
+  if (!apiKeyBound) blockers.push('missing_api_key');
+  if (!workerEnabled) blockers.push('worker_disabled');
+  if (!hasSessionHook || !hasPostToolHook) blockers.push('hook_not_configured');
+  if (!fs.existsSync(p.sessionStartHookJs) || !fs.existsSync(p.postToolHookJs)) blockers.push('hook_script_missing');
+  if (hookCoverage === 'missing' || hookCoverage === 'degraded') warnings.push(`hook_coverage_${hookCoverage}`);
+  if (blockers.length === 0 && !workerRunning) warnings.push('worker_not_running');
+  const status = blockers.length > 0 ? 'blocked' : warnings.length > 0 ? 'degraded' : 'ready';
+  return {
+    status,
+    ready_for_auto_loop: status === 'ready',
+    api_key_bound: apiKeyBound,
+    worker_enabled: workerEnabled,
+    worker_running: workerRunning,
+    hook_status: {
+      settings_file: settingsFilePath(deps),
+      session_hook_configured: hasSessionHook,
+      post_tool_hook_configured: hasPostToolHook,
+      session_hook_file_present: fs.existsSync(p.sessionStartHookJs),
+      post_tool_hook_file_present: fs.existsSync(p.postToolHookJs),
+      coverage: hookCoverage,
+      last_seen_at: claudeLastSeen?.lastHookSeenAt || null,
+    },
+    blocking_reasons: blockers,
+    warning_reasons: warnings,
+  };
+}
+
+function validationEventLocalContext(event = {}) {
+  const localContext = event.localContext || event.local_context;
+  return localContext && typeof localContext === 'object' ? localContext : {};
+}
+
+function resolveValidationProjectCandidate(toolContext = {}) {
+  for (const value of [
+    toolContext.filePath,
+    toolContext.file_path,
+    toolContext.cwd,
+    toolContext.workingDirectory,
+    toolContext.working_directory,
+    toolContext.projectDir,
+    toolContext.projectRoot,
+  ]) {
+    const cwd = resolveValidationProjectDir(value);
+    if (cwd) return cwd;
+  }
+  return '';
+}
+
+function normalizeDeviceBaseId(value) {
+  return String(value || '').replace(/_(cc|oc)$/i, '');
+}
+
+function resolveValidationWorkdir(item = {}, deps = {}) {
+  const hint = validationProjectHint(item);
+  const toolContext = validationProjectHintToolContext(item);
+  const wantedFingerprint = String(hint.fingerprint || '').trim();
+  const wantedEventType = String(hint.event_type || '').trim();
+  const wantedCwdHash = String(hint.cwd_hash || '').trim();
+  const wantedDevice = normalizeDeviceBaseId(String(hint.origin_device_id || ''));
+  const wantedAgent = normalizeAgent(String(hint.origin_agent_type || ''));
+  const wantedFileName = String(toolContext.fileName || '').trim().toLowerCase();
+  const wantedCommand = String(toolContext.command || '').trim().toLowerCase();
+  const wantedCommandTokens = tokenizeValidationHint(wantedCommand);
+  const byDir = new Map();
+  const rows = readJsonl(paths(deps).outbox).slice(-200);
+
+  for (const event of rows) {
+    const eventToolContext = event.toolContext || event.tool_context || {};
+    const eventLocalContext = validationEventLocalContext(event);
+    const eventCwdHash = String(eventLocalContext.cwdHash || eventLocalContext.cwd_hash || '').trim();
+    const filePath = String(eventToolContext.filePath || eventToolContext.file_path || '').trim();
+    const cwd = resolveValidationProjectCandidate(eventToolContext);
+    if (!cwd) continue;
+
+    let score = 0;
+    if (wantedFingerprint && String(event.fingerprint || '').trim() === wantedFingerprint) score += 20;
+    if (wantedEventType && String(event.eventType || event.event_type || '').trim() === wantedEventType) score += 4;
+    if (wantedCwdHash && eventCwdHash && eventCwdHash === wantedCwdHash) score += 10;
+    if (wantedAgent && normalizeAgent(String(event.agent || '')) === wantedAgent) score += 3;
+    if (wantedDevice && normalizeDeviceBaseId(String(event.deviceId || event.device_id || '')) === wantedDevice) score += 3;
+
+    const eventFileName = path.basename(filePath).toLowerCase();
+    if (wantedFileName && eventFileName === wantedFileName) score += 8;
+
+    const eventCommand = String(eventToolContext.command || '').trim().toLowerCase();
+    if (wantedCommand && eventCommand) {
+      if (eventCommand === wantedCommand) score += 6;
+      else if (eventCommand.includes(wantedCommand) || wantedCommand.includes(eventCommand)) score += 4;
+      else score += Math.min(3, validationTokenOverlap(wantedCommandTokens, tokenizeValidationHint(eventCommand)));
+    }
+
+    if (score <= 0) continue;
+    const previous = byDir.get(cwd);
+    const occurredAt = String(event.occurredAt || event.occurred_at || '');
+    if (!previous || score > previous.score || (score === previous.score && occurredAt > previous.occurredAt)) {
+      byDir.set(cwd, { cwd, score, occurredAt, filePath });
+    }
+  }
+
+  return [...byDir.values()].sort((a, b) => {
+    if (b.score !== a.score) return b.score - a.score;
+    return String(b.occurredAt).localeCompare(String(a.occurredAt));
+  })[0] || null;
+}
+
+function trimOwnerValidationDigest(text, limit = 4000) {
+  const value = String(text || '').trim();
+  if (value.length <= limit) return value;
+  return `${value.slice(0, limit)}\n<TRUNCATED>`;
+}
+
+function normalizeOwnerValidationCommand(raw) {
+  return String(raw || '').trim().replace(/^`+|`+$/g, '');
+}
+
+function ownerValidationCommandToken(command) {
+  const match = command.trim().match(/^(?:"([^"]+)"|'([^']+)'|(\S+))/);
+  const raw = String(match?.[1] || match?.[2] || match?.[3] || '').trim();
+  const parts = raw.split(/[\\/]/).filter(Boolean);
+  return String(parts[parts.length - 1] || raw).toLowerCase();
+}
+
+function extractValidationCommands(text) {
+  const candidates = [];
+  const push = value => {
+    const normalized = normalizeOwnerValidationCommand(value);
+    if (normalized) candidates.push(normalized);
+  };
+  for (const regex of [
+    /validation command[:：]\s*`?([^\n`]+)`?/gim,
+    /验证命令[:：]\s*`?([^\n`]+)`?/gim,
+    /(?:^|\n)\s*命令[:：]\s*`?([^\n`]+)`?/gim,
+  ]) {
+    let match;
+    while ((match = regex.exec(text)) !== null) push(match[1]);
+  }
+  const fenced = /```(?:\w+)?\s*\n([^`\n]+)\n```/g;
+  let block;
+  while ((block = fenced.exec(text)) !== null) push(block[1]);
+  return [...new Set(candidates)];
+}
+
+function isSafeOwnerValidationCommand(command) {
+  const normalized = normalizeOwnerValidationCommand(command);
+  if (!normalized) return false;
+  if (/[\r\n]/.test(normalized)) return false;
+  if (/[|&;<>`]/.test(normalized) || normalized.includes('&&') || normalized.includes('||')) return false;
+  const lower = normalized.toLowerCase();
+  if (
+    lower.startsWith('bash ')
+    || lower.startsWith('sh ')
+    || lower.startsWith('zsh ')
+    || lower.startsWith('cmd ')
+    || lower.startsWith('powershell ')
+    || lower.startsWith('pwsh ')
+    || lower.startsWith('python -c ')
+    || lower.startsWith('python3 -c ')
+    || lower.startsWith('py -c ')
+    || lower.startsWith('node -e ')
+  ) {
+    return false;
+  }
+  for (const blocked of [
+    ' npm install',
+    ' pnpm install',
+    ' yarn add',
+    ' bun add',
+    ' pip install',
+    ' pip3 install',
+    ' conda install',
+    ' brew install',
+    ' rm ',
+    ' rmdir ',
+    ' del ',
+    ' erase ',
+    ' move ',
+    ' copy ',
+    ' curl ',
+    ' wget ',
+    ' invoke-webrequest ',
+    ' git reset',
+    ' git clean',
+    ' git checkout',
+    ' git switch',
+    ' git pull',
+    ' git push',
+    ' chmod ',
+    ' chown ',
+  ]) {
+    if (` ${lower}`.includes(blocked)) return false;
+  }
+  const token = ownerValidationCommandToken(normalized);
+  if (!new Set([
+    'pytest', 'python', 'python3', 'py', 'npm', 'pnpm', 'yarn', 'bun',
+    'node', 'uv', 'go', 'cargo', 'dotnet', 'npx', 'bunx',
+    'mvn', 'mvnw', 'gradle', 'gradlew', 'ctest',
+  ]).has(token)) {
+    return false;
+  }
+  return true;
+}
+
+function isMeaningfulOwnerValidationCommand(command) {
+  const normalized = normalizeOwnerValidationCommand(command).toLowerCase();
+  if (!normalized) return false;
+  return [
+    /^(?:uv\s+run\s+)?pytest(?:\s|$)/,
+    /^(?:uv\s+run\s+)?(?:python|python3|py)\s+-m\s+pytest(?:\s|$)/,
+    /^(?:python|python3|py)\s+\S*(?:test|tests|check|verify|spec|e2e)\S*(?:\s|$)/,
+    /^(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:test|check|verify|e2e|spec)(?:\s|$)/,
+    /^(?:npx|bunx)\s+\S*(?:vitest|jest|playwright|cypress|mocha|ava|tap|check|verify|test|spec)\S*(?:\s|$)/,
+    /^(?:node|bun)\s+\S*(?:test|tests|check|verify|spec|e2e)\S*(?:\s|$)/,
+    /^go\s+test(?:\s|$)/,
+    /^cargo\s+test(?:\s|$)/,
+    /^dotnet\s+test(?:\s|$)/,
+    /^(?:mvn|mvnw)\s+(?:-\S+\s+)*(?:test|verify)(?:\s|$)/,
+    /^(?:gradle|gradlew)\s+(?:test|check)(?:\s|$)/,
+    /^ctest(?:\s|$)/,
+  ].some(pattern => pattern.test(normalized));
+}
+
+function ownerValidationCandidates(item = {}) {
+  const candidates = [];
+  const push = value => {
+    const normalized = normalizeOwnerValidationCommand(value);
+    if (normalized) candidates.push(normalized);
+  };
+  push(item.validation_cmd);
+  if (Array.isArray(item.commands_run)) item.commands_run.forEach(push);
+  extractValidationCommands(String(item.solution_summary || '')).forEach(push);
+  return [...new Set(candidates)];
+}
+
+function selectOwnerValidationCommand(item = {}) {
+  return ownerValidationCandidates(item).find(
+    command => isSafeOwnerValidationCommand(command) && isMeaningfulOwnerValidationCommand(command),
+  ) || '';
+}
+
+function runOwnerValidationCommand(command, deps = {}, cwd = '') {
+  if (typeof deps.execImpl === 'function') {
+    const result = deps.execImpl(command, cwd ? { cwd } : {});
+    return {
+      ok: result.exitCode === 0,
+      exitCode: result.exitCode,
+      stdout: trimOwnerValidationDigest(result.stdout),
+      stderr: trimOwnerValidationDigest(result.stderr),
+    };
+  }
+  try {
+    if (process.platform === 'win32') {
+      const stdout = execFileSync(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', command], {
+        encoding: 'utf8',
+        timeout: 120000,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        windowsHide: true,
+        ...(cwd ? { cwd } : {}),
+      });
+      return { ok: true, exitCode: 0, stdout: trimOwnerValidationDigest(stdout), stderr: '' };
+    }
+    const stdout = execFileSync('/bin/sh', ['-lc', command], {
+      encoding: 'utf8',
+      timeout: 120000,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      ...(cwd ? { cwd } : {}),
+    });
+    return { ok: true, exitCode: 0, stdout: trimOwnerValidationDigest(stdout), stderr: '' };
+  } catch (error) {
+    const stdout = Buffer.isBuffer(error?.stdout) ? error.stdout.toString('utf8') : String(error?.stdout || '');
+    const stderr = Buffer.isBuffer(error?.stderr) ? error.stderr.toString('utf8') : String(error?.stderr || '');
+    return {
+      ok: false,
+      exitCode: Number.isFinite(error?.status) ? Number(error.status) : 1,
+      stdout: trimOwnerValidationDigest(stdout),
+      stderr: trimOwnerValidationDigest(stderr || error?.message || 'validation command failed'),
+    };
+  }
+}
+
+async function submitOwnerVerification(params, deps = {}) {
+  const submittedAt = nowIso(deps);
+  const suggestedProjectDir = String(params.guideRecord.snapshot?.suggestedProjectDir || '').trim();
+  const afterContext = {
+    submitted_at: submittedAt,
+    confirmation_mode: params.confirmationMode,
+    result: params.resultValue,
+    notes: params.notes,
+    commands_run: params.commandsRun,
+    local_context: {
+      ...ownerVerifyLocalContext(params.config),
+      ...(suggestedProjectDir ? { project_dir: suggestedProjectDir } : {}),
+    },
+  };
+  return requestJson(`${agentApiBase('v2')}/bounties/${params.bountyId}/owner-verify`, {
+    method: 'POST',
+    headers: params.headers,
+    body: {
+      answer_id: params.answerId,
+      result: params.resultValue,
+      notes: params.notes,
+      commands_run: params.commandsRun,
+      proof_payload: {
+        summary: `Owner verification for ${params.bountyId}/${params.answerId}`,
+        steps: [
+          `读取本地指南: ${params.guideRecord.guideMd}`,
+          params.commandsRun.length
+            ? `本地执行验证命令: ${params.commandsRun.join(' ; ')}`
+            : '按本地指南手动确认问题是否消失。',
+          `确认模式: ${params.confirmationMode}`,
+          `用户确认结果: ${params.resultValue}`,
+        ],
+        before_context: params.guideRecord.snapshot || {},
+        after_context: afterContext,
+        validation_cmd: params.commandsRun[0] || '',
+        expected_output:
+          params.expectedOutput
+          || (params.resultValue === 'success'
+            ? '问题已消失或行为符合预期'
+            : params.resultValue === 'partial'
+              ? '问题部分缓解，但仍有残留'
+              : '问题仍然可复现'),
+      },
+      artifacts: {
+        owner_reproduction_guide_path: params.guideRecord.guideMd,
+        owner_reproduction_snapshot_path: params.guideRecord.snapshotJson,
+        owner_reproduction_guide_sha256: params.guideRecord.guideSha256,
+        owner_reproduction_snapshot_generated_at: params.guideRecord.snapshot?.generatedAt || '',
+        ...(suggestedProjectDir ? { owner_reproduction_project_dir: suggestedProjectDir } : {}),
+        ...(params.artifacts || {}),
+      },
+      stdout_digest: params.stdoutDigest || '',
+      stderr_digest: params.stderrDigest || '',
+    },
+  }, deps);
+}
+
+async function processPendingReviewAssignments(headers, deps = {}, io = {}) {
+  const out = io.stdout || process.stdout;
+  const result = await requestJson(`${agentApiBase('v2')}/reviews/recommended`, { headers }, deps);
+  if (result.status !== 200) throw new Error(`获取评审任务失败: ${result.status}`);
+  const items = Array.isArray(result.data?.items) ? result.data.items : [];
+  let reviewed = 0;
+  let skipped = 0;
+  for (const item of items) {
+    const assignmentId = String(item?.assignment_id || '').trim();
+    const answer = item?.answer || {};
+    const submissionRun = item?.submission_run || {};
+    const proofPayload = submissionRun?.proof_payload || {};
+    const reviewTarget = buildReviewAutomationTarget(item);
+    const localAutomation = buildValidationAutomationAssessment(reviewTarget, deps);
+    if (!assignmentId || !localAutomation.selected_command) {
+      out.write(`[Worker] review-auto 跳过 ${assignmentId || 'unknown'}: 无可自动执行的验证命令\n`);
+      skipped++;
+      continue;
+    }
+    if (!serverAutomationReady(item)) {
+      out.write(`[Worker] review-auto 跳过 ${assignmentId}: 平台已标记为 manual-only\n`);
+      skipped++;
+      continue;
+    }
+    if (localAutomation.status !== 'ready') {
+      out.write(`[Worker] review-auto 跳过 ${assignmentId}: 本地未匹配到可自动执行的项目目录\n`);
+      skipped++;
+      continue;
+    }
+    const validationCmd = localAutomation.selected_command;
+    const execution = runOwnerValidationCommand(validationCmd, deps, localAutomation.suggested_project_dir || '');
+    const reviewResult = execution.ok ? 'success' : 'failed';
+    const submit = await requestJson(`${agentApiBase('v2')}/reviews/${assignmentId}/submit`, {
+      method: 'POST',
+      headers,
+      body: {
+        result: reviewResult,
+        method: 'execution',
+        notes: execution.ok
+          ? `review auto validation passed via ${validationCmd}`
+          : `review auto validation failed via ${validationCmd} (exit ${execution.exitCode})`,
+        confidence: execution.ok ? 1.0 : 0.2,
+        review_score: execution.ok ? 1.0 : 0.0,
+        review_summary: execution.ok ? `Auto review passed via ${validationCmd}` : `Auto review failed via ${validationCmd}`,
+        execution_mode: 'agent',
+        proof_payload: {
+          summary: `Auto review for ${String(answer.id || assignmentId)}`,
+          validation_cmd: validationCmd,
+          expected_output: String(proofPayload.expected_output || ''),
+          before_context: submissionRun,
+          after_context: {
+            reviewed_at: nowIso(deps),
+            review_mode: 'worker_auto',
+            result: reviewResult,
+            ...(localAutomation.suggested_project_dir ? { validation_cwd: localAutomation.suggested_project_dir } : {}),
+          },
+        },
+        commands_run: [validationCmd],
+        artifacts: {
+          reviewer_auto_mode: true,
+          ...(localAutomation.suggested_project_dir ? { validation_workdir: localAutomation.suggested_project_dir } : {}),
+        },
+        stdout_digest: execution.stdout,
+        stderr_digest: execution.stderr,
+      },
+    }, deps);
+    if (submit.status !== 200) {
+      out.write(`[Worker] review-auto 提交失败 ${assignmentId}: ${submit.status}\n`);
+      skipped++;
+      continue;
+    }
+    out.write(`[Worker] review-auto 已提交 ${assignmentId}: ${reviewResult}\n`);
+    reviewed++;
+  }
+  return { reviewed, skipped, total: items.length };
+}
+
+async function processPendingOwnerVerifications(headers, config, deps = {}, io = {}) {
+  const out = io.stdout || process.stdout;
+  const result = await requestJson(`${agentApiBase('v2')}/status`, { headers }, deps);
+  if (result.status !== 200) throw new Error(`获取待复现列表失败: ${result.status}`);
+  const pending = Array.isArray(result.data?.pending_owner_verifications)
+    ? result.data.pending_owner_verifications
+    : [];
+  let verified = 0;
+  let skipped = 0;
+  for (const item of pending) {
+    const bountyId = String(item?.bounty_id || '').trim();
+    const answerId = String(item?.answer_id || '').trim();
+    if (!bountyId || !answerId) { skipped++; continue; }
+    const guideRecord = writeOwnerVerifyGuide(item, config, deps);
+    const localAutomation = buildValidationAutomationAssessment(item, deps);
+    if (!localAutomation.selected_command) {
+      out.write(`[Worker] owner-auto 跳过 ${bountyId}/${answerId}: 无可自动执行的验证命令\n`);
+      skipped++;
+      continue;
+    }
+    if (!serverAutomationReady(item)) {
+      out.write(`[Worker] owner-auto 跳过 ${bountyId}/${answerId}: 平台已标记为 manual-only\n`);
+      skipped++;
+      continue;
+    }
+    if (localAutomation.status !== 'ready') {
+      out.write(`[Worker] owner-auto 跳过 ${bountyId}/${answerId}: 本地未匹配到可自动执行的项目目录\n`);
+      skipped++;
+      continue;
+    }
+    const validationCmd = localAutomation.selected_command;
+    const suggestedProjectDir = String(
+      localAutomation.suggested_project_dir || guideRecord.snapshot?.suggestedProjectDir || ''
+    ).trim();
+    const execution = runOwnerValidationCommand(validationCmd, deps, suggestedProjectDir);
+    const verifyResult = execution.ok ? 'success' : 'failed';
+    const submitResult = await submitOwnerVerification({
+      bountyId,
+      answerId,
+      resultValue: verifyResult,
+      notes: execution.ok
+        ? `worker auto validation passed via ${validationCmd}`
+        : `worker auto validation failed via ${validationCmd} (exit ${execution.exitCode})`,
+      commandsRun: [validationCmd],
+      guideRecord,
+      config,
+      headers,
+      confirmationMode: 'worker_auto',
+      expectedOutput: String(item?.expected_output || ''),
+      stdoutDigest: execution.stdout,
+      stderrDigest: execution.stderr,
+      artifacts: { owner_auto_mode: true },
+    }, deps);
+    if (submitResult.status !== 200) {
+      out.write(`[Worker] owner-auto 提交失败 ${bountyId}/${answerId}: ${submitResult.status}\n`);
+      skipped++;
+      continue;
+    }
+    out.write(`[Worker] owner-auto 已提交 ${bountyId}/${answerId}: ${verifyResult}\n`);
+    verified++;
+  }
+  return { verified, skipped, total: pending.length };
+}
+
 function writeOwnerVerifyGuide(item, config = {}, deps = {}) {
   const files = ownerVerifyFiles(item.bounty_id, item.answer_id, deps);
   const generatedAt = nowIso(deps);
   const localContext = ownerVerifyLocalContext(config);
+  const suggestedValidationCmd = selectOwnerValidationCommand(item);
+  const workdirMatch = resolveValidationWorkdir(item, deps);
+  const suggestedProjectDir = String(workdirMatch?.cwd || '').trim();
   const verifyCommand = `winaicheck agent owner-verify ${item.bounty_id} --answer ${item.answer_id} --result success|partial|failed --cmd "<local validation command>"`;
   const lines = [
     '# AICOEVO 发起者复现指南',
@@ -1009,6 +1679,9 @@ function writeOwnerVerifyGuide(item, config = {}, deps = {}) {
     '',
     item.solution_summary || '暂无方案摘要。',
     '',
+    ...(suggestedProjectDir ? ['## 建议项目目录', '', `\`${suggestedProjectDir}\``, ''] : []),
+    ...(suggestedValidationCmd ? ['## 推荐验证命令', '', `\`${suggestedValidationCmd}\``, ''] : []),
+    ...(item.expected_output ? ['## 期望结果', '', String(item.expected_output), ''] : []),
     '## 建议操作',
     '',
     '1. 在你自己的本地环境里手动复现原问题。',
@@ -1030,6 +1703,10 @@ function writeOwnerVerifyGuide(item, config = {}, deps = {}) {
     item,
     localContext,
     verifyCommand,
+    validationCmd: suggestedValidationCmd,
+    expectedOutput: String(item.expected_output || ''),
+    suggestedProjectDir,
+    projectHint: validationProjectHint(item),
   };
   writeJson(files.snapshotJson, snapshot);
   return {
@@ -1076,7 +1753,8 @@ function printHelp(io = {}) {
     `  winaicheck agent bounty-recommended [--strategy balanced|quality_first|speed_first] [--limit N]\n` +
     `  winaicheck agent bounty-solve <id>                       — KB 匹配获取答案\n` +
     `  winaicheck agent bounty-claim <id>                       — 认领悬赏\n` +
-    `  winaicheck agent bounty-submit <id> --content <text>     — 提交回答\n` +
+    `  winaicheck agent bounty-submit <id> --content <text> [--cmd "pytest -q"] [--validation-cmd "pytest -q"]\n` +
+    `                                                          [--expected-output "3 passed"] [--summary "..."]\n` +
     `  winaicheck agent bounty-release <id>                     — 释放认领\n` +
     `  winaicheck agent bounty-auto [--interval 300]            — 自动循环: 推荐→KB匹配→提交\n` +
     `  winaicheck agent owner-check                             — 查看待复现确认的方案列表\n` +
@@ -1163,7 +1841,8 @@ function normalizeUpdateMode(value) {
 function localWinAICheckVersion(deps = {}) {
   if (deps.currentVersion) return String(deps.currentVersion).trim();
   try {
-    const selfPath = fileURLToPath(import.meta.url);
+    const selfPath = currentModuleFilePath(deps);
+    if (!selfPath) return '0.0.0';
     const versionFile = path.join(path.dirname(selfPath), '..', 'VERSION');
     if (fs.existsSync(versionFile)) {
       return fs.readFileSync(versionFile, 'utf8').trim() || '0.0.0';
@@ -1503,6 +2182,8 @@ function buildPostToolHookScript(agentCmd, baseDir) {
     '    const toolCtx = { toolName: toolName };',
     '    if (toolInput.command) toolCtx.command = String(toolInput.command).slice(0, 500);',
     '    if (toolInput.file_path) toolCtx.filePath = String(toolInput.file_path).slice(0, 300);',
+    "    const workingDir = String(toolInput.cwd || toolInput.working_directory || data.cwd || process.cwd() || '').trim();",
+    '    if (workingDir) toolCtx.cwd = workingDir.slice(0, 300);',
     '    if (exitCode !== undefined) toolCtx.exitCode = exitCode;',
     '    const sessionId = data.sessionId || data.session_id || data.conversationId || data.conversation_id || null;',
     '    const cmdHash = toolInput.command ? shortHash(String(toolInput.command)) : null;',
@@ -1577,8 +2258,11 @@ function buildSessionStartHookScript(baseDir) {
 function installLocalAgent(deps = {}) {
   const p = paths(deps);
   ensureDir(p.agentDir);
-  const selfPath = fileURLToPath(import.meta.url);
-  fs.copyFileSync(selfPath, p.agentJs);
+  const selfPath = currentModuleFilePath(deps);
+  if (!selfPath) throw new Error('无法定位当前 agent-lite.js 路径');
+  if (path.resolve(selfPath) !== path.resolve(p.agentJs)) {
+    fs.copyFileSync(selfPath, p.agentJs);
+  }
   const hash = computeFileHash(p.agentJs);
   writeJson(path.join(p.agentDir, 'agent-lite.hash.json'), { sha256: hash, installedAt: nowIso(deps) });
   fs.writeFileSync(p.sessionStartHookJs, buildSessionStartHookScript(p.base), 'utf8');
@@ -2544,6 +3228,10 @@ function defaultWorkerState() {
     totalCycles: 0,
     totalSolved: 0,
     totalSkipped: 0,
+    totalReviewsSubmitted: 0,
+    totalReviewSkipped: 0,
+    totalOwnerVerified: 0,
+    totalOwnerSkipped: 0,
     consecutiveErrors: 0,
     lastError: null,
   };
@@ -2794,6 +3482,10 @@ async function runWorkerDaemon(args, deps = {}, io = {}) {
 
         let solved = 0;
         let skipped = 0;
+        let reviewsSubmitted = 0;
+        let reviewSkipped = 0;
+        let ownerVerified = 0;
+        let ownerSkipped = 0;
 
         if (items.length === 0) {
           // silent, no output for empty cycles to reduce noise
@@ -2801,6 +3493,11 @@ async function runWorkerDaemon(args, deps = {}, io = {}) {
           out.write(`[Worker] 发现 ${items.length} 个推荐任务\n`);
           for (const item of items) {
             if (!/^[a-zA-Z0-9_-]+$/.test(item.id)) { skipped++; continue; }
+            if (requiresStrictSubmissionAutoContract(item)) {
+              out.write(`[Worker] auto-submit 跳过 ${item.id}: 平台要求严格自动化契约\n`);
+              skipped++;
+              continue;
+            }
             // KB auto-solve only — never execute local fix commands
             const solveRes = await _fetch(`${agentApiBase('v1')}/bounties/${item.id}/auto-solve`, {
               method: 'POST', headers,
@@ -2831,6 +3528,12 @@ async function runWorkerDaemon(args, deps = {}, io = {}) {
             }
           }
         }
+        const reviewResult = await processPendingReviewAssignments(headers, deps, io);
+        reviewsSubmitted = reviewResult.reviewed;
+        reviewSkipped = reviewResult.skipped;
+        const ownerResult = await processPendingOwnerVerifications(headers, currentConfig, deps, io);
+        ownerVerified = ownerResult.verified;
+        ownerSkipped = ownerResult.skipped;
 
         if (currentConfig.draftOrganizerEnabled && currentConfig.profileId) {
           const draftResult = await runDraftOrganizerOnce(deps, io);
@@ -2841,10 +3544,14 @@ async function runWorkerDaemon(args, deps = {}, io = {}) {
 
         const updatedState = loadWorkerState(deps);
         updatedState.lastCycleAt = nowIso(deps);
-        updatedState.lastCycleResult = { solved, skipped, total: items.length };
+        updatedState.lastCycleResult = { solved, skipped, total: items.length, reviewsSubmitted, reviewSkipped, ownerVerified, ownerSkipped };
         updatedState.totalCycles = (updatedState.totalCycles || 0) + 1;
         updatedState.totalSolved = (updatedState.totalSolved || 0) + solved;
         updatedState.totalSkipped = (updatedState.totalSkipped || 0) + skipped;
+        updatedState.totalReviewsSubmitted = (updatedState.totalReviewsSubmitted || 0) + reviewsSubmitted;
+        updatedState.totalReviewSkipped = (updatedState.totalReviewSkipped || 0) + reviewSkipped;
+        updatedState.totalOwnerVerified = (updatedState.totalOwnerVerified || 0) + ownerVerified;
+        updatedState.totalOwnerSkipped = (updatedState.totalOwnerSkipped || 0) + ownerSkipped;
         updatedState.consecutiveErrors = 0;
         updatedState.lastError = null;
         updatedState.nextCycleAt = new Date(Date.now() + interval).toISOString();
@@ -3521,6 +4228,7 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
         paused: config.paused,
         worker: wState,
         lockPresent: fs.existsSync(paths(deps).workerLock),
+        automation: buildWorkerAutomationStatus(config, wState, deps),
       }, null, 2)}\n`);
       return 0;
     }
@@ -3637,7 +4345,14 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
     if (!auth) { out.write('悬赏命令需要 Agent API Key，请先运行 winaicheck agent bind\n'); return 1; }
     const id = args._[0];
     const content = args.content;
-    if (!id || !content) { out.write('用法: winaicheck agent bounty-submit <id> --content <text>\n'); return 1; }
+    if (!id || !content) {
+      out.write('用法: winaicheck agent bounty-submit <id> --content <text> [--cmd "pytest -q"] [--validation-cmd "pytest -q"] [--expected-output "3 passed"] [--summary "..."]\n');
+      return 1;
+    }
+    const commandsRun = String(args.cmd || '').split(',').map(s => s.trim()).filter(Boolean);
+    const validationCmd = String(args.validationCmd || '').trim() || commandsRun[0] || '';
+    const expectedOutput = String(args.expectedOutput || '').trim();
+    const summary = String(args.summary || '').trim();
     const _fetch = deps.fetchImpl || fetch;
     try {
       const res = await _fetch(`${agentApiBase('v2')}/bounties/${id}/submit`, {
@@ -3648,6 +4363,12 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
           source: args.source || 'manual',
           confidence: Number(args.confidence || 0),
           execution_mode: args.executionMode || 'agent',
+          commands_run: commandsRun,
+          proof_payload: {
+            ...(summary ? { summary } : {}),
+            ...(validationCmd ? { validation_cmd: validationCmd } : {}),
+            ...(expectedOutput ? { expected_output: expectedOutput } : {}),
+          },
         }),
       });
       const data = await res.json();
@@ -3709,6 +4430,10 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
           let solved = 0;
 
           for (const item of items) {
+            if (requiresStrictSubmissionAutoContract(item)) {
+              out.write(`  [${item.id}] 平台要求严格自动化契约，跳过纯 KB 自动提交\n`);
+              continue;
+            }
             // 3. KB 匹配
             const solveRes = await _fetch(`${agentApiBase('v1')}/bounties/${item.id}/auto-solve`, {
               method: 'POST', headers,
@@ -3774,12 +4499,20 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
       out.write(`待复现确认 (${pending.length}):\n\n`);
       for (const item of pending) {
         const guide = writeOwnerVerifyGuide(item, config, deps);
+        const automation = buildValidationAutomationAssessment(item, deps);
         out.write(`## ${item.title || '(无标题)'}\n`);
         out.write(`  Bounty:   ${item.bounty_id}\n`);
         out.write(`  Answer:   ${item.answer_id}\n`);
         out.write(`  方案摘要: ${item.solution_summary}\n`);
         out.write(`  提交时间: ${item.submitted_at}\n`);
         out.write(`  截止时间: ${item.deadline_at}\n\n`);
+        if (item.validation_cmd) out.write(`  验证命令: ${item.validation_cmd}\n`);
+        if (guide.snapshot?.suggestedProjectDir) out.write(`  项目目录: ${String(guide.snapshot.suggestedProjectDir)}\n`);
+        out.write(`  自动验证: ${automation.status}\n`);
+        if (automation.selected_command) out.write(`  自动命令: ${automation.selected_command}\n`);
+        if (automation.suggested_project_dir) out.write(`  自动目录: ${automation.suggested_project_dir}\n`);
+        if (automation.blocking_reasons.length > 0) out.write(`  阻塞原因: ${automation.blocking_reasons.join(', ')}\n`);
+        if (automation.warning_reasons.length > 0) out.write(`  注意事项: ${automation.warning_reasons.join(', ')}\n`);
         out.write(`  指南:     ${guide.guideMd}\n`);
         out.write(`  快照:     ${guide.snapshotJson}\n\n`);
         out.write(`  → winaicheck agent owner-verify ${item.bounty_id} --answer ${item.answer_id} --result success|partial|failed\n\n`);
@@ -3834,50 +4567,17 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
     }
 
     try {
-      const submittedAt = nowIso(deps);
-      const afterContext = {
-        submitted_at: submittedAt,
-        confirmation_mode: skipPrompt ? 'flag_yes' : 'interactive_prompt',
-        result: resultValue,
+      const res = await submitOwnerVerification({
+        bountyId,
+        answerId,
+        resultValue,
         notes,
-        commands_run: commandsRun,
-        local_context: ownerVerifyLocalContext(config),
-      };
-      const res = await requestJson(`${agentApiBase('v2')}/bounties/${bountyId}/owner-verify`, {
-        method: 'POST',
+        commandsRun,
+        guideRecord,
+        config,
         headers,
-        body: {
-          answer_id: answerId,
-          result: resultValue,
-          notes,
-          commands_run: commandsRun,
-          proof_payload: {
-            summary: `Owner verification for ${bountyId}/${answerId}`,
-            steps: [
-              `读取本地指南: ${guideRecord.guideMd}`,
-              commandsRun.length
-                ? `本地执行验证命令: ${commandsRun.join(' ; ')}`
-                : '按本地指南手动确认问题是否消失。',
-              `用户确认结果: ${resultValue}`,
-            ],
-            before_context: guideRecord.snapshot || {},
-            after_context: afterContext,
-            validation_cmd: commandsRun[0] || '',
-            expected_output:
-              resultValue === 'success'
-                ? '问题已消失或行为符合预期'
-                : resultValue === 'partial'
-                  ? '问题部分缓解，但仍有残留'
-                  : '问题仍然可复现',
-          },
-          artifacts: {
-            owner_reproduction_guide_path: guideRecord.guideMd,
-            owner_reproduction_snapshot_path: guideRecord.snapshotJson,
-            owner_reproduction_guide_sha256: guideRecord.guideSha256,
-            owner_reproduction_snapshot_generated_at: guideRecord.snapshot?.generatedAt || '',
-          },
-        },
-      }, { fetchImpl: _fetch });
+        confirmationMode: skipPrompt ? 'flag_yes' : 'interactive_prompt',
+      }, { ...deps, fetchImpl: _fetch });
       if (res.status !== 200) {
         out.write(`提交失败 (${res.status}): ${JSON.stringify(res.data)}\n`);
         return 1;
@@ -3900,7 +4600,16 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
     try {
       const res = await _fetch(`${agentApiBase('v2')}/reviews/recommended`, { headers });
       const data = await res.json();
-      out.write(`${JSON.stringify(data, null, 2)}\n`);
+      const items = Array.isArray(data?.items)
+        ? data.items.map(item => ({
+            ...item,
+            local_automation_readiness: buildValidationAutomationAssessment(
+              buildReviewAutomationTarget(item),
+              deps,
+            ),
+          }))
+        : [];
+      out.write(`${JSON.stringify({ ...data, items }, null, 2)}\n`);
     } catch (e) { out.write(`获取评审任务失败: ${e.message}\n`); return 1; }
     return 0;
   }
@@ -3982,9 +4691,11 @@ export const _testHelpers = {
 
 let isDirectExecution = false;
 try {
-  isDirectExecution = process.argv[1]
-    ? import.meta.url === pathToFileURL(process.argv[1]).href
-    : false;
+  const currentHref = currentModuleHref();
+  const argvHref = normalizeAbsoluteFilePath(process.argv[1])
+    ? pathToFileURL(normalizeAbsoluteFilePath(process.argv[1])).href
+    : '';
+  isDirectExecution = !!currentHref && currentHref === argvHref;
 } catch { /* invalid argv[1] path */ }
 if (isDirectExecution) {
   main().then(code => {

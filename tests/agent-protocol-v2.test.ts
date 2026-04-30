@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { main as agentMain, _testHelpers } from '../bin/agent-lite.js';
@@ -143,6 +143,51 @@ describe('agent protocol v2', () => {
     expect(io.output).toContain('lease_1');
   });
 
+  test('bounty-submit forwards validation contract fields when provided', async () => {
+    const root = createTempRoot();
+    roots.push(root);
+    const p = _testHelpers.paths({ baseDir: root });
+    _testHelpers.writeJson(p.config, {
+      clientId: 'client-test',
+      deviceId: 'device-test',
+      shareData: true,
+      autoSync: true,
+      paused: false,
+      authToken: 'ak_test_123',
+    });
+
+    let request = null;
+    const io = createIo();
+    const code = await agentMain([
+      'bounty-submit',
+      'bounty_1',
+      '--content',
+      'Use pytest to verify',
+      '--cmd',
+      'pytest -q',
+      '--validation-cmd',
+      'pytest -q',
+      '--expected-output',
+      '3 passed',
+      '--summary',
+      'Run tests after fix',
+    ], {
+      baseDir: root,
+      fetchImpl: async (url, init) => {
+        request = { url, body: init?.body ? String(init.body) : undefined };
+        return mockResponse({ id: 'ans_submit_1' });
+      },
+    }, io.io);
+
+    expect(code).toBe(0);
+    expect(request.url).toBe('https://aicoevo.net/api/v2/agent/bounties/bounty_1/submit');
+    const body = JSON.parse(request.body || '{}');
+    expect(body.commands_run).toEqual(['pytest -q']);
+    expect(body.proof_payload.validation_cmd).toBe('pytest -q');
+    expect(body.proof_payload.expected_output).toBe('3 passed');
+    expect(body.proof_payload.summary).toBe('Run tests after fix');
+  });
+
   test('review-submit uses the v2 reviewer endpoint', async () => {
     const root = createTempRoot();
     roots.push(root);
@@ -218,6 +263,8 @@ describe('agent protocol v2', () => {
     expect(io.output).toContain('a_001');
     expect(io.output).toContain('pip install fails');
     expect(io.output).toContain('owner-verify');
+    expect(io.output).toContain('自动验证: blocked');
+    expect(io.output).toContain('阻塞原因: missing_validation_command');
     const guidePath = join(root, 'owner-verify', 'b_001__a_001.md');
     const snapshotPath = join(root, 'owner-verify', 'b_001__a_001.json');
     expect(existsSync(guidePath)).toBe(true);
@@ -255,6 +302,82 @@ describe('agent protocol v2', () => {
 
     expect(code).toBe(0);
     expect(io.output).toContain('没有待复现确认');
+  });
+
+  test('review-list keeps the matched project directory instead of walking to a parent folder', async () => {
+    const root = createTempRoot();
+    roots.push(root);
+    const p = _testHelpers.paths({ baseDir: root });
+    const projectDir = join(root, 'repo');
+    mkdirSync(projectDir, { recursive: true });
+    writeFileSync(join(projectDir, 'test_review_ready.py'), '# smoke\n', 'utf8');
+    _testHelpers.writeJson(p.config, {
+      clientId: 'client-test',
+      deviceId: 'device-test',
+      shareData: true,
+      autoSync: true,
+      paused: false,
+      authToken: 'ak_test_123',
+    });
+    mkdirSync(join(root, 'outbox'), { recursive: true });
+    writeFileSync(
+      p.outbox,
+      `${JSON.stringify({
+        fingerprint: 'fp_review_ready_1',
+        eventType: 'post_tool_error',
+        agent: 'claude-code',
+        deviceId: 'device-test',
+        occurredAt: '2026-04-30T00:00:00Z',
+        toolContext: {
+          command: 'pytest -q',
+          filePath: join(projectDir, 'test_review_ready.py'),
+          fileName: 'test_review_ready.py',
+          cwd: projectDir,
+        },
+        localContext: {
+          cwdHash: 'cwdhash-review-ready-1',
+        },
+      })}\n`,
+      'utf8',
+    );
+
+    const io = createIo();
+    const code = await agentMain(['review-list'], {
+      baseDir: root,
+      fetchImpl: async () => mockResponse({
+        items: [
+          {
+            assignment_id: 'lease_1',
+            answer: { id: 'a_ready_1', content: 'Fix review ready issue' },
+            submission_run: {
+              proof_payload: {
+                validation_cmd: 'pytest -q',
+                expected_output: '3 passed',
+                summary: 'Dependency mismatch resolved',
+              },
+              commands_run: ['pytest -q'],
+            },
+            project_hint: {
+              fingerprint: 'fp_review_ready_1',
+              event_type: 'post_tool_error',
+              cwd_hash: 'cwdhash-review-ready-1',
+              origin_device_id: 'device-test',
+              origin_agent_type: 'claude-code',
+              tool_context: {
+                command: 'pytest -q',
+                fileName: 'test_review_ready.py',
+              },
+            },
+          },
+        ],
+        total: 1,
+      }),
+    }, io.io);
+
+    expect(code).toBe(0);
+    const data = JSON.parse(io.output);
+    expect(data.items[0]?.local_automation_readiness.status).toBe('ready');
+    expect(data.items[0]?.local_automation_readiness.suggested_project_dir).toBe(projectDir);
   });
 
   test('owner-verify submits verification result to endpoint', async () => {
@@ -363,11 +486,13 @@ describe('worker-on (TASK-090)', () => {
     setupWorkerConfig(root);
 
     const io = createIo();
-    const code = await agentMain(['worker', 'status'], { baseDir: root }, io.io);
+    const code = await agentMain(['worker', 'status'], { baseDir: root, homeDir: root }, io.io);
 
     expect(code).toBe(0);
     expect(io.output).toContain('"workerEnabled": true');
     expect(io.output).toContain('"status": "stopped"');
+    expect(io.output).toContain('"api_key_bound": true');
+    expect(io.output).toContain('"hook_not_configured"');
   });
 
   test('draft-organizer run-once requests scheduled work, fetches only its own batch, and submits one payload', async () => {
@@ -614,6 +739,51 @@ describe('worker-on (TASK-090)', () => {
     expect(wState.totalSolved).toBeGreaterThanOrEqual(1);
   });
 
+  test('worker daemon skips strict submission bounties before auto-solve', async () => {
+    const root = createTempRoot();
+    roots.push(root);
+    setupWorkerConfig(root);
+
+    const requests = [];
+    let fetchCount = 0;
+
+    const io = createIo();
+    const code = await agentMain(['worker', 'daemon', '--worker-interval', '10'], {
+      baseDir: root,
+      fetchImpl: async (url, init) => {
+        requests.push({ url, body: init?.body ? String(init.body) : undefined });
+        fetchCount++;
+        if (fetchCount >= 3) {
+          const config = _testHelpers.loadConfig({ baseDir: root });
+          config.workerEnabled = false;
+          _testHelpers.saveConfig(config, { baseDir: root });
+        }
+        if (url.includes('/heartbeat')) {
+          return mockResponse({
+            recommended_bounties: [
+              {
+                id: 'bounty_strict_1',
+                submission_auto_contract_required: true,
+                submission_automation_policy: 'strict',
+              },
+            ],
+          });
+        }
+        if (url.includes('/reviews/recommended')) return mockResponse({ items: [] });
+        if (url.includes('/status')) return mockResponse({ pending_owner_verifications: [] });
+        return mockResponse({});
+      },
+    }, io.io);
+
+    expect(code).toBe(0);
+    expect(requests[0].url).toContain('/heartbeat');
+    expect(requests.some(req => req.url.includes('/auto-solve'))).toBe(false);
+    expect(requests.some(req => req.url.includes('/claim-and-submit'))).toBe(false);
+    expect(io.output).toContain('平台要求严格自动化契约');
+    const wState = _testHelpers.loadWorkerState({ baseDir: root });
+    expect(wState.totalSkipped).toBeGreaterThanOrEqual(1);
+  });
+
   test('pause stops worker from processing bounties', async () => {
     const root = createTempRoot();
     roots.push(root);
@@ -757,6 +927,519 @@ describe('worker-on (TASK-090)', () => {
     const wState = _testHelpers.loadWorkerState({ baseDir: root });
     expect(wState.totalSolved).toBe(0);
     expect(wState.totalSkipped).toBeGreaterThanOrEqual(2);
+  });
+
+  test('worker daemon auto-submits owner verification with a safe validation command', async () => {
+    const root = createTempRoot();
+    roots.push(root);
+    setupWorkerConfig(root);
+    const projectRoot = join(root, 'demo-owner-project');
+    const projectFile = join(projectRoot, 'tests', 'test_owner_auto.py');
+    const p = _testHelpers.paths({ baseDir: root });
+    _testHelpers.writeJson(p.config, {
+      ..._testHelpers.readJson(p.config, {}),
+      authToken: 'ak_test_123',
+    });
+    mkdirSync(join(projectRoot, 'tests'), { recursive: true });
+    writeFileSync(join(projectRoot, 'pyproject.toml'), '[project]\nname="demo-owner"\n', 'utf8');
+    writeFileSync(projectFile, 'print("ok")\n', 'utf8');
+    mkdirSync(join(root, 'outbox'), { recursive: true });
+    writeFileSync(p.outbox, `${JSON.stringify({
+      eventId: 'evt_owner_auto_1',
+      deviceId: 'device-test_cc',
+      agent: 'claude-code',
+      fingerprint: 'fp_owner_auto_1',
+      eventType: 'post_tool_error',
+      occurredAt: '2026-04-30T00:00:00Z',
+      sanitizedMessage: 'pytest failed in test_owner_auto.py',
+      toolContext: { filePath: projectFile, command: 'pytest -q' },
+    })}\n`, 'utf8');
+
+    const requests: { url: string; body?: string }[] = [];
+    let fetchCount = 0;
+    const io = createIo();
+    const code = await agentMain(['worker', 'daemon', '--worker-interval', '10'], {
+      baseDir: root,
+      execImpl: (command, options) => {
+        expect(command).toBe('pytest -q');
+        expect(options?.cwd).toBe(projectRoot);
+        return { exitCode: 0, stdout: '3 passed', stderr: '' };
+      },
+      fetchImpl: async (url, init) => {
+        requests.push({ url, body: init?.body ? String(init.body) : undefined });
+        fetchCount++;
+        if (fetchCount >= 3) {
+          const config = _testHelpers.loadConfig({ baseDir: root });
+          config.workerEnabled = false;
+          _testHelpers.saveConfig(config, { baseDir: root });
+        }
+        if (url.includes('/heartbeat')) return mockResponse({ recommended_bounties: [] });
+        if (url.includes('/status')) {
+          return mockResponse({
+            pending_owner_verifications: [{
+              bounty_id: 'b_owner_1',
+              answer_id: 'a_owner_1',
+              title: 'pytest owner auto',
+              solution_summary: 'Run tests again',
+              submitted_at: '2026-04-30T00:00:00Z',
+              deadline_at: '2026-05-02T00:00:00Z',
+              validation_cmd: 'pytest -q',
+              expected_output: '3 passed',
+              commands_run: ['npm install', 'pytest -q'],
+              project_hint: {
+                fingerprint: 'fp_owner_auto_1',
+                event_type: 'post_tool_error',
+                origin_device_id: 'device-test',
+                origin_agent_type: 'claude-code',
+                tool_context: { fileName: 'test_owner_auto.py', command: 'pytest -q' },
+              },
+              automation_contract: { mode: 'auto', auto_run_allowed: true },
+              automation_readiness: { status: 'ready', selected_command: 'pytest -q' },
+            }],
+          });
+        }
+        if (url.includes('/owner-verify')) return mockResponse({ review_status: 'pending_review', owner_score: 60, total_score: 60, threshold: 70 });
+        return mockResponse({});
+      },
+    }, io.io);
+
+    expect(code).toBe(0);
+    expect(requests[0]?.url).toContain('/heartbeat');
+    expect(requests[1]?.url).toContain('/reviews/recommended');
+    expect(requests[2]?.url).toContain('/status');
+    expect(requests[3]?.url).toContain('/owner-verify');
+    const body = JSON.parse(requests[3]?.body || '{}');
+    expect(body.result).toBe('success');
+    expect(body.commands_run).toEqual(['pytest -q']);
+    expect(body.proof_payload.validation_cmd).toBe('pytest -q');
+    expect(body.proof_payload.after_context.confirmation_mode).toBe('worker_auto');
+    expect(body.artifacts.owner_reproduction_project_dir).toBe(projectRoot);
+    expect(body.stdout_digest).toContain('3 passed');
+    const wState = _testHelpers.loadWorkerState({ baseDir: root });
+    expect(wState.totalOwnerVerified).toBeGreaterThanOrEqual(1);
+  });
+
+  test('worker daemon auto-submits reviewer verification with a safe validation command', async () => {
+    const root = createTempRoot();
+    roots.push(root);
+    setupWorkerConfig(root);
+    const projectRoot = join(root, 'demo-review-project');
+    const projectFile = join(projectRoot, 'tests', 'test_review_auto.py');
+    const p = _testHelpers.paths({ baseDir: root });
+    mkdirSync(join(projectRoot, 'tests'), { recursive: true });
+    writeFileSync(join(projectRoot, 'pyproject.toml'), '[project]\nname="demo-review"\n', 'utf8');
+    writeFileSync(projectFile, 'print("ok")\n', 'utf8');
+    mkdirSync(join(root, 'outbox'), { recursive: true });
+    writeFileSync(p.outbox, `${JSON.stringify({
+      eventId: 'evt_review_auto_1',
+      deviceId: 'device-test_cc',
+      agent: 'claude-code',
+      fingerprint: 'fp_review_auto_1',
+      eventType: 'post_tool_error',
+      occurredAt: '2026-04-30T00:00:00Z',
+      sanitizedMessage: 'pytest failed in test_review_auto.py',
+      toolContext: { filePath: projectFile, command: 'pytest -q' },
+    })}\n`, 'utf8');
+
+    const requests: { url: string; body?: string }[] = [];
+    let fetchCount = 0;
+    const io = createIo();
+    const code = await agentMain(['worker', 'daemon', '--worker-interval', '10'], {
+      baseDir: root,
+      execImpl: (command, options) => {
+        expect(command).toBe('pytest -q');
+        expect(options?.cwd).toBe(projectRoot);
+        return { exitCode: 0, stdout: '3 passed', stderr: '' };
+      },
+      fetchImpl: async (url, init) => {
+        requests.push({ url, body: init?.body ? String(init.body) : undefined });
+        fetchCount++;
+        if (fetchCount >= 4) {
+          const config = _testHelpers.loadConfig({ baseDir: root });
+          config.workerEnabled = false;
+          _testHelpers.saveConfig(config, { baseDir: root });
+        }
+        if (url.includes('/heartbeat')) return mockResponse({ recommended_bounties: [] });
+        if (url.includes('/reviews/recommended')) {
+          return mockResponse({
+            items: [{
+              assignment_id: 'lease_review_1',
+              answer: { id: 'a_review_1', content: 'Review me' },
+              submission_run: {
+                proof_payload: { summary: 'Run tests', validation_cmd: 'pytest -q', expected_output: '3 passed' },
+                commands_run: ['npm install', 'pytest -q'],
+              },
+              project_hint: {
+                fingerprint: 'fp_review_auto_1',
+                event_type: 'post_tool_error',
+                origin_device_id: 'device-test',
+                origin_agent_type: 'claude-code',
+                tool_context: { fileName: 'test_review_auto.py', command: 'pytest -q' },
+              },
+              automation_contract: { mode: 'auto', auto_run_allowed: true },
+              automation_readiness: { status: 'ready', selected_command: 'pytest -q' },
+            }],
+            total: 1,
+          });
+        }
+        if (url.includes('/reviews/lease_review_1/submit')) return mockResponse({ ok: true });
+        if (url.includes('/status')) return mockResponse({ pending_owner_verifications: [] });
+        return mockResponse({});
+      },
+    }, io.io);
+
+    expect(code).toBe(0);
+    expect(requests[1]?.url).toContain('/reviews/recommended');
+    expect(requests[2]?.url).toContain('/reviews/lease_review_1/submit');
+    const body = JSON.parse(requests[2]?.body || '{}');
+    expect(body.result).toBe('success');
+    expect(body.method).toBe('execution');
+    expect(body.commands_run).toEqual(['pytest -q']);
+    expect(body.proof_payload.validation_cmd).toBe('pytest -q');
+    expect(body.proof_payload.after_context.review_mode).toBe('worker_auto');
+    expect(body.proof_payload.after_context.validation_cwd).toBe(projectRoot);
+    expect(body.artifacts.validation_workdir).toBe(projectRoot);
+    const wState = _testHelpers.loadWorkerState({ baseDir: root });
+    expect(wState.totalReviewsSubmitted).toBeGreaterThanOrEqual(1);
+  });
+
+  test('worker daemon auto-submits owner verification from captured cwd when file path is missing', async () => {
+    const root = createTempRoot();
+    roots.push(root);
+    setupWorkerConfig(root);
+    const projectRoot = join(root, 'demo-owner-cwd-project');
+    const p = _testHelpers.paths({ baseDir: root });
+    mkdirSync(join(projectRoot, 'tests'), { recursive: true });
+    writeFileSync(join(projectRoot, 'pyproject.toml'), '[project]\nname="demo-owner-cwd"\n', 'utf8');
+    mkdirSync(join(root, 'outbox'), { recursive: true });
+    writeFileSync(p.outbox, `${JSON.stringify({
+      eventId: 'evt_owner_auto_cwd_1',
+      deviceId: 'device-test_cc',
+      agent: 'claude-code',
+      fingerprint: 'fp_owner_auto_cwd_1',
+      eventType: 'post_tool_error',
+      occurredAt: '2026-04-30T00:00:00Z',
+      sanitizedMessage: 'pytest failed in current workspace',
+      localContext: { cwdHash: 'cwdhash-owner-auto-1' },
+      toolContext: { cwd: projectRoot, command: 'pytest -q' },
+    })}\n`, 'utf8');
+
+    const requests: { url: string; body?: string }[] = [];
+    let fetchCount = 0;
+    const io = createIo();
+    const code = await agentMain(['worker', 'daemon', '--worker-interval', '10'], {
+      baseDir: root,
+      execImpl: (command, options) => {
+        expect(command).toBe('pytest -q');
+        expect(options?.cwd).toBe(projectRoot);
+        return { exitCode: 0, stdout: '3 passed', stderr: '' };
+      },
+      fetchImpl: async (url, init) => {
+        requests.push({ url, body: init?.body ? String(init.body) : undefined });
+        fetchCount++;
+        if (fetchCount >= 3) {
+          const config = _testHelpers.loadConfig({ baseDir: root });
+          config.workerEnabled = false;
+          _testHelpers.saveConfig(config, { baseDir: root });
+        }
+        if (url.includes('/heartbeat')) return mockResponse({ recommended_bounties: [] });
+        if (url.includes('/status')) {
+          return mockResponse({
+            pending_owner_verifications: [{
+              bounty_id: 'b_owner_cwd_1',
+              answer_id: 'a_owner_cwd_1',
+              title: 'pytest owner auto via cwd',
+              solution_summary: 'Run tests again',
+              submitted_at: '2026-04-30T00:00:00Z',
+              deadline_at: '2026-05-02T00:00:00Z',
+              validation_cmd: 'pytest -q',
+              expected_output: '3 passed',
+              commands_run: ['pytest -q'],
+              project_hint: {
+                fingerprint: 'fp_owner_auto_cwd_1',
+                event_type: 'post_tool_error',
+                cwd_hash: 'cwdhash-owner-auto-1',
+                origin_agent_type: 'claude-code',
+                tool_context: { command: 'pytest -q' },
+              },
+              automation_contract: { mode: 'auto', auto_run_allowed: true },
+              automation_readiness: { status: 'ready', selected_command: 'pytest -q' },
+            }],
+          });
+        }
+        if (url.includes('/owner-verify')) return mockResponse({ review_status: 'pending_review', owner_score: 60, total_score: 60, threshold: 70 });
+        return mockResponse({});
+      },
+    }, io.io);
+
+    expect(code).toBe(0);
+    expect(requests[3]?.url).toContain('/owner-verify');
+    const body = JSON.parse(requests[3]?.body || '{}');
+    expect(body.artifacts.owner_reproduction_project_dir).toBe(projectRoot);
+    expect(body.proof_payload.after_context.local_context.project_dir).toBe(projectRoot);
+  });
+
+  test('worker daemon skips owner verification when only unsafe commands are available', async () => {
+    const root = createTempRoot();
+    roots.push(root);
+    setupWorkerConfig(root);
+
+    const requests: string[] = [];
+    const execSpy = [];
+    let fetchCount = 0;
+    const io = createIo();
+    const code = await agentMain(['worker', 'daemon', '--worker-interval', '10'], {
+      baseDir: root,
+      execImpl: (command) => {
+        execSpy.push(command);
+        return { exitCode: 0, stdout: '', stderr: '' };
+      },
+      fetchImpl: async (url) => {
+        requests.push(url);
+        fetchCount++;
+        if (fetchCount >= 2) {
+          const config = _testHelpers.loadConfig({ baseDir: root });
+          config.workerEnabled = false;
+          _testHelpers.saveConfig(config, { baseDir: root });
+        }
+        if (url.includes('/heartbeat')) return mockResponse({ recommended_bounties: [] });
+        if (url.includes('/status')) {
+          return mockResponse({
+            pending_owner_verifications: [{
+              bounty_id: 'b_owner_unsafe',
+              answer_id: 'a_owner_unsafe',
+              title: 'unsafe owner auto',
+              solution_summary: 'Validation command: npm install left-pad',
+              submitted_at: '2026-04-30T00:00:00Z',
+              deadline_at: '2026-05-02T00:00:00Z',
+              validation_cmd: 'npm install left-pad',
+              commands_run: ['npm install left-pad'],
+            }],
+          });
+        }
+        return mockResponse({});
+      },
+    }, io.io);
+
+    expect(code).toBe(0);
+    expect(execSpy).toHaveLength(0);
+    expect(requests.some(url => url.includes('/owner-verify'))).toBe(false);
+    expect(io.output).toContain('无可自动执行的验证命令');
+    const wState = _testHelpers.loadWorkerState({ baseDir: root });
+    expect(wState.totalOwnerSkipped).toBeGreaterThanOrEqual(1);
+  });
+
+  test('worker daemon skips owner verification when command is safe but not a real validation', async () => {
+    const root = createTempRoot();
+    roots.push(root);
+    setupWorkerConfig(root);
+
+    const requests: string[] = [];
+    const execSpy = [];
+    let fetchCount = 0;
+    const io = createIo();
+    const code = await agentMain(['worker', 'daemon', '--worker-interval', '10'], {
+      baseDir: root,
+      execImpl: (command) => {
+        execSpy.push(command);
+        return { exitCode: 0, stdout: 'Python 3.12.0', stderr: '' };
+      },
+      fetchImpl: async (url) => {
+        requests.push(url);
+        fetchCount++;
+        if (fetchCount >= 2) {
+          const config = _testHelpers.loadConfig({ baseDir: root });
+          config.workerEnabled = false;
+          _testHelpers.saveConfig(config, { baseDir: root });
+        }
+        if (url.includes('/heartbeat')) return mockResponse({ recommended_bounties: [] });
+        if (url.includes('/status')) {
+          return mockResponse({
+            pending_owner_verifications: [{
+              bounty_id: 'b_owner_safe_skip',
+              answer_id: 'a_owner_safe_skip',
+              title: 'safe but meaningless owner auto',
+              solution_summary: 'Validation command: python --version',
+              submitted_at: '2026-04-30T00:00:00Z',
+              deadline_at: '2026-05-02T00:00:00Z',
+              validation_cmd: 'python --version',
+              commands_run: ['python --version'],
+            }],
+          });
+        }
+        return mockResponse({});
+      },
+    }, io.io);
+
+    expect(code).toBe(0);
+    expect(execSpy).toHaveLength(0);
+    expect(requests.some(url => url.includes('/owner-verify'))).toBe(false);
+    expect(io.output).toContain('无可自动执行的验证命令');
+    const wState = _testHelpers.loadWorkerState({ baseDir: root });
+    expect(wState.totalOwnerSkipped).toBeGreaterThanOrEqual(1);
+  });
+
+  test('worker daemon skips owner verification when platform marks the answer as manual-only', async () => {
+    const root = createTempRoot();
+    roots.push(root);
+    setupWorkerConfig(root);
+
+    const requests: string[] = [];
+    const execSpy = [];
+    let fetchCount = 0;
+    const io = createIo();
+    const code = await agentMain(['worker', 'daemon', '--worker-interval', '10'], {
+      baseDir: root,
+      execImpl: (command) => {
+        execSpy.push(command);
+        return { exitCode: 0, stdout: '3 passed', stderr: '' };
+      },
+      fetchImpl: async (url) => {
+        requests.push(url);
+        fetchCount++;
+        if (fetchCount >= 2) {
+          const config = _testHelpers.loadConfig({ baseDir: root });
+          config.workerEnabled = false;
+          _testHelpers.saveConfig(config, { baseDir: root });
+        }
+        if (url.includes('/heartbeat')) return mockResponse({ recommended_bounties: [] });
+        if (url.includes('/status')) {
+          return mockResponse({
+            pending_owner_verifications: [{
+              bounty_id: 'b_owner_manual_only',
+              answer_id: 'a_owner_manual_only',
+              title: 'manual only owner auto',
+              solution_summary: 'Run tests again',
+              submitted_at: '2026-04-30T00:00:00Z',
+              deadline_at: '2026-05-02T00:00:00Z',
+              validation_cmd: 'pytest -q',
+              commands_run: ['pytest -q'],
+              automation_contract: { mode: 'manual_only', auto_run_allowed: false },
+              automation_readiness: {
+                status: 'degraded',
+                selected_command: 'pytest -q',
+                warning_reasons: ['missing_project_locator_hint'],
+              },
+            }],
+          });
+        }
+        return mockResponse({});
+      },
+    }, io.io);
+
+    expect(code).toBe(0);
+    expect(execSpy).toHaveLength(0);
+    expect(requests.some(url => url.includes('/owner-verify'))).toBe(false);
+    expect(io.output).toContain('平台已标记为 manual-only');
+  });
+
+  test('worker daemon skips reviewer verification when command is safe but not a real validation', async () => {
+    const root = createTempRoot();
+    roots.push(root);
+    setupWorkerConfig(root);
+
+    const requests: { url: string; body?: string }[] = [];
+    const execSpy = [];
+    let fetchCount = 0;
+    const io = createIo();
+    const code = await agentMain(['worker', 'daemon', '--worker-interval', '10'], {
+      baseDir: root,
+      execImpl: (command) => {
+        execSpy.push(command);
+        return { exitCode: 0, stdout: 'Python 3.12.0', stderr: '' };
+      },
+      fetchImpl: async (url, init) => {
+        requests.push({ url, body: init?.body ? String(init.body) : undefined });
+        fetchCount++;
+        if (fetchCount >= 3) {
+          const config = _testHelpers.loadConfig({ baseDir: root });
+          config.workerEnabled = false;
+          _testHelpers.saveConfig(config, { baseDir: root });
+        }
+        if (url.includes('/heartbeat')) return mockResponse({ recommended_bounties: [] });
+        if (url.includes('/reviews/recommended')) {
+          return mockResponse({
+            items: [{
+              assignment_id: 'lease_review_safe_skip',
+              answer: { id: 'a_review_safe_skip', content: 'Review me safely' },
+              submission_run: {
+                proof_payload: {
+                  summary: 'Use python --version',
+                  validation_cmd: 'python --version',
+                  expected_output: 'Python 3.12.0',
+                },
+                commands_run: ['python --version'],
+              },
+            }],
+            total: 1,
+          });
+        }
+        if (url.includes('/status')) return mockResponse({ pending_owner_verifications: [] });
+        return mockResponse({});
+      },
+    }, io.io);
+
+    expect(code).toBe(0);
+    expect(execSpy).toHaveLength(0);
+    expect(requests.some(req => req.url.includes('/reviews/lease_review_safe_skip/submit'))).toBe(false);
+    expect(io.output).toContain('无可自动执行的验证命令');
+    const wState = _testHelpers.loadWorkerState({ baseDir: root });
+    expect(wState.totalReviewSkipped).toBeGreaterThanOrEqual(1);
+  });
+
+  test('worker daemon skips reviewer verification when platform marks the answer as manual-only', async () => {
+    const root = createTempRoot();
+    roots.push(root);
+    setupWorkerConfig(root);
+
+    const requests: { url: string; body?: string }[] = [];
+    const execSpy = [];
+    let fetchCount = 0;
+    const io = createIo();
+    const code = await agentMain(['worker', 'daemon', '--worker-interval', '10'], {
+      baseDir: root,
+      execImpl: (command) => {
+        execSpy.push(command);
+        return { exitCode: 0, stdout: '3 passed', stderr: '' };
+      },
+      fetchImpl: async (url, init) => {
+        requests.push({ url, body: init?.body ? String(init.body) : undefined });
+        fetchCount++;
+        if (fetchCount >= 3) {
+          const config = _testHelpers.loadConfig({ baseDir: root });
+          config.workerEnabled = false;
+          _testHelpers.saveConfig(config, { baseDir: root });
+        }
+        if (url.includes('/heartbeat')) return mockResponse({ recommended_bounties: [] });
+        if (url.includes('/reviews/recommended')) {
+          return mockResponse({
+            items: [{
+              assignment_id: 'lease_review_manual_only',
+              answer: { id: 'a_review_manual_only', content: 'Review me manually' },
+              submission_run: {
+                proof_payload: { validation_cmd: 'pytest -q', expected_output: '3 passed' },
+                commands_run: ['pytest -q'],
+              },
+              project_hint: {},
+              automation_contract: { mode: 'manual_only', auto_run_allowed: false },
+              automation_readiness: {
+                status: 'degraded',
+                selected_command: 'pytest -q',
+                warning_reasons: ['missing_project_locator_hint'],
+              },
+            }],
+            total: 1,
+          });
+        }
+        if (url.includes('/status')) return mockResponse({ pending_owner_verifications: [] });
+        return mockResponse({});
+      },
+    }, io.io);
+
+    expect(code).toBe(0);
+    expect(execSpy).toHaveLength(0);
+    expect(requests.some(({ url }) => url.includes('/reviews/lease_review_manual_only/submit'))).toBe(false);
+    expect(io.output).toContain('平台已标记为 manual-only');
   });
 
   test('worker start waits for daemon readiness and reports running state', async () => {
