@@ -1130,6 +1130,12 @@ function buildReviewAutomationTarget(item = {}) {
   };
 }
 
+function normalizeExecutionTargetFlag(value) {
+  if (value === true) return true;
+  if (value === false) return false;
+  return null;
+}
+
 function serverAutomationMode(item = {}) {
   const contract = item?.automation_contract;
   if (contract && typeof contract === 'object') {
@@ -1143,8 +1149,48 @@ function serverAutomationMode(item = {}) {
   return 'manual_only';
 }
 
-function serverAutomationReady(item = {}) {
-  return serverAutomationMode(item) === 'auto';
+function serverExecutionDecision(item = {}, phase = 'owner_verification') {
+  const payload = item?.execution_decision;
+  if (payload && typeof payload === 'object') {
+    const decision = String(payload.decision || '').trim();
+    if (decision) {
+      return {
+        phase: String(payload.phase || phase).trim() || phase,
+        decision,
+        reason_codes: Array.isArray(payload.reason_codes)
+          ? payload.reason_codes.map(value => String(value || '').trim()).filter(Boolean)
+          : [],
+        current_profile_is_target: normalizeExecutionTargetFlag(payload.current_profile_is_target),
+        target_route: payload.target_route && typeof payload.target_route === 'object'
+          ? payload.target_route
+          : {},
+      };
+    }
+  }
+  return {
+    phase,
+    decision: serverAutomationMode(item) === 'auto' ? 'auto_validate' : 'manual_only',
+    reason_codes: [],
+    current_profile_is_target: null,
+    target_route: {},
+  };
+}
+
+function serverAutomationReady(item = {}, phase = 'owner_verification') {
+  return serverExecutionDecision(item, phase).decision === 'auto_validate';
+}
+
+function shouldPromptCurrentMachine(decision) {
+  return decision.phase === 'owner_verification' && decision.current_profile_is_target !== false;
+}
+
+function formatExecutionRoute(decision) {
+  const route = decision.target_route || {};
+  return [
+    route.profile_id ? `profile=${String(route.profile_id)}` : '',
+    route.device_id ? `device=${String(route.device_id)}` : '',
+    route.agent_type ? `agent=${String(route.agent_type)}` : '',
+  ].filter(Boolean).join(' / ');
 }
 
 function requiresStrictSubmissionAutoContract(item = {}) {
@@ -1531,13 +1577,17 @@ async function processPendingReviewAssignments(headers, deps = {}, io = {}) {
     const proofPayload = submissionRun?.proof_payload || {};
     const reviewTarget = buildReviewAutomationTarget(item);
     const localAutomation = buildValidationAutomationAssessment(reviewTarget, deps);
+    const serverDecision = serverExecutionDecision(item, 'review_verification');
     if (!assignmentId || !localAutomation.selected_command) {
       out.write(`[Worker] review-auto 跳过 ${assignmentId || 'unknown'}: 无可自动执行的验证命令\n`);
       skipped++;
       continue;
     }
-    if (!serverAutomationReady(item)) {
-      out.write(`[Worker] review-auto 跳过 ${assignmentId}: 平台已标记为 manual-only\n`);
+    if (!serverAutomationReady(item, 'review_verification')) {
+      const label = serverDecision.decision === 'manual_only'
+        ? '平台已标记为 manual-only'
+        : `平台决策=${serverDecision.decision}`;
+      out.write(`[Worker] review-auto 跳过 ${assignmentId}: ${label}\n`);
       skipped++;
       continue;
     }
@@ -1609,18 +1659,36 @@ async function processPendingOwnerVerifications(headers, config, deps = {}, io =
     if (!bountyId || !answerId) { skipped++; continue; }
     const guideRecord = writeOwnerVerifyGuide(item, config, deps);
     const localAutomation = buildValidationAutomationAssessment(item, deps);
-    if (!localAutomation.selected_command) {
-      out.write(`[Worker] owner-auto 跳过 ${bountyId}/${answerId}: 无可自动执行的验证命令\n`);
+    const serverDecision = serverExecutionDecision(item, 'owner_verification');
+    const promptCurrentMachine = shouldPromptCurrentMachine(serverDecision);
+    const routeLabel = formatExecutionRoute(serverDecision);
+    if (serverDecision.decision === 'ask_user_run') {
+      if (promptCurrentMachine) {
+        out.write(`[Worker] owner-prompt 待人工确认 ${bountyId}/${answerId}: ${guideRecord.guideMd}\n`);
+      } else {
+        out.write(`[Worker] owner-auto 跳过 ${bountyId}/${answerId}: 已路由回原机器${routeLabel ? ` (${routeLabel})` : ''}\n`);
+      }
       skipped++;
       continue;
     }
-    if (!serverAutomationReady(item)) {
+    if (!localAutomation.selected_command) {
+      const message = promptCurrentMachine
+        ? `owner-prompt 待人工确认 ${bountyId}/${answerId}: 无可自动执行的验证命令，请查看 ${guideRecord.guideMd}`
+        : `owner-auto 跳过 ${bountyId}/${answerId}: 无可自动执行的验证命令`;
+      out.write(`[Worker] ${message}\n`);
+      skipped++;
+      continue;
+    }
+    if (!serverAutomationReady(item, 'owner_verification')) {
       out.write(`[Worker] owner-auto 跳过 ${bountyId}/${answerId}: 平台已标记为 manual-only\n`);
       skipped++;
       continue;
     }
     if (localAutomation.status !== 'ready') {
-      out.write(`[Worker] owner-auto 跳过 ${bountyId}/${answerId}: 本地未匹配到可自动执行的项目目录\n`);
+      const message = promptCurrentMachine
+        ? `owner-prompt 待人工确认 ${bountyId}/${answerId}: 本地未匹配到可自动执行的项目目录，请查看 ${guideRecord.guideMd}`
+        : `owner-auto 跳过 ${bountyId}/${answerId}: 本地未匹配到可自动执行的项目目录`;
+      out.write(`[Worker] ${message}\n`);
       skipped++;
       continue;
     }
@@ -1665,6 +1733,8 @@ function writeOwnerVerifyGuide(item, config = {}, deps = {}) {
   const suggestedValidationCmd = selectOwnerValidationCommand(item);
   const workdirMatch = resolveValidationWorkdir(item, deps);
   const suggestedProjectDir = String(workdirMatch?.cwd || '').trim();
+  const executionDecision = serverExecutionDecision(item, 'owner_verification');
+  const targetRoute = formatExecutionRoute(executionDecision);
   const verifyCommand = `winaicheck agent owner-verify ${item.bounty_id} --answer ${item.answer_id} --result success|partial|failed --cmd "<local validation command>"`;
   const lines = [
     '# AICOEVO 发起者复现指南',
@@ -1679,6 +1749,7 @@ function writeOwnerVerifyGuide(item, config = {}, deps = {}) {
     '',
     item.solution_summary || '暂无方案摘要。',
     '',
+    ...(targetRoute ? ['## 目标机器', '', targetRoute, ''] : []),
     ...(suggestedProjectDir ? ['## 建议项目目录', '', `\`${suggestedProjectDir}\``, ''] : []),
     ...(suggestedValidationCmd ? ['## 推荐验证命令', '', `\`${suggestedValidationCmd}\``, ''] : []),
     ...(item.expected_output ? ['## 期望结果', '', String(item.expected_output), ''] : []),
@@ -1707,6 +1778,7 @@ function writeOwnerVerifyGuide(item, config = {}, deps = {}) {
     expectedOutput: String(item.expected_output || ''),
     suggestedProjectDir,
     projectHint: validationProjectHint(item),
+    executionDecision,
   };
   writeJson(files.snapshotJson, snapshot);
   return {
@@ -4500,6 +4572,8 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
       for (const item of pending) {
         const guide = writeOwnerVerifyGuide(item, config, deps);
         const automation = buildValidationAutomationAssessment(item, deps);
+        const decision = serverExecutionDecision(item, 'owner_verification');
+        const routeLabel = formatExecutionRoute(decision);
         out.write(`## ${item.title || '(无标题)'}\n`);
         out.write(`  Bounty:   ${item.bounty_id}\n`);
         out.write(`  Answer:   ${item.answer_id}\n`);
@@ -4508,6 +4582,10 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
         out.write(`  截止时间: ${item.deadline_at}\n\n`);
         if (item.validation_cmd) out.write(`  验证命令: ${item.validation_cmd}\n`);
         if (guide.snapshot?.suggestedProjectDir) out.write(`  项目目录: ${String(guide.snapshot.suggestedProjectDir)}\n`);
+        out.write(`  执行决策: ${decision.decision}\n`);
+        if (routeLabel) out.write(`  目标机器: ${routeLabel}\n`);
+        if (decision.current_profile_is_target === true) out.write('  当前机器: 目标机器\n');
+        if (decision.current_profile_is_target === false) out.write('  当前机器: 非目标机器\n');
         out.write(`  自动验证: ${automation.status}\n`);
         if (automation.selected_command) out.write(`  自动命令: ${automation.selected_command}\n`);
         if (automation.suggested_project_dir) out.write(`  自动目录: ${automation.suggested_project_dir}\n`);
