@@ -1179,6 +1179,34 @@ function serverAutomationReady(item = {}, phase = 'owner_verification') {
   return serverExecutionDecision(item, phase).decision === 'auto_validate';
 }
 
+async function prepareOwnerValidationTask(headers, answerId, deps = {}) {
+  return requestJson(`${agentApiBase('v2')}/owner-validation-tasks/prepare`, {
+    method: 'POST',
+    headers,
+    body: { answer_id: answerId },
+  }, deps);
+}
+
+function ownerValidationGateDetails(payload) {
+  const data = payload && typeof payload === 'object' ? payload : {};
+  const prepareState = data.prepare_state && typeof data.prepare_state === 'object'
+    ? data.prepare_state
+    : {};
+  const userAuthorizationGate = data.user_authorization_gate && typeof data.user_authorization_gate === 'object'
+    ? data.user_authorization_gate
+    : {};
+  const webConfirmation = data.web_confirmation && typeof data.web_confirmation === 'object'
+    ? data.web_confirmation
+    : {};
+  return {
+    prepared: data.prepared === true || prepareState.prepared === true,
+    prepared_action: String(data.prepared_action || prepareState.prepared_action || '').trim(),
+    prepare_state: prepareState,
+    user_authorization_gate: userAuthorizationGate,
+    web_confirmation: webConfirmation,
+  };
+}
+
 function shouldPromptCurrentMachine(decision) {
   return decision.phase === 'owner_verification' && decision.current_profile_is_target !== false;
 }
@@ -1688,6 +1716,22 @@ async function processPendingOwnerVerifications(headers, config, deps = {}, io =
         ? `owner-prompt 待人工确认 ${bountyId}/${answerId}: 本地未匹配到可自动执行的项目目录，请查看 ${guideRecord.guideMd}`
         : `owner-auto 跳过 ${bountyId}/${answerId}: 本地未匹配到可自动执行的项目目录`;
       out.write(`[Worker] ${message}\n`);
+      skipped++;
+      continue;
+    }
+    const prepareResult = await prepareOwnerValidationTask(headers, answerId, deps);
+    if (prepareResult.status !== 200) {
+      out.write(`[Worker] owner-auto 跳过 ${bountyId}/${answerId}: 平台 prepare 失败 (${prepareResult.status})\n`);
+      skipped++;
+      continue;
+    }
+    const prepareGate = ownerValidationGateDetails(prepareResult.data);
+    if (!prepareGate.prepared) {
+      if (prepareGate.prepared_action === 'confirm_on_web_then_run') {
+        out.write(`[Worker] owner-auto 跳过 ${bountyId}/${answerId}: 需要先在网站确认后再运行，请先到 AICOEVO 网站确认并查看 ${guideRecord.guideMd}\n`);
+      } else {
+        out.write(`[Worker] owner-auto 跳过 ${bountyId}/${answerId}: 平台未放行自动执行，请按指南人工确认 ${guideRecord.guideMd}\n`);
+      }
       skipped++;
       continue;
     }
@@ -4572,6 +4616,7 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
         const automation = buildValidationAutomationAssessment(item, deps);
         const decision = serverExecutionDecision(item, 'owner_verification');
         const routeLabel = formatExecutionRoute(decision);
+        const gate = ownerValidationGateDetails(item);
         out.write(`## ${item.title || '(无标题)'}\n`);
         out.write(`  Bounty:   ${item.bounty_id}\n`);
         out.write(`  Answer:   ${item.answer_id}\n`);
@@ -4585,6 +4630,16 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
         if (decision.current_profile_is_target === true) out.write('  当前机器: 目标机器\n');
         if (decision.current_profile_is_target === false) out.write('  当前机器: 非目标机器\n');
         out.write(`  自动验证: ${automation.status}\n`);
+        if (gate.prepared_action) out.write(`  平台放行: ${gate.prepared_action}\n`);
+        if (Object.prototype.hasOwnProperty.call(gate.user_authorization_gate, 'allow_safe_validation_autorun')) {
+          out.write(`  自动运行授权: ${gate.user_authorization_gate.allow_safe_validation_autorun === true ? '已开启' : '未开启'}\n`);
+        }
+        if (
+          Object.prototype.hasOwnProperty.call(gate.user_authorization_gate, 'require_web_confirmation_for_validation')
+          || Object.keys(gate.web_confirmation).length > 0
+        ) {
+          out.write(`  网站确认: ${gate.web_confirmation.confirmed === true ? '已确认' : '待确认'}\n`);
+        }
         if (automation.selected_command) out.write(`  自动命令: ${automation.selected_command}\n`);
         if (automation.suggested_project_dir) out.write(`  自动目录: ${automation.suggested_project_dir}\n`);
         if (automation.blocking_reasons.length > 0) out.write(`  阻塞原因: ${automation.blocking_reasons.join(', ')}\n`);
