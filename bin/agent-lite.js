@@ -556,14 +556,13 @@ function loadConfig(deps = {}) {
     try { const raw = JSON.parse(fs.readFileSync(p.config, 'utf8')); oldIds = { clientId: raw.clientId, deviceId: raw.deviceId }; } catch { /* corrupt */ }
   }
   const config = readJson(p.config, {});
+  config.profileId = String(config.profileId || config.profile_id || '').trim() || null;
   if (!config.clientId) config.clientId = `client_${crypto.randomUUID()}`;
   if (!config.deviceId) config.deviceId = `device_${crypto.randomUUID()}`;
   if (config.shareData === undefined) config.shareData = false;
   if (config.autoSync === undefined) config.autoSync = false;
   if (config.paused === undefined) config.paused = false;
   if (config.workerEnabled === undefined) config.workerEnabled = true;
-  if (!config.profileId && config.profile_id) config.profileId = String(config.profile_id).trim();
-  if (config.profileId) config.profileId = String(config.profileId).trim();
   if (config.draftOrganizerEnabled === undefined) config.draftOrganizerEnabled = true;
   if (!['off', 'dry_run', 'apply'].includes(String(config.draftOrganizerMode || ''))) {
     config.draftOrganizerMode = 'apply';
@@ -4165,8 +4164,11 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
 
     // Step 2: 尝试自动打开浏览器
     try {
-      const startCmd = process.platform === 'win32' ? 'start' : 'open';
-      execFileSync(startCmd, [confirm_url], { timeout: 5000, windowsHide: true });
+      if (typeof deps.openBrowser === 'function') deps.openBrowser(confirm_url);
+      else {
+        const startCmd = process.platform === 'win32' ? 'start' : 'open';
+        execFileSync(startCmd, [confirm_url], { timeout: 5000, windowsHide: true });
+      }
       out.write(`已自动打开浏览器。\n\n`);
     } catch {
       out.write(`请手动复制上方链接到浏览器中打开。\n\n`);

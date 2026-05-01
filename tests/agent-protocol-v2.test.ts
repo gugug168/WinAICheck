@@ -1697,4 +1697,43 @@ describe('worker-on (TASK-090)', () => {
     expect(spawn.calls[0]?.args.join(' ')).toContain('worker daemon');
     expect(_testHelpers.loadConfig({ baseDir: root }).profileId).toBe('prof_win');
   });
+
+  test('device-flow bind stores profile id returned by poll', async () => {
+    const root = createTempRoot();
+    roots.push(root);
+    setupWorkerConfig(root, { authToken: undefined, workerEnabled: false });
+
+    const io = createIo();
+    const requests: string[] = [];
+    const code = await agentMain(['bind', '--agent', 'claude-code'], {
+      baseDir: root,
+      homeDir: root,
+      openBrowser: () => {},
+      sleep: async () => {},
+      fetchImpl: async (url) => {
+        requests.push(String(url));
+        if (String(url).includes('/bind/request')) {
+          return mockResponse({
+            request_token: 'br_test_001',
+            confirm_url: 'https://aicoevo.net/bind?t=br_test_001',
+            expires_in: 6,
+          });
+        }
+        if (String(url).includes('/bind/poll')) {
+          return mockResponse({
+            status: 'confirmed',
+            api_key: 'ak_device_flow_123',
+            profile_id: 'prof_device_flow',
+          });
+        }
+        throw new Error(`unexpected url: ${String(url)}`);
+      },
+    }, io.io);
+
+    expect(code).toBe(0);
+    expect(io.output).toContain('绑定成功');
+    expect(requests.some(url => url.includes('/bind/request'))).toBe(true);
+    expect(requests.some(url => url.includes('/bind/poll'))).toBe(true);
+    expect(_testHelpers.loadConfig({ baseDir: root }).profileId).toBe('prof_device_flow');
+  });
 });
