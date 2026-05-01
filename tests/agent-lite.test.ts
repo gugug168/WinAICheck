@@ -291,6 +291,9 @@ describe('agent-lite', () => {
     ], {
       baseDir: root,
       now: () => new Date('2026-04-12T11:45:00.000Z'),
+      fetchImpl: async () => ({
+        text: async () => '0.0.0',
+      } as any),
     }, createIo().io as any);
 
     expect(code).toBe(0);
@@ -318,6 +321,13 @@ describe('agent-lite', () => {
     expect(output).toContain('"ok": true');
     expect(output).not.toContain('获取最新版本');
     expect(existsSync(join(root, '.aicoevo', 'outbox', 'events.jsonl'))).toBe(true);
+  });
+
+  test('agent-lite 在 Node 下可以通过语法检查', () => {
+    execFileSync('node', [
+      '--check',
+      join(process.cwd(), 'bin', 'agent-lite.js'),
+    ], { stdio: 'pipe' });
   });
 
   test('sanitizeText 覆盖常见 Agent 密钥环境变量', () => {

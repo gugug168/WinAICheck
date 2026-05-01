@@ -1276,7 +1276,7 @@ function resolveValidationProjectCandidate(toolContext = {}) {
 }
 
 function normalizeDeviceBaseId(value) {
-  return String(value || '').replace(/_(cc|oc)$/i, '');
+  return String(value || '').trim().replace(/_(?:cc|oc)$/i, '');
 }
 
 function resolveValidationWorkdir(item = {}, deps = {}) {
@@ -3057,10 +3057,6 @@ function loadDraftOrganizerState(deps = {}) {
 
 function saveDraftOrganizerState(state, deps = {}) {
   writeJson(paths(deps).draftOrganizerState, state);
-}
-
-function normalizeDeviceBaseId(value) {
-  return String(value || '').trim().replace(/_(?:cc|oc)$/i, '');
 }
 
 function draftOrganizerOutboxEvents(draft, deps = {}) {
