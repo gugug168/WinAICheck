@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.3.8] - 2026-05-02
+
+### Added
+- WinAICheck worker 现在支持 `execution_task.kind=owner_repair` 的 Windows L2 安全自动修复闭环。
+- 新增 owner repair allowlist，首批仅放行 `powershell-policy`、`long-paths`、`firewall-ports` 三个修复类型。
+- owner repair 成功或失败后，会向平台提交结构化证据，包括 before/after scan、backup、rollback 和 diff summary。
+
+### Changed
+- `FixResult` 扩展为可携带结构化 `backupSummary`、`rollback`、`verification` 元数据，便于 Agent 与平台统一消费。
+
+### Fixed
+- worker 对 owner repair 任务现在会正确执行 consent、L2、target machine、rollback readiness 等门禁，不再误落入普通 validation 命令路径。
+
 ## [0.3.7] - 2026-05-02
 
 ### Added

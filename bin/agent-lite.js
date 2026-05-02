@@ -1533,6 +1533,219 @@ function runOwnerValidationCommand(command, deps = {}, cwd = '') {
   }
 }
 
+const OWNER_REPAIR_ALLOWLIST = new Set([
+  'powershell-policy',
+  'long-paths',
+  'firewall-ports',
+]);
+
+function ownerRepairExecutionTask(item = {}) {
+  const task = item.execution_task;
+  return task && typeof task === 'object' ? task : {};
+}
+
+function isOwnerRepairTask(item = {}) {
+  return String(ownerRepairExecutionTask(item).kind || '').trim() === 'owner_repair';
+}
+
+function ownerRepairScannerId(item = {}) {
+  return String(
+    ownerRepairExecutionTask(item).scanner_id
+    || item.scanner_id
+    || item.scannerId
+    || ''
+  ).trim();
+}
+
+function ownerRepairConsentGranted(item = {}) {
+  const consentState = String(item.consent_state || '').trim().toLowerCase();
+  const automationMode = String(item.automation_mode || '').trim();
+  return consentState === 'granted' || automationMode === 'full_auto_limited';
+}
+
+function ownerRepairRollbackReady(item = {}) {
+  return String(item.rollback_state || '').trim() === 'ready';
+}
+
+function ownerRepairRiskAllowed(item = {}) {
+  return String(item.risk_level || '').trim() === 'L2';
+}
+
+function ownerRepairGate(item = {}, decision = {}) {
+  const scannerId = ownerRepairScannerId(item);
+  if (!scannerId || !OWNER_REPAIR_ALLOWLIST.has(scannerId)) {
+    return { ok: false, reason: `owner repair blocked: scanner ${scannerId || 'unknown'} not allowlisted` };
+  }
+  if (!ownerRepairRiskAllowed(item)) {
+    return { ok: false, reason: `owner repair blocked: risk level ${String(item.risk_level || 'unknown')} is not L2` };
+  }
+  if (!ownerRepairConsentGranted(item)) {
+    return { ok: false, reason: 'owner repair blocked: consent required' };
+  }
+  if (!ownerRepairRollbackReady(item)) {
+    return { ok: false, reason: 'owner repair blocked: rollback unavailable' };
+  }
+  if (decision.current_profile_is_target === false) {
+    return { ok: false, reason: 'owner repair blocked: current machine is not target' };
+  }
+  return { ok: true, scannerId };
+}
+
+function runOwnerRepairCommand(command, deps = {}, cwd = '') {
+  return runOwnerValidationCommand(command, deps, cwd);
+}
+
+function ownerRepairDefinition(scannerId) {
+  if (scannerId === 'powershell-policy') {
+    return {
+      backupCommand: 'powershell -Command "Get-ExecutionPolicy -Scope CurrentUser"',
+      executeCommands: ['powershell -Command "Set-ExecutionPolicy RemoteSigned -Scope CurrentUser -Force"'],
+      rollbackCommand: backup => `powershell -Command "Set-ExecutionPolicy ${String(backup?.old_policy || 'Restricted')} -Scope CurrentUser -Force"`,
+      scan: deps => {
+        const res = runOwnerRepairCommand('powershell -Command "Get-ExecutionPolicy -Scope CurrentUser"', deps);
+        const policy = String(res.stdout || '').trim();
+        if (!res.ok || !policy) return { status: 'unknown', message: '无法获取 PowerShell 执行策略', detail: res.stderr || '' };
+        if (['Restricted', 'AllSigned'].includes(policy)) return { status: 'fail', message: `PowerShell 执行策略为 ${policy}`, detail: policy };
+        if (['RemoteSigned', 'Unrestricted', 'Bypass'].includes(policy)) return { status: 'pass', message: `PowerShell 执行策略正常 (${policy})`, detail: policy };
+        return { status: 'warn', message: `PowerShell 执行策略: ${policy}`, detail: policy };
+      },
+      backup: deps => {
+        const res = runOwnerRepairCommand('powershell -Command "Get-ExecutionPolicy -Scope CurrentUser"', deps);
+        return { old_policy: String(res.stdout || '').trim() || 'Restricted' };
+      },
+    };
+  }
+  if (scannerId === 'long-paths') {
+    return {
+      backupCommand: 'reg query "HKLM\\SYSTEM\\CurrentControlSet\\Control\\FileSystem" /v LongPathsEnabled',
+      executeCommands: ['reg add "HKLM\\SYSTEM\\CurrentControlSet\\Control\\FileSystem" /v LongPathsEnabled /t REG_DWORD /d 1 /f'],
+      rollbackCommand: backup => `reg add "HKLM\\SYSTEM\\CurrentControlSet\\Control\\FileSystem" /v LongPathsEnabled /t REG_DWORD /d ${String(backup?.long_paths_enabled || '0')} /f`,
+      scan: deps => {
+        const res = runOwnerRepairCommand('reg query "HKLM\\SYSTEM\\CurrentControlSet\\Control\\FileSystem" /v LongPathsEnabled', deps);
+        const output = `${res.stdout}\n${res.stderr}`;
+        if (!res.ok && !output.trim()) return { status: 'unknown', message: '无法读取长路径注册表', detail: '' };
+        if (/LongPathsEnabled\s+REG_DWORD\s+0x1/i.test(output)) return { status: 'pass', message: 'Windows 长路径支持已启用', detail: 'LongPathsEnabled=1' };
+        if (/LongPathsEnabled\s+REG_DWORD\s+0x0/i.test(output)) return { status: 'fail', message: 'Windows 长路径支持未启用', detail: 'LongPathsEnabled=0' };
+        return { status: 'warn', message: '无法确认长路径状态', detail: trimOwnerValidationDigest(output) };
+      },
+      backup: deps => {
+        const res = runOwnerRepairCommand('reg query "HKLM\\SYSTEM\\CurrentControlSet\\Control\\FileSystem" /v LongPathsEnabled', deps);
+        const output = `${res.stdout}\n${res.stderr}`;
+        return { long_paths_enabled: /LongPathsEnabled\s+REG_DWORD\s+0x1/i.test(output) ? '1' : '0' };
+      },
+    };
+  }
+  if (scannerId === 'firewall-ports') {
+    const ruleNames = ['Gradio', 'Jupyter', 'Ollama'];
+    return {
+      backupCommand: 'netsh advfirewall firewall show rule name=all verbose',
+      executeCommands: [
+        'netsh advfirewall firewall add rule name="Gradio" dir=in action=allow protocol=TCP localport=7860',
+        'netsh advfirewall firewall add rule name="Jupyter" dir=in action=allow protocol=TCP localport=8888',
+        'netsh advfirewall firewall add rule name="Ollama" dir=in action=allow protocol=TCP localport=11434',
+      ],
+      rollbackCommand: () => ruleNames.map(rule => `netsh advfirewall firewall delete rule name="${rule}"`).join(' && '),
+      scan: deps => {
+        const res = runOwnerRepairCommand('netsh advfirewall firewall show rule name=all verbose', deps);
+        const output = `${res.stdout}\n${res.stderr}`;
+        if (!res.ok && !output.trim()) return { status: 'unknown', message: '无法读取防火墙规则', detail: '' };
+        const present = ruleNames.filter(rule => output.includes(rule));
+        if (present.length === ruleNames.length) return { status: 'pass', message: 'AI 常用端口防火墙配置正常', detail: present.join(', ') };
+        if (present.length > 0) return { status: 'warn', message: '部分 AI 常用端口已放行', detail: present.join(', ') };
+        return { status: 'fail', message: '未发现 AI 常用端口放行规则', detail: '' };
+      },
+      backup: () => ({ rules: ruleNames.join(',') }),
+    };
+  }
+  return null;
+}
+
+async function executeOwnerRepair(params = {}, deps = {}) {
+  const scannerId = String(params.executionTask?.scanner_id || params.scannerId || '').trim();
+  const definition = ownerRepairDefinition(scannerId);
+  if (!definition) {
+    return {
+      ok: false,
+      result: 'failed',
+      scannerId,
+      summary: `owner repair not implemented for ${scannerId || 'unknown'}`,
+      commandsRun: [],
+      stdout: '',
+      stderr: '',
+      beforeScan: null,
+      afterScan: null,
+      diffSummary: '',
+      backup: null,
+      rollback: { attempted: false, result: 'unavailable' },
+    };
+  }
+
+  const beforeScan = definition.scan(deps);
+  const backupData = definition.backup(deps);
+  const backupTimestamp = nowIso(deps);
+  const backup = {
+    backup_id: shortHash(`${scannerId}:${backupTimestamp}:${JSON.stringify(backupData)}`),
+    timestamp: backupTimestamp,
+    data: backupData,
+  };
+
+  const executionLogs = [];
+  let stdout = '';
+  let stderr = '';
+  for (const command of definition.executeCommands) {
+    const result = runOwnerRepairCommand(command, deps, params.suggestedProjectDir || '');
+    executionLogs.push(command);
+    if (result.stdout) stdout += `${stdout ? '\n' : ''}${result.stdout}`;
+    if (result.stderr) stderr += `${stderr ? '\n' : ''}${result.stderr}`;
+    if (!result.ok) {
+      let rollback = { attempted: false, result: 'unavailable' };
+      const rollbackCommand = typeof definition.rollbackCommand === 'function' ? definition.rollbackCommand(backupData) : '';
+      if (rollbackCommand) {
+        const rollbackResult = runOwnerRepairCommand(rollbackCommand, deps, params.suggestedProjectDir || '');
+        rollback = {
+          attempted: true,
+          result: rollbackResult.ok ? 'success' : 'failed',
+          ...(rollbackResult.stderr ? { message: rollbackResult.stderr } : {}),
+        };
+        if (rollbackResult.stdout) stdout += `${stdout ? '\n' : ''}${rollbackResult.stdout}`;
+        if (rollbackResult.stderr) stderr += `${stderr ? '\n' : ''}${rollbackResult.stderr}`;
+      }
+      const afterFailureScan = definition.scan(deps);
+      return {
+        ok: false,
+        result: 'failed',
+        scannerId,
+        summary: `owner repair failed via ${command}`,
+        commandsRun: executionLogs,
+        stdout: trimOwnerValidationDigest(stdout),
+        stderr: trimOwnerValidationDigest(stderr || `command failed: ${command}`),
+        beforeScan,
+        afterScan: afterFailureScan,
+        diffSummary: `${beforeScan?.status || 'unknown'} -> ${afterFailureScan?.status || 'unknown'}`,
+        backup,
+        rollback,
+      };
+    }
+  }
+
+  const afterScan = definition.scan(deps);
+  const resultValue = afterScan.status === 'pass' ? 'success' : afterScan.status === 'warn' ? 'partial' : 'failed';
+  return {
+    ok: resultValue !== 'failed',
+    result: resultValue,
+    scannerId,
+    summary: `owner repair ${resultValue} for ${scannerId}`,
+    commandsRun: executionLogs,
+    stdout: trimOwnerValidationDigest(stdout),
+    stderr: trimOwnerValidationDigest(stderr),
+    beforeScan,
+    afterScan,
+    diffSummary: `${beforeScan?.status || 'unknown'} -> ${afterScan?.status || 'unknown'}`,
+    backup,
+    rollback: { attempted: false, result: 'not_needed' },
+  };
+}
+
 async function submitOwnerVerification(params, deps = {}) {
   const submittedAt = nowIso(deps);
   const suggestedProjectDir = String(params.guideRecord.snapshot?.suggestedProjectDir || '').trim();
@@ -1546,7 +1759,11 @@ async function submitOwnerVerification(params, deps = {}) {
       ...ownerVerifyLocalContext(params.config),
       ...(suggestedProjectDir ? { project_dir: suggestedProjectDir } : {}),
     },
+    ...(params.afterContext && typeof params.afterContext === 'object' ? params.afterContext : {}),
   };
+  const beforeContext = params.proofBeforeContext && typeof params.proofBeforeContext === 'object'
+    ? params.proofBeforeContext
+    : (params.guideRecord.snapshot || {});
   return requestJson(`${agentApiBase('v2')}/bounties/${params.bountyId}/owner-verify`, {
     method: 'POST',
     headers: params.headers,
@@ -1560,14 +1777,14 @@ async function submitOwnerVerification(params, deps = {}) {
         steps: [
           `读取本地指南: ${params.guideRecord.guideMd}`,
           params.commandsRun.length
-            ? `本地执行验证命令: ${params.commandsRun.join(' ; ')}`
+            ? `${params.ownerRepairMode ? '本地执行修复/验证命令' : '本地执行验证命令'}: ${params.commandsRun.join(' ; ')}`
             : '按本地指南手动确认问题是否消失。',
           `确认模式: ${params.confirmationMode}`,
           `用户确认结果: ${params.resultValue}`,
         ],
-        before_context: params.guideRecord.snapshot || {},
+        before_context: beforeContext,
         after_context: afterContext,
-        validation_cmd: params.commandsRun[0] || '',
+        validation_cmd: params.validationCmd || params.commandsRun[0] || '',
         expected_output:
           params.expectedOutput
           || (params.resultValue === 'success'
@@ -1582,6 +1799,7 @@ async function submitOwnerVerification(params, deps = {}) {
         owner_reproduction_guide_sha256: params.guideRecord.guideSha256,
         owner_reproduction_snapshot_generated_at: params.guideRecord.snapshot?.generatedAt || '',
         ...(suggestedProjectDir ? { owner_reproduction_project_dir: suggestedProjectDir } : {}),
+        ...(params.ownerRepairMode ? { owner_repair_mode: true } : {}),
         ...(params.artifacts || {}),
       },
       stdout_digest: params.stdoutDigest || '',
@@ -1685,7 +1903,6 @@ async function processPendingOwnerVerifications(headers, config, deps = {}, io =
     const answerId = String(item?.answer_id || '').trim();
     if (!bountyId || !answerId) { skipped++; continue; }
     const guideRecord = writeOwnerVerifyGuide(item, config, deps);
-    const localAutomation = buildValidationAutomationAssessment(item, deps);
     const serverDecision = serverExecutionDecision(item, 'owner_verification');
     const promptCurrentMachine = shouldPromptCurrentMachine(serverDecision);
     const routeLabel = formatExecutionRoute(serverDecision);
@@ -1698,6 +1915,87 @@ async function processPendingOwnerVerifications(headers, config, deps = {}, io =
       skipped++;
       continue;
     }
+    if (isOwnerRepairTask(item)) {
+      const repairGate = ownerRepairGate(item, serverDecision);
+      if (!repairGate.ok) {
+        out.write(`[Worker] owner repair 跳过 ${bountyId}/${answerId}: ${repairGate.reason}\n`);
+        skipped++;
+        continue;
+      }
+      if (!serverAutomationReady(item, 'owner_verification')) {
+        out.write(`[Worker] owner repair 跳过 ${bountyId}/${answerId}: 平台已标记为 manual-only\n`);
+        skipped++;
+        continue;
+      }
+      const prepareResult = await prepareOwnerValidationTask(headers, answerId, deps);
+      if (prepareResult.status !== 200) {
+        out.write(`[Worker] owner repair 跳过 ${bountyId}/${answerId}: 平台 prepare 失败 (${prepareResult.status})\n`);
+        skipped++;
+        continue;
+      }
+      const prepareGate = ownerValidationGateDetails(prepareResult.data);
+      if (!prepareGate.prepared) {
+        out.write(`[Worker] owner repair 跳过 ${bountyId}/${answerId}: 平台未放行自动执行\n`);
+        skipped++;
+        continue;
+      }
+      const suggestedProjectDir = String(guideRecord.snapshot?.suggestedProjectDir || '').trim();
+      const executeOwnerRepairImpl = typeof deps.executeOwnerRepairImpl === 'function'
+        ? deps.executeOwnerRepairImpl
+        : executeOwnerRepair;
+      const repairResult = await executeOwnerRepairImpl({
+        item,
+        executionTask: ownerRepairExecutionTask(item),
+        scannerId: repairGate.scannerId,
+        suggestedProjectDir,
+      }, deps);
+      const submitResult = await submitOwnerVerification({
+        bountyId,
+        answerId,
+        resultValue: repairResult.result || (repairResult.ok ? 'success' : 'failed'),
+        notes: repairResult.summary || `owner repair ${repairResult.ok ? 'completed' : 'failed'}`,
+        commandsRun: Array.isArray(repairResult.commandsRun) ? repairResult.commandsRun : [],
+        guideRecord,
+        config,
+        headers,
+        confirmationMode: 'worker_owner_repair_auto',
+        expectedOutput: String(item?.expected_output || ''),
+        validationCmd: ownerRepairExecutionTask(item).scanner_id || '',
+        stdoutDigest: String(repairResult.stdout || ''),
+        stderrDigest: String(repairResult.stderr || ''),
+        ownerRepairMode: true,
+        proofBeforeContext: {
+          ...(guideRecord.snapshot || {}),
+          scanner_id: repairResult.scannerId || repairGate.scannerId,
+          before_scan: repairResult.beforeScan || null,
+        },
+        afterContext: {
+          owner_repair_mode: true,
+          owner_repair_scanner_id: repairResult.scannerId || repairGate.scannerId,
+          before_scan: repairResult.beforeScan || null,
+          after_scan: repairResult.afterScan || null,
+          diff_summary: repairResult.diffSummary || '',
+          backup: repairResult.backup || null,
+          rollback: repairResult.rollback || null,
+        },
+        artifacts: {
+          owner_auto_mode: true,
+          owner_repair_mode: true,
+          owner_repair_scanner_id: repairResult.scannerId || repairGate.scannerId,
+          owner_repair_backup_id: repairResult.backup?.backup_id || '',
+          owner_repair_rollback_result: repairResult.rollback?.result || '',
+        },
+      }, deps);
+      if (submitResult.status !== 200) {
+        out.write(`[Worker] owner repair 提交失败 ${bountyId}/${answerId}: ${submitResult.status}\n`);
+        skipped++;
+        continue;
+      }
+      out.write(`[Worker] owner repair 已提交 ${bountyId}/${answerId}: ${repairResult.result || (repairResult.ok ? 'success' : 'failed')}\n`);
+      verified++;
+      continue;
+    }
+    const localAutomation = buildValidationAutomationAssessment(item, deps);
     if (!localAutomation.selected_command) {
       const message = promptCurrentMachine
         ? `owner-prompt 待人工确认 ${bountyId}/${answerId}: 无可自动执行的验证命令，请查看 ${guideRecord.guideMd}`

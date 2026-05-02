@@ -1598,6 +1598,223 @@ describe('worker-on (TASK-090)', () => {
     expect(io.output).toContain('平台已标记为 manual-only');
   });
 
+  test('worker daemon blocks owner repair without consent', async () => {
+    const root = createTempRoot();
+    roots.push(root);
+    setupWorkerConfig(root, { profileId: 'prof-owner' });
+
+    const requests: string[] = [];
+    const execSpy: string[] = [];
+    let fetchCount = 0;
+    const io = createIo();
+    const code = await agentMain(['worker', 'daemon', '--worker-interval', '10'], {
+      baseDir: root,
+      execImpl: (command) => {
+        execSpy.push(command);
+        return { exitCode: 0, stdout: '', stderr: '' };
+      },
+      fetchImpl: async (url) => {
+        requests.push(url);
+        fetchCount++;
+        if (fetchCount >= 2) {
+          const config = _testHelpers.loadConfig({ baseDir: root });
+          config.workerEnabled = false;
+          _testHelpers.saveConfig(config, { baseDir: root });
+        }
+        if (url.includes('/heartbeat')) return mockResponse({ recommended_bounties: [] });
+        if (url.includes('/status')) {
+          return mockResponse({
+            pending_owner_verifications: [{
+              bounty_id: 'b_owner_repair_consent',
+              answer_id: 'a_owner_repair_consent',
+              title: 'repair powershell policy',
+              solution_summary: 'Auto repair PowerShell execution policy',
+              submitted_at: '2026-05-02T00:00:00Z',
+              deadline_at: '2026-05-03T00:00:00Z',
+              risk_level: 'L2',
+              consent_state: 'required',
+              rollback_state: 'ready',
+              automation_mode: 'consent_before_repair',
+              execution_task: {
+                kind: 'owner_repair',
+                scanner_id: 'powershell-policy',
+              },
+              execution_decision: {
+                decision: 'auto_validate',
+                phase: 'owner_verification',
+                current_profile_is_target: true,
+                target_route: {
+                  profile_id: 'prof-owner',
+                  device_id: 'device-test',
+                  agent_type: 'claude-code',
+                },
+              },
+            }],
+          });
+        }
+        return mockResponse({});
+      },
+    }, io.io);
+
+    expect(code).toBe(0);
+    expect(execSpy).toHaveLength(0);
+    expect(requests.some(url => url.includes('/owner-verify'))).toBe(false);
+    expect(io.output).toContain('owner repair');
+    expect(io.output).toContain('consent');
+  });
+
+  test('worker daemon blocks owner repair when rollback is unavailable', async () => {
+    const root = createTempRoot();
+    roots.push(root);
+    setupWorkerConfig(root, { profileId: 'prof-owner' });
+
+    const requests: string[] = [];
+    const execSpy: string[] = [];
+    let fetchCount = 0;
+    const io = createIo();
+    const code = await agentMain(['worker', 'daemon', '--worker-interval', '10'], {
+      baseDir: root,
+      execImpl: (command) => {
+        execSpy.push(command);
+        return { exitCode: 0, stdout: '', stderr: '' };
+      },
+      fetchImpl: async (url) => {
+        requests.push(url);
+        fetchCount++;
+        if (fetchCount >= 2) {
+          const config = _testHelpers.loadConfig({ baseDir: root });
+          config.workerEnabled = false;
+          _testHelpers.saveConfig(config, { baseDir: root });
+        }
+        if (url.includes('/heartbeat')) return mockResponse({ recommended_bounties: [] });
+        if (url.includes('/status')) {
+          return mockResponse({
+            pending_owner_verifications: [{
+              bounty_id: 'b_owner_repair_rollback',
+              answer_id: 'a_owner_repair_rollback',
+              title: 'repair long paths',
+              solution_summary: 'Auto repair long paths',
+              submitted_at: '2026-05-02T00:00:00Z',
+              deadline_at: '2026-05-03T00:00:00Z',
+              risk_level: 'L2',
+              consent_state: 'granted',
+              rollback_state: 'unavailable',
+              automation_mode: 'full_auto_limited',
+              execution_task: {
+                kind: 'owner_repair',
+                scanner_id: 'long-paths',
+              },
+              execution_decision: {
+                decision: 'auto_validate',
+                phase: 'owner_verification',
+                current_profile_is_target: true,
+                target_route: {
+                  profile_id: 'prof-owner',
+                  device_id: 'device-test',
+                  agent_type: 'claude-code',
+                },
+              },
+            }],
+          });
+        }
+        return mockResponse({});
+      },
+    }, io.io);
+
+    expect(code).toBe(0);
+    expect(execSpy).toHaveLength(0);
+    expect(requests.some(url => url.includes('/owner-verify'))).toBe(false);
+    expect(io.output).toContain('rollback');
+  });
+
+  test('worker daemon submits structured evidence for successful allowlisted owner repair', async () => {
+    const root = createTempRoot();
+    roots.push(root);
+    setupWorkerConfig(root, { profileId: 'prof-owner' });
+
+    const requests: Array<{ url: string; body?: string }> = [];
+    let fetchCount = 0;
+    const io = createIo();
+    const code = await agentMain(['worker', 'daemon', '--worker-interval', '10'], {
+      baseDir: root,
+      executeOwnerRepairImpl: async ({ executionTask }) => ({
+        ok: true,
+        result: 'success',
+        scannerId: executionTask.scanner_id,
+        summary: 'owner repair passed',
+        commandsRun: ['powershell -Command "Get-ExecutionPolicy -List"'],
+        stdout: 'RemoteSigned',
+        stderr: '',
+        beforeScan: { status: 'fail', message: 'Restricted' },
+        afterScan: { status: 'pass', message: 'RemoteSigned' },
+        diffSummary: 'ExecutionPolicy Restricted -> RemoteSigned',
+        backup: { backup_id: 'backup-1', timestamp: '2026-05-02T00:00:00Z' },
+        rollback: { attempted: false, result: 'not_needed' },
+      }),
+      fetchImpl: async (url, init) => {
+        requests.push({ url, body: init?.body ? String(init.body) : undefined });
+        fetchCount++;
+        if (fetchCount >= 3) {
+          const config = _testHelpers.loadConfig({ baseDir: root });
+          config.workerEnabled = false;
+          _testHelpers.saveConfig(config, { baseDir: root });
+        }
+        if (url.includes('/heartbeat')) return mockResponse({ recommended_bounties: [] });
+        if (url.includes('/status')) {
+          return mockResponse({
+            pending_owner_verifications: [{
+              bounty_id: 'b_owner_repair_ok',
+              answer_id: 'a_owner_repair_ok',
+              title: 'repair powershell policy',
+              solution_summary: 'Auto repair PowerShell execution policy',
+              submitted_at: '2026-05-02T00:00:00Z',
+              deadline_at: '2026-05-03T00:00:00Z',
+              risk_level: 'L2',
+              consent_state: 'granted',
+              rollback_state: 'ready',
+              automation_mode: 'full_auto_limited',
+              execution_task: {
+                kind: 'owner_repair',
+                scanner_id: 'powershell-policy',
+              },
+              execution_decision: {
+                decision: 'auto_validate',
+                phase: 'owner_verification',
+                current_profile_is_target: true,
+                target_route: {
+                  profile_id: 'prof-owner',
+                  device_id: 'device-test',
+                  agent_type: 'claude-code',
+                },
+              },
+            }],
+          });
+        }
+        if (url.includes('/owner-validation-tasks/prepare')) {
+          return mockResponse({
+            prepared: true,
+            prepared_action: 'run_now',
+            prepare_state: { prepared: true, prepared_action: 'run_now' },
+          });
+        }
+        if (url.includes('/owner-verify')) {
+          return mockResponse({ review_status: 'pending_review', owner_score: 60, total_score: 60, threshold: 70 });
+        }
+        return mockResponse({});
+      },
+    }, io.io);
+
+    expect(code).toBe(0);
+    const ownerVerifyRequest = requests.find(entry => entry.url.includes('/owner-verify'));
+    expect(ownerVerifyRequest).toBeDefined();
+    const body = JSON.parse(ownerVerifyRequest?.body || '{}');
+    expect(body.artifacts.owner_repair_mode).toBe(true);
+    expect(body.artifacts.owner_repair_scanner_id).toBe('powershell-policy');
+    expect(body.proof_payload.before_context).toBeDefined();
+    expect(body.proof_payload.after_context).toBeDefined();
+    expect(body.proof_payload.after_context.rollback).toBeDefined();
+  });
+
   test('worker daemon skips reviewer verification when command is safe but not a real validation', async () => {
     const root = createTempRoot();
     roots.push(root);
