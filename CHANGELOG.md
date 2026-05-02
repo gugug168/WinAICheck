@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.3.7] - 2026-05-02
+
+### Added
+- 支持平台下发 Owner Auto Validation 的拦截与放行网关（`prepare_action`），阻止未授权或未人工确认的高危自动执行任务。
+
+### Fixed
+- 修复 Bun 安装失败问题（将 winget 包名由 `Bun.HBun` 更正为 `Oven-sh.Bun`）。
+- 修复 `temp-space` 修复器在 backup 阶段副作用导致的潜在文件丢失风险。
+- 修复 CLI 模式下拒绝隐私上传后仍然可能上传数据的逻辑错误。
+- 修正 `env-path-length` 诊断工具的成功语义。
+- 修复扫描过程中 SSE 解析异常导致页面假死卡住的问题，并移除了生成 HTML 中的 TypeScript 语法残留（`?.`）。
+
 ## [0.3.6] - 2026-04-18
 
 ### Added
