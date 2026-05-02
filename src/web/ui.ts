@@ -912,10 +912,13 @@ function setScanRunning(running) {
 }
 
 function getScoreValue(scoreLike) {
+  let val = 0;
   if (scoreLike && typeof scoreLike === 'object' && scoreLike.score !== undefined && scoreLike.score !== null) {
-    return scoreLike.score;
+    val = scoreLike.score;
+  } else {
+    val = scoreLike;
   }
-  return scoreLike || 0;
+  return Number(val) || 0;
 }
 
 function getStreamReader(response) {
