@@ -1459,7 +1459,7 @@ async function rescan() {
             scanEndedWithDone = true;
             return;
           }
-        } catch (parseErr) { console.warn('[scan SSE] 解析事件失败:', parseErr, '| data:', eventData?.slice(0, 200)); }
+        } catch (parseErr) { console.warn('[scan SSE] 解析事件失败:', parseErr, '| data:', eventData && eventData.slice(0, 200)); }
       }
     }
     if (!scanEndedWithDone) {
