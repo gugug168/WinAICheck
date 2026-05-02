@@ -8,8 +8,8 @@ const patterns: { regex: RegExp; replacement: string; label: string }[] = [
   { regex: /(?:sk-|api[_-]?key[_-]?)([a-zA-Z0-9_-]{20,})/gi, replacement: '<API_KEY>', label: 'API Key' },
   { regex: /Bearer\s+[a-zA-Z0-9._-]+/gi, replacement: 'Bearer <TOKEN>', label: 'Bearer Token' },
   // Windows 用户名路径（支持带空格路径，不区分大小写）
-  { regex: /[a-zA-Z]:\\Users\\[^\\\r\n\s]+/gi, replacement: 'C:\\Users\\<USER>', label: '用户名路径' },
-  { regex: /\/Users\/[^\/\r\n\s]+/gi, replacement: '/Users/<USER>', label: 'Mac/Unix 用户名路径' },
+  { regex: /[a-zA-Z]:\\Users\\[^\\]+?(?=\\|[\r\n]|$)/gi, replacement: 'C:\\Users\\<USER>', label: '用户名路径' },
+  { regex: /\/Users\/[^\/]+?(?=\/|[\r\n]|$)/gi, replacement: '/Users/<USER>', label: 'Mac/Unix 用户名路径' },
   // 敏感 URL
   { regex: /https?:\/\/[^@\s]+:[^@\s]+@/g, replacement: 'http://<BASIC_AUTH>@', label: '基础认证' },
   { regex: /(?:mongodb|postgres|postgresql|mysql|redis|amqp):\/\/[^\s"',;)}\]]{10,}/gi, replacement: '<DATABASE_URL>', label: '数据库地址' },
