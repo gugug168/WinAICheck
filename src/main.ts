@@ -287,7 +287,14 @@ async function webMode(port: number) {
       // Stash: 暂存扫描数据到远程 AIECCOEVO 平台，返回 token
       if (url.pathname === '/api/stash' && req.method === 'POST') {
         try {
-          const body = await req.json() as { data?: string; fingerprint?: string };
+          const body = await req.json() as { data?: string; fingerprint?: string; score?: number };
+          // 如果前端没传 top-level score，尝试从 data 中提取
+          if (body.score === undefined && body.data) {
+            try {
+              const d = JSON.parse(body.data);
+              if (d.score !== undefined) body.score = Number(d.score);
+            } catch {}
+          }
           const remote = await requestRemoteJson(`${communityApiBase}/problem-briefs/scan-intake`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
