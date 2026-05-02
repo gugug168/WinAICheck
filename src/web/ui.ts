@@ -1610,7 +1610,7 @@ async function openCommunity() {
     window.open(${JSON.stringify(buildCommunityClaimUrl('__TOKEN__'))}.replace('__TOKEN__', encodeURIComponent(token)), '_blank');
   } catch(e) {
     const message = e instanceof Error ? e.message : String(e);
-    alert('连接社区失败，请检查网络\n' + message);
+    alert('连接社区失败，请检查网络\\n' + message);
     if (btn) { btn.textContent = '查看社区方案'; btn.disabled = false; }
   }
 }
@@ -1667,7 +1667,7 @@ async function submitFeedback() {
       else if (data.detail && typeof data.detail === 'object') {
         // detail 是嵌套对象（如 {msg: "...", code: "..."}），尝试提取第一个字符串字段
         const vals = Object.values(data.detail).filter(v => typeof v === 'string');
-        if (vals.length > 0) errMsg = vals[0] as string;
+        if (vals.length > 0) errMsg = String(vals[0]);
         else errMsg = JSON.stringify(data.detail); // 兜底：序列化整个对象
       } else if (typeof data.detail === 'object' && data.detail !== null) {
         errMsg = JSON.stringify(data.detail);
