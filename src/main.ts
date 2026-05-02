@@ -37,7 +37,7 @@ ${APP_NAME} - AI 环境诊断工具 v${VERSION}
 
 选项:
   --cli           纯终端模式（不启动浏览器）
-  --port=PORT     Web UI 端口（默认 3000）
+  --port=PORT     Web UI 端口（默认 16888）
   --json          输出 JSON 报告
   --html          生成 HTML 报告
   --report        同时生成 JSON + HTML 报告
@@ -53,7 +53,7 @@ async function main() {
   if (getConsent() === null) saveConsent(false);
 
   const useCli = args.includes('--cli');
-  const port = parseInt(args.find(a => a.startsWith('--port='))?.split('=')[1] || '3000', 10);
+  const port = parseInt(args.find(a => a.startsWith('--port='))?.split('=')[1] || '16888', 10);
   const wantJson = args.includes('--json') || args.includes('--report');
   const wantHtml = args.includes('--html') || args.includes('--report');
 
