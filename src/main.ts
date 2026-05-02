@@ -107,7 +107,7 @@ async function cliMode(wantJson: boolean, wantHtml: boolean) {
 
   // 自动上传 stash 到 AICOEVO（失败不影响本地）
   const consent = getConsent();
-  if (consent) {
+  if (consent?.shareData) {
     try {
       const payload = createPayload(results, score);
       const apiBase = getCommunityApiBase();

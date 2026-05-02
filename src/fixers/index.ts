@@ -1,4 +1,4 @@
-import type { Fixer, FixSuggestion, FixResult, ScanResult, BackupData, FixTier, PostFixGuidance } from '../scanners/types';
+﻿﻿import type { Fixer, FixSuggestion, FixResult, ScanResult, BackupData, FixTier, PostFixGuidance } from '../scanners/types';
 import { runCommand, isAdmin, classifyCommandError, commandExists } from '../executor/index';
 import { getScannerById } from '../scanners/registry';
 import { registerFixer as _registerFixer, getFixers as _getFixers, getFixerByScannerId as _getFixerByScannerId } from './registry';
@@ -709,12 +709,13 @@ registerFixerLocal({
     const scanner = getScannerById('env-path-length');
     if (!scanner) return { success: false, message: '未找到 PATH 检测器' };
     const result = await scanner.scan();
-    const hasIssues = result.status === 'fail' || result.status === 'warn';
+    // 只读诊断 fixer：success 表示"操作成功执行"（始终为 true）
+    // message 区分有无问题
     return {
-      success: hasIssues,
+      success: true,
       message: result.detail
         ? `${result.message}\n\n${result.detail}\n\n说明：当前不会自动改 PATH，请先确认哪些条目确实可以删除。`
-        : `${result.message}\n\n说明：当前没有可直接自动修复的 PATH 项。`,
+        : `${result.message}\n\n说明：PATH 无冗余条目，无需手动清理。`,
     };
   },
 });
@@ -864,24 +865,33 @@ registerFixerLocal({
     };
   },
   async backup(): Promise<BackupData> {
-    // 将旧文件先移到备份目录
+    // backup 阶段只记录当前状态，不做实际文件操作（避免副作用）
     const backupDir = `${process.env.TEMP}\\aicoevo-backup-${Date.now()}`;
-    runCommand(`powershell -Command "New-Item -ItemType Directory -Force -Path '${backupDir}'; Get-ChildItem $env:TEMP | Where-Object {$_.LastWriteTime -lt (Get-Date).AddDays(-7)} | Move-Item -Destination '${backupDir}' -Force"`, 15000);
     return { scannerId: 'temp-space', timestamp: Date.now(), data: { backupDir } };
   },
   async execute(_fix: FixSuggestion, backup: BackupData): Promise<FixResult> {
-    // backup 阶段已移走文件，这里删除备份目录
     const dir = backup.data.backupDir;
-    if (dir) {
-      runCommand(`powershell -Command "Remove-Item -Path '${dir}' -Recurse -Force"`, 15000);
+    // 第一步：将旧文件移到备份目录（保留回滚能力）
+    const moveR = runCommand(
+      `powershell -Command "New-Item -ItemType Directory -Force -Path '${dir}' | Out-Null; Get-ChildItem $env:TEMP | Where-Object {$_.LastWriteTime -lt (Get-Date).AddDays(-7)} | ForEach-Object { try { Move-Item $_.FullName -Destination '${dir}' -Force } catch {} }"`,
+      15000,
+    );
+    if (moveR.exitCode !== 0) {
+      return { success: false, message: commandFailedMessage(moveR, '移动临时文件') };
+    }
+    // 第二步：删除备份目录（释放空间）
+    const delR = runCommand(`powershell -Command "Remove-Item -Path '${dir}' -Recurse -Force"`, 15000);
+    if (delR.exitCode !== 0) {
+      // 删除失败不算严重错误，文件已经移走了，不影响原 TEMP 目录
+      return { success: true, message: '旧临时文件已移出 TEMP 目录（备份目录待手动删除）' };
     }
     return { success: true, message: '旧临时文件已清理' };
   },
   async rollback(backup: BackupData): Promise<void> {
     const dir = backup.data.backupDir;
     if (dir) {
-      // 从备份目录移回 TEMP
-      runCommand(`powershell -Command "Get-ChildItem '${dir}' | Move-Item -Destination $env:TEMP -Force"`, 15000);
+      // 若 execute 失败，将备份目录中的文件移回 TEMP
+      runCommand(`powershell -Command "if (Test-Path '${dir}') { Get-ChildItem '${dir}' | Move-Item -Destination $env:TEMP -Force }"`, 15000);
     }
   },
 });
@@ -1093,7 +1103,7 @@ registerFixerLocal({
       {
         name: 'Bun',
         cmd: 'where.exe bun',
-        install: 'winget install Bun.HBun --accept-package-agreements --accept-source-agreements',
+        install: 'winget install Oven-sh.Bun --accept-package-agreements --accept-source-agreements',
       },
     ];
 
