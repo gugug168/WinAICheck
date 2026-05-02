@@ -1582,7 +1582,7 @@ async function openCommunity() {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({
-        data: JSON.stringify(payload),
+        data: JSON.stringify(Object.assign({}, payload, { score: getScoreValue(payload.score) })),
         fingerprint: JSON.stringify({
           platform: navigator.platform,
           userAgent: navigator.userAgent,
