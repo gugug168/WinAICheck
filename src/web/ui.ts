@@ -639,6 +639,34 @@ h1{font-family:var(--display);font-size:1.5rem;font-weight:700;letter-spacing:3p
   *,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}
 }
 </style>
+<script>
+function switchTab(tab) {
+  const btn = document.querySelector('.tab-btn[onclick*="' + tab + '"]');
+  const panel = document.getElementById('tab-' + tab);
+  if (!btn || !panel) return;
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+  btn.classList.add('active');
+  panel.classList.add('active');
+  if (tab === 'agent') {
+    if (typeof loadAgentStatus === 'function') loadAgentStatus();
+  }
+}
+function setResultFilter(filter, el) {
+  window.__resultFilter = filter;
+  document.querySelectorAll('.filter-chip-btn').forEach(b => b.classList.remove('active'));
+  if (el) el.classList.add('active');
+  document.querySelectorAll('.result-item').forEach(item => {
+    if (filter === 'all') {
+      item.classList.remove('is-hidden');
+    } else if (filter === 'fixable') {
+      item.classList.toggle('is-hidden', item.getAttribute('data-fixable') !== 'yes');
+    } else {
+      item.classList.toggle('is-hidden', item.getAttribute('data-status') !== filter);
+    }
+  });
+}
+</script>
 </head>
 <body>
 <div class="container">
@@ -842,7 +870,7 @@ h1{font-family:var(--display);font-size:1.5rem;font-weight:700;letter-spacing:3p
     </div>
   </div>
 
-  <div class="footer">WinAICheck v${version} — AI 环境诊断工具</div>
+  <div class="footer">WinAICheck v${version} — AI 环境诊断工具 <span id="update-banner" style="margin-left:10px;color:var(--green);display:none;font-weight:600;cursor:pointer" onclick="window.open('https://github.com/gugug168/WinAICheck/releases')">🔥 发现新版本，点击查看</span></div>
 </div>
 
 <!-- 修复执行中遮罩 -->
@@ -891,16 +919,7 @@ window.__scanPayload = {
 };
 window.__scanState = window.__scanState || { running: false };
 // --- Tab 切换 ---
-function switchTab(tab) {
-  const btn = document.querySelector('.tab-btn[onclick*="' + tab + '"]');
-  const panel = document.getElementById('tab-' + tab);
-  if (!btn || !panel) return;
-  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-  document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
-  btn.classList.add('active');
-  panel.classList.add('active');
-  if (tab === 'agent') loadAgentStatus();
-}
+// --- Tab 切换已移至 head ---
 
 function setScanRunning(running) {
   window.__scanState = window.__scanState || {};
@@ -1001,13 +1020,7 @@ function replaceDiagPanel(html, results, score) {
   refreshSolutions();
 }
 
-function setResultFilter(filter, el) {
-  window.__resultFilter = filter;
-  document.querySelectorAll('.filter-chip-btn').forEach(function(btn) {
-    btn.classList.toggle('active', btn === el);
-  });
-  applyResultFilters();
-}
+// --- setResultFilter 已移至 head ---
 
 function applyResultFilters() {
   const filter = window.__resultFilter || 'all';
@@ -1499,11 +1512,16 @@ async function rescanWithoutStreaming() {
     const res = await fetch('/api/version-check');
     const {current, latest} = await res.json();
     if (latest && latest !== current) {
-      const banner = document.getElementById('version-banner');
+      const banner = document.getElementById('update-banner');
       if (banner) {
-        banner.textContent = '发现新版本 v' + latest + ' → 点击查看更新说明';
-        banner.style.display = 'block';
-        banner.onclick = () => window.open('https://github.com/gugug168/WinAICheck/releases', '_blank');
+        banner.style.display = 'inline';
+        banner.textContent = '🔥 发现新版本 v' + latest + '，点击查看';
+      }
+      const vBanner = document.getElementById('version-banner');
+      if (vBanner) {
+        vBanner.textContent = '发现新版本 v' + latest + ' → 点击查看更新说明';
+        vBanner.style.display = 'block';
+        vBanner.onclick = () => window.open('https://github.com/gugug168/WinAICheck/releases', '_blank');
       }
     }
   } catch {}
@@ -2131,8 +2149,8 @@ function renderCategoryResults(
   const html: string[] = [];
   for (const [cat, items] of grouped) {
     const bd = score.breakdown.find(b => b.category === cat);
-    const passed = bd?.passed || 0;
-    const total = bd?.total || items.length;
+    const passed = (bd && bd.passed) || 0;
+    const total = (bd && bd.total) || items.length;
     const pct = total > 0 ? Math.round((passed / total) * 100) : 0;
     const barColor = pct === 100 ? '#22c55e' : pct >= 60 ? '#eab308' : '#ef4444';
 

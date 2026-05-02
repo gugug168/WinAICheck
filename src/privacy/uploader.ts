@@ -95,7 +95,7 @@ export interface UploadPayload {
 export function createPayload(results: ScanResult[], score: ScoreResult): UploadPayload {
   return {
     timestamp: new Date().toISOString(),
-    score: score.score,
+    score: Number(score.score || 0),
     results: results.map(r => ({
       id: r.id,
       name: r.name,
@@ -148,7 +148,7 @@ export async function stashData(payload: UploadPayload, apiBase: string): Promis
     platform: 'Windows',
     userAgent: `WinAICheck/${VERSION}`,
     system: payload.systemInfo,
-    score: payload.score,
+    score: Number(payload.score || 0),
     failCount: payload.results.filter(r => r.status === 'fail').length,
     failCategories: [...new Set(payload.results.filter(r => r.status === 'fail').map(r => r.category))],
   });

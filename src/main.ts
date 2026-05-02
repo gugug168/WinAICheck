@@ -84,7 +84,11 @@ async function cliMode(wantJson: boolean, wantHtml: boolean) {
 
   for (const r of results) {
     console.log(`  ${color[r.status]}${icon[r.status]}\x1b[0m ${r.name}: ${r.message}`);
-    if (r.detail) console.log(`    \x1b[90m${r.detail.split('\n')[0]}\x1b[0m`);
+    if (r.detail) {
+      r.detail.split('\n').forEach(line => {
+        if (line.trim()) console.log(`    \x1b[90m${line}\x1b[0m`);
+      });
+    }
   }
 
   // 报告
@@ -145,7 +149,8 @@ async function webMode(port: number) {
             breakdown: [],
           };
           const prev = loadPreviousReport();
-          return new Response(generateWebUI([], initialScore, prev?.score ?? null, true, VERSION), {
+          const prevScoreVal = (prev !== null && prev.score !== undefined) ? prev.score : null;
+          return new Response(generateWebUI([], initialScore, prevScoreVal, true, VERSION), {
             headers: { 'Content-Type': 'text/html; charset=utf-8' },
           });
         }
@@ -282,7 +287,14 @@ async function webMode(port: number) {
       // Stash: 暂存扫描数据到远程 AIECCOEVO 平台，返回 token
       if (url.pathname === '/api/stash' && req.method === 'POST') {
         try {
-          const body = await req.json() as { data?: string; fingerprint?: string };
+          const body = await req.json() as { data?: string; fingerprint?: string; score?: number };
+          // 如果前端没传 top-level score，尝试从 data 中提取
+          if (body.score === undefined && body.data) {
+            try {
+              const d = JSON.parse(body.data);
+              if (d.score !== undefined) body.score = Number(d.score);
+            } catch {}
+          }
           const remote = await requestRemoteJson(`${communityApiBase}/problem-briefs/scan-intake`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
@@ -434,6 +446,15 @@ async function webMode(port: number) {
   console.log(`  浏览器访问: \x1b[36mhttp://localhost:${port}\x1b[0m\n`);
 
   try { execSync(`start http://localhost:${port}`, { windowsHide: true, timeout: 3000 }); } catch {}
+
+  process.on('SIGINT', () => {
+    console.log('\n  正在关闭服务...');
+    process.exit(0);
+  });
+  process.on('SIGTERM', () => {
+    console.log('\n  服务已停止');
+    process.exit(0);
+  });
 
   await new Promise(() => {});
 }

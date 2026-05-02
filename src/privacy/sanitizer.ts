@@ -7,8 +7,14 @@ const patterns: { regex: RegExp; replacement: string; label: string }[] = [
   // API Keys
   { regex: /(?:sk-|api[_-]?key[_-]?)([a-zA-Z0-9_-]{20,})/gi, replacement: '<API_KEY>', label: 'API Key' },
   { regex: /Bearer\s+[a-zA-Z0-9._-]+/gi, replacement: 'Bearer <TOKEN>', label: 'Bearer Token' },
-  // Windows 用户名路径（只匹配用户名部分，不含空格/路径分隔符）
-  { regex: /C:\\Users\\([^\\\/\s]+)/gi, replacement: 'C:\\Users\\<USER>', label: '用户名路径' },
+  // Windows 用户名路径（支持带空格路径，不区分大小写）
+  { regex: /[a-zA-Z]:\\Users\\[^\\]+?(?=\\|[\r\n]|$)/gi, replacement: 'C:\\Users\\<USER>', label: '用户名路径' },
+  { regex: /\/Users\/[^\/]+?(?=\/|[\r\n]|$)/gi, replacement: '/Users/<USER>', label: 'Mac/Unix 用户名路径' },
+  // 敏感 URL
+  { regex: /https?:\/\/[^@\s]+:[^@\s]+@/g, replacement: 'http://<BASIC_AUTH>@', label: '基础认证' },
+  { regex: /(?:mongodb|postgres|postgresql|mysql|redis|amqp):\/\/[^\s"',;)}\]]{10,}/gi, replacement: '<DATABASE_URL>', label: '数据库地址' },
+  // 私钥
+  { regex: /-----BEGIN\s+(?:RSA\s+|EC\s+|DSA\s+|OPENSSH\s+)?PRIVATE\s+KEY-----[\s\S]*?-----END\s+(?:RSA\s+|EC\s+|DSA\s+|OPENSSH\s+)?PRIVATE\s+KEY-----/g, replacement: '<PRIVATE_KEY>', label: '私钥' },
   // IP 地址
   { regex: /\b(\d{1,3}\.){3}\d{1,3}\b/g, replacement: '<IP>', label: 'IP 地址' },
   // 邮箱
