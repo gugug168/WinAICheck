@@ -1,4 +1,4 @@
-﻿﻿import type { Fixer, FixSuggestion, FixResult, ScanResult, BackupData, FixTier, PostFixGuidance } from '../scanners/types';
+﻿import type { Fixer, FixSuggestion, FixResult, ScanResult, BackupData, FixTier, PostFixGuidance } from '../scanners/types';
 import { runCommand, isAdmin, classifyCommandError, commandExists } from '../executor/index';
 import { getScannerById } from '../scanners/registry';
 import { registerFixer as _registerFixer, getFixers as _getFixers, getFixerByScannerId as _getFixerByScannerId } from './registry';
@@ -1592,3 +1592,23 @@ registerFixerLocal({
     }
   },
 });
+
+// 21. shell-encoding-health → chcp 65001
+registerFixerLocal({
+  scannerId: 'shell-encoding-health',
+  getFix(result: ScanResult): FixSuggestion {
+    return {
+      id: 'fix-shell-encoding-health',
+      scannerId: 'shell-encoding-health',
+      tier: 'green',
+      description: '将当前终端编码设置为 UTF-8 (chcp 65001)',
+      commands: ['chcp 65001'],
+      risk: '低风险：仅影响当前终端会话的显示编码',
+    };
+  },
+  async execute(fix: FixSuggestion, _backup: BackupData): Promise<FixResult> {
+    const r = runCommand(fix.commands![0], 5000);
+    return { success: r.exitCode === 0, message: r.exitCode === 0 ? '终端编码已切换为 UTF-8' : commandFailedMessage(r, '切换编码') };
+  },
+});
+
