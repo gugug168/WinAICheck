@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { _test } from '../src/executor/index';
-import { _testHelpers, executeFix, getFixerByScannerId } from '../src/fixers/index';
+import { _testHelpers, executeFix, getFixerByScannerId, registerFixer } from '../src/fixers/index';
+import { registerScanner } from '../src/scanners/registry';
+import type { Fixer, ScanResult } from '../src/scanners/types';
 import { createCommandMock, teardownMock, withEnv } from './integration/mock-helper';
 import '../src/scanners/index';
 
@@ -89,5 +91,107 @@ describe('git-path fixer helpers', () => {
     expect(result.verified).toBe(false);
     expect(result.message).toContain('当前进程内无法准确验证');
     expect(result.message).toContain('需要重新打开终端窗口才能生效');
+  });
+
+  test('owner repair allowlist 固定为 3 个 Windows L2 修复类型', () => {
+    expect(_testHelpers.ownerRepairAllowlist).toEqual([
+      'powershell-policy',
+      'long-paths',
+      'firewall-ports',
+    ]);
+  });
+
+  test('executeFix 返回结构化修复元数据', async () => {
+    const scannerId = `test-owner-repair-meta-${Date.now()}`;
+    const scanner = {
+      id: scannerId,
+      name: 'test owner repair meta',
+      category: 'permission',
+      async scan(): Promise<ScanResult> {
+        return {
+          id: scannerId,
+          name: 'test owner repair meta',
+          category: 'permission',
+          status: 'pass',
+          message: 'verified',
+        };
+      },
+    } satisfies import('../src/scanners/types').Scanner;
+    registerScanner(scanner);
+
+    const fixer: Fixer = {
+      scannerId,
+      getFix() {
+        return {
+          id: `fix-${scannerId}`,
+          scannerId,
+          tier: 'green',
+          description: 'test structured metadata',
+          risk: 'low',
+        };
+      },
+      async backup() {
+        return {
+          scannerId,
+          timestamp: 123,
+          data: { oldValue: 'before' },
+        };
+      },
+      async execute() {
+        return {
+          success: true,
+          message: 'done',
+        };
+      },
+      async rollback() {},
+    };
+    registerFixer(fixer);
+
+    const result = await executeFix(fixer.getFix(scanner.scan()));
+
+    expect(result.success).toBe(true);
+    expect(result.backupSummary).toBeDefined();
+    expect(result.backupSummary?.available).toBe(true);
+    expect(result.backupSummary?.keys).toContain('oldValue');
+    expect(result.verification).toBeDefined();
+    expect(result.verification?.status).toBe('pass');
+    expect(result.rollback).toBeDefined();
+    expect(result.rollback?.result).toBe('not_needed');
+  });
+
+  test('executeFix 在执行抛错时报告 rollback 结果', async () => {
+    const scannerId = `test-owner-repair-rollback-${Date.now()}`;
+    const fixer: Fixer = {
+      scannerId,
+      getFix() {
+        return {
+          id: `fix-${scannerId}`,
+          scannerId,
+          tier: 'green',
+          description: 'test rollback metadata',
+          risk: 'low',
+        };
+      },
+      async backup() {
+        return {
+          scannerId,
+          timestamp: 456,
+          data: { oldValue: 'before' },
+        };
+      },
+      async execute() {
+        throw new Error('boom');
+      },
+      async rollback() {},
+    };
+    registerFixer(fixer);
+
+    const result = await executeFix(fixer.getFix({} as ScanResult));
+
+    expect(result.success).toBe(false);
+    expect(result.rollback).toBeDefined();
+    expect(result.rollback?.attempted).toBe(true);
+    expect(result.rollback?.result).toBe('success');
+    expect(result.rolledBack).toBe(true);
   });
 });
