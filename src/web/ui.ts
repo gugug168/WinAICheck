@@ -773,7 +773,7 @@ h1{font-family:var(--display);font-size:1.5rem;font-weight:700;letter-spacing:3p
           <span class="learn-link-icon">&#127880;</span>
           <div><div class="learn-link-title">MiniMax Token Plan</div><div class="learn-link-desc">MiniMax-M2.5 全模态订阅，编程+生图+语音</div></div>
         </a>
-        <a href="https://cloud.tencent.com/act/pro/codingplan" target="_blank" rel="noopener" class="learn-link">
+        <a href="https://copilot.tencent.com/" target="_blank" rel="noopener" class="learn-link">
           <span class="learn-link-icon">&#9729;</span>
           <div><div class="learn-link-title">腾讯云 Coding Plan</div><div class="learn-link-desc">混元+GLM-5+Kimi，首月¥7.9，次月5折</div></div>
         </a>
