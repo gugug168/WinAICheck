@@ -2342,9 +2342,17 @@ function updateRuntimeMessage(result) {
 }
 
 function runLatestSelfUpdate(target, deps = {}) {
-  const spawnImpl = deps.spawnImpl || spawn;
   const command = process.platform === 'win32' ? 'npx.cmd' : 'npx';
   const args = ['--yes', 'winaicheck@latest', 'agent', 'self-update', '--target', normalizeUpdateTarget(target)];
+  if (typeof deps.execFileSyncImpl === 'function') {
+    deps.execFileSyncImpl(command, args, {
+      windowsHide: true,
+      stdio: 'ignore',
+      shell: process.platform === 'win32',
+    });
+    return;
+  }
+  const spawnImpl = deps.spawnImpl || spawn;
   const child = spawnImpl(command, args, {
     detached: true,
     stdio: 'ignore',
