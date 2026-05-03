@@ -330,7 +330,7 @@ async function webMode(port: number) {
           const remote = await requestRemoteJson(`${communityApiBase}/feedback`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-            body: JSON.stringify(body),
+            body,
           });
           return Response.json(remote.data, { status: remote.status });
         } catch (e: any) {
