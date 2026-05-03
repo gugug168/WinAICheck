@@ -441,6 +441,15 @@ function openExternalUrl(url, deps = {}) {
   });
 }
 
+function detectWindowsDeviceInfo(deps = {}) {
+  const platform = String(deps.platform || process.platform || '').toLowerCase();
+  if (platform !== 'win32') return 'Windows';
+  const release = String(deps.osRelease || os.release() || '').trim();
+  if (release.startsWith('10.0.22')) return 'Windows 11';
+  if (release.startsWith('10.0')) return 'Windows 10';
+  return 'Windows';
+}
+
 function today(deps = {}) {
   return nowIso(deps).slice(0, 10);
 }
@@ -4514,7 +4523,7 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
 
     // 新流程：OAuth 设备流（自动打开浏览器）
     const agentName = String(args.agent || 'unknown').trim();
-    const deviceInfo = `${os.hostname()}/${process.platform}`;
+    const deviceInfo = detectWindowsDeviceInfo(deps);
 
     out.write(`正在发起设备绑定...\n`);
 
@@ -5142,6 +5151,7 @@ export const _testHelpers = {
   saveConfig,
   heartbeatAgentV2,
   runDraftOrganizerOnce,
+  detectWindowsDeviceInfo,
 };
 
 let isDirectExecution = false;
