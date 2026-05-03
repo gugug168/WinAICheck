@@ -2308,6 +2308,9 @@ function updateRuntimeMessage(result) {
   if (result.autoUpdated) {
     return `已自动更新 WinAICheck v${result.updatedFrom} → v${result.current}，重启当前会话后生效。`;
   }
+  if (result.autoUpdating) {
+    return `正在后台更新 WinAICheck v${result.current} → v${result.latest}，下次会话生效。`;
+  }
   if (result.autoUpdateError) {
     return `发现新版本 v${result.current} → v${result.latest}，自动更新失败（${result.autoUpdateError}），可运行 npx winaicheck@latest agent enable 更新。`;
   }
@@ -2318,16 +2321,16 @@ function updateRuntimeMessage(result) {
 }
 
 function runLatestSelfUpdate(target, deps = {}) {
-  const execImpl = deps.execFileSyncImpl || execFileSync;
+  const spawnImpl = deps.spawnImpl || spawn;
   const command = process.platform === 'win32' ? 'npx.cmd' : 'npx';
   const args = ['--yes', 'winaicheck@latest', 'agent', 'self-update', '--target', normalizeUpdateTarget(target)];
-  execImpl(command, args, {
-    encoding: 'utf8',
+  const child = spawnImpl(command, args, {
+    detached: true,
+    stdio: 'ignore',
     windowsHide: true,
-    timeout: 60 * 1000,
     shell: process.platform === 'win32',
-    stdio: ['ignore', 'pipe', 'pipe'],
   });
+  child.unref();
 }
 
 async function resolveUpdateState(args = {}, deps = {}) {
@@ -2364,16 +2367,10 @@ async function resolveUpdateState(args = {}, deps = {}) {
   if (result.mode === 'auto' && result.hasUpdate) {
     try {
       runLatestSelfUpdate(target, deps);
-      const nextVersion = cache.winaicheckLatest || result.latest;
-      cache.winaicheckVersion = nextVersion;
-      cache.winaicheckLatest = nextVersion;
-      cache.winaicheckHasUpdate = false;
-      cache.winaicheckUpdateCheck = nowIso(deps);
       cache.winaicheckLastAutoUpdate = nowIso(deps);
       saveUpdateCache(cache, deps);
-      result = buildUpdateResult(cache, nextVersion, target, {
-        autoUpdated: true,
-        updatedFrom: localVersion,
+      result = buildUpdateResult(cache, localVersion, target, {
+        autoUpdating: true,
       });
     } catch (error) {
       const autoUpdateError = error?.message || String(error);
@@ -4250,6 +4247,10 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
     config.paused = false;
     if (config.workerEnabled === undefined) config.workerEnabled = true;
     saveConfig(config, deps);
+    const updateCache = loadUpdateCache(deps);
+    updateCache.winaicheckUpdateMode = 'auto';
+    updateCache.winaicheckVersion = localWinAICheckVersion(deps);
+    saveUpdateCache(updateCache, deps);
     out.write(`WinAICheck Agent Lite 已启用\n`);
     out.write(`  Agent Runner: ${localAgent.agentJs}\n`);
     out.write(`  Hook: ${installed.join(' | ')}\n`);
