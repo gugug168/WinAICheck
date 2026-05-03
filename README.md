@@ -77,6 +77,22 @@ npx winaicheck
 
 去 [Releases](https://github.com/gugug168/WinAICheck/releases) 页面下载 `WinAICheck.exe`，双击运行。
 
+### 首次运行信任说明
+
+当前公开 MVP 分发主要来自：
+
+- GitHub Releases
+- `npx winaicheck`
+- PowerShell 安装脚本
+
+首次运行时，Windows Defender 或 SmartScreen 可能提示未知发布者或要求额外确认。这不应被理解成“文件一定有问题”，但也不应跳过来源校验。
+
+建议至少核对：
+
+1. 下载地址是否来自官方仓库或对应 release
+2. 版本号、tag、README 说明是否一致
+3. 发版说明是否与 AICOEVO 平台文档中的手动发布记录一致
+
 ### 方式四：从源码运行（开发者）
 
 需要先安装 [Bun](https://bun.sh)：
