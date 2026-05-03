@@ -420,6 +420,27 @@ function sleep(ms, deps = {}) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+function openExternalUrl(url, deps = {}) {
+  if (typeof deps.openBrowser === 'function') {
+    deps.openBrowser(url);
+    return;
+  }
+  if (process.platform === 'win32') {
+    execFileSync(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', 'start', '', url], {
+      timeout: 5000,
+      windowsHide: true,
+      stdio: 'ignore',
+    });
+    return;
+  }
+  const opener = process.platform === 'darwin' ? 'open' : 'xdg-open';
+  execFileSync(opener, [url], {
+    timeout: 5000,
+    windowsHide: true,
+    stdio: 'ignore',
+  });
+}
+
 function today(deps = {}) {
   return nowIso(deps).slice(0, 10);
 }
@@ -2321,9 +2342,17 @@ function updateRuntimeMessage(result) {
 }
 
 function runLatestSelfUpdate(target, deps = {}) {
-  const spawnImpl = deps.spawnImpl || spawn;
   const command = process.platform === 'win32' ? 'npx.cmd' : 'npx';
   const args = ['--yes', 'winaicheck@latest', 'agent', 'self-update', '--target', normalizeUpdateTarget(target)];
+  if (typeof deps.execFileSyncImpl === 'function') {
+    deps.execFileSyncImpl(command, args, {
+      windowsHide: true,
+      stdio: 'ignore',
+      shell: process.platform === 'win32',
+    });
+    return;
+  }
+  const spawnImpl = deps.spawnImpl || spawn;
   const child = spawnImpl(command, args, {
     detached: true,
     stdio: 'ignore',
@@ -4507,11 +4536,7 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
 
     // Step 2: 尝试自动打开浏览器
     try {
-      if (typeof deps.openBrowser === 'function') deps.openBrowser(confirm_url);
-      else {
-        const startCmd = process.platform === 'win32' ? 'start' : 'open';
-        execFileSync(startCmd, [confirm_url], { timeout: 5000, windowsHide: true });
-      }
+      openExternalUrl(confirm_url, deps);
       out.write(`已自动打开浏览器；如果你已经登录 AICOEVO，网页中点一次确认即可完成绑定。\n\n`);
     } catch {
       out.write(`请手动打开上方链接；如果尚未登录，先登录后再在网页中确认绑定。\n\n`);

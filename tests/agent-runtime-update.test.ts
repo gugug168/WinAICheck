@@ -109,17 +109,19 @@ describe('agent runtime update', () => {
     expect(command).toContain('npx');
     expect(args).toEqual(['--yes', 'winaicheck@latest', 'agent', 'self-update', '--target', 'openclaw']);
     expect(parseLastJson(io.output)).toMatchObject({
-      hasUpdate: false,
-      autoUpdated: true,
-      updatedFrom: '0.3.13',
-      current: '0.3.99',
+      hasUpdate: true,
+      autoUpdated: false,
+      autoUpdating: true,
+      current: '0.3.13',
       latest: '0.3.99',
       mode: 'auto',
       target: 'openclaw',
     });
+    expect(parseLastJson(io.output).runtimeMessage).toContain('正在后台更新');
     const cache = _testHelpers.readJson(join(root, 'version-cache.json'), null);
-    expect(cache.winaicheckVersion).toBe('0.3.99');
-    expect(cache.winaicheckHasUpdate).toBe(false);
+    expect(cache.winaicheckVersion).toBe('0.3.13');
+    expect(cache.winaicheckHasUpdate).toBe(true);
+    expect(cache.winaicheckLastAutoUpdate).toBeTruthy();
   });
 
   test('installLocalAgent 写出的 Claude hooks 会执行可见更新检查', () => {
