@@ -1,8 +1,8 @@
 import type { Scanner, ScanResult } from './types';
 import { runCommand } from '../executor/index';
 import { registerScanner } from './registry';
+import { THRESHOLDS } from './thresholds';
 
-/** 检测 Node.js 版本 */
 const scanner: Scanner = {
   id: 'node-version',
   name: 'Node.js 版本检测',
@@ -24,13 +24,13 @@ const scanner: Scanner = {
     const version = stdout.replace('v', '');
     const [major] = version.split('.').map(Number);
 
-    if (major < 18) {
+    if (isNaN(major) || major < THRESHOLDS.node.minMajor) {
       return {
         id: this.id,
         name: this.name,
         category: this.category,
         status: 'warn',
-        message: `Node.js 版本过旧 (v${version})，建议 v18+`,
+        message: `Node.js 版本过旧 (v${version})，建议 v${THRESHOLDS.node.minMajor}+`,
         error_type: 'outdated',
       };
     }

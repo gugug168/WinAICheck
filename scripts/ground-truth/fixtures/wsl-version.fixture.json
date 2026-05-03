@@ -1,0 +1,11 @@
+{
+  "scannerId": "wsl-version",
+  "commands": {
+    "wsl --status": {
+      "stdout": "默认版本: 2\n默认分发: Ubuntu-22.04",
+      "exitCode": 0
+    },
+    "net session": { "exitCode": 0 },
+    "ver": { "stdout": "Microsoft Windows [Version 10.0.22631]", "exitCode": 0 }
+  }
+}

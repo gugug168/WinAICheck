@@ -7,7 +7,15 @@ const DEFAULT_TIMEOUT = 15_000;
 export const _test = {
   mockExecSync: null as ((cmd: string, opts: any) => Buffer) | null,
   mockExistsSync: null as ((path: string) => boolean) | null,
+  mockReadFileSync: null as ((path: string) => string | null) | null,
 };
+
+/** 诊断钩子：观察命令执行过程（不干扰执行，与 _test 共存） */
+export const _diag: {
+  onCommand?: (cmd: string, result: CommandResult) => void;
+  onReg?: (queryPath: string, output: string) => void;
+  onPS?: (script: string, output: string) => void;
+} = {};
 
 /** 命令执行错误分类 */
 export type ErrorCategory =
@@ -147,14 +155,18 @@ export function runCommand(
   if (_test.mockExecSync) {
     try {
       const buf = _test.mockExecSync(cmd, { timeout });
-      return { stdout: decodeOutput(buf).trim(), stderr: '', exitCode: 0 };
+      const theResult: CommandResult = { stdout: decodeOutput(buf).trim(), stderr: '', exitCode: 0 };
+      if (_diag.onCommand) _diag.onCommand(cmd, theResult);
+      return theResult;
     } catch (err: any) {
-      const result = {
+      const rawResult = {
         stdout: err.stdout ? decodeOutput(err.stdout).trim() : '',
         stderr: err.stderr ? String(err.stderr).trim() : '',
         exitCode: err.status ?? 1,
       };
-      return attachErrorClassification(result, timeout);
+      const theResult = attachErrorClassification(rawResult, timeout);
+      if (_diag.onCommand) _diag.onCommand(cmd, theResult);
+      return theResult;
     }
   }
   try {
@@ -165,14 +177,18 @@ export function runCommand(
       encoding: 'buffer',
     }) as Buffer;
     const stdout = decodeOutput(buf).trim();
-    return { stdout, stderr: '', exitCode: 0 };
+    const theResult: CommandResult = { stdout, stderr: '', exitCode: 0 };
+    if (_diag.onCommand) _diag.onCommand(cmd, theResult);
+    return theResult;
   } catch (err: any) {
-    const result = {
+    const rawResult = {
       stdout: err.stdout ? decodeOutput(err.stdout as Buffer).trim() : '',
       stderr: err.stderr ? (err.stderr as Buffer).toString('utf-8').trim() : '',
       exitCode: err.status ?? 1,
     };
-    return attachErrorClassification(result, timeout);
+    const theResult = attachErrorClassification(rawResult, timeout);
+    if (_diag.onCommand) _diag.onCommand(cmd, theResult);
+    return theResult;
   }
 }
 
@@ -182,7 +198,9 @@ export function runCommand(
 export function runReg(queryPath: string, valueName?: string): string {
   let cmd = `reg query "${queryPath}"`;
   if (valueName) cmd += ` /v "${valueName}"`;
-  return runCommand(cmd, 10_000).stdout;
+  const output = runCommand(cmd, 10_000).stdout;
+  if (_diag.onReg) _diag.onReg(queryPath, output);
+  return output;
 }
 
 /**
@@ -190,7 +208,9 @@ export function runReg(queryPath: string, valueName?: string): string {
  */
 export function runPS(script: string, timeout = DEFAULT_TIMEOUT): string {
   const cmd = `powershell -NoProfile -Command "${script.replace(/"/g, '\\"')}"`;
-  return runCommand(cmd, timeout).stdout;
+  const psOutput = runCommand(cmd, timeout).stdout;
+  if (_diag.onPS) _diag.onPS(script, psOutput);
+  return psOutput;
 }
 
 /**

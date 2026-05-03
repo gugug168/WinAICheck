@@ -2,9 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+- 新增 ground-truth 审计基础设施：8 个验证器、统一 `scripts/audit.ts` CLI、CI fixture，以及 `scanWithDiagnostic()` 决策链采集。
+- 新增集中式扫描器阈值配置（Git / GPU / Node / 镜像源）和 `compareVersions()`，统一扫描器门槛管理。
+
 ### Changed
 - 同步 `TASK-230` 最新生产 smoke 事实：平台侧 `auto_scan -> reviewer quorum -> solved_confirmed -> owner_rescan -> failed final rescan -> reopen original problem` 已在 2026-05-03 最新生产部署上重新跑通，不再把 reviewer 可见性或 owner final-rescan surfaced 视为当前 WinAICheck 阻断。
 - 同步 `TASK-230` 最新真实 Windows 结论：WinAICheck 已在 production 上完成 machine-origin `owner_repair` 成功链路验证，并与平台当前嵌套 `execution_task` / `prepare_state` payload 对齐。
+- `git.ts`、`gpu-driver.ts`、`node-version.ts`、`mirror-sources.ts` 现在统一复用阈值配置，不再各自硬编码。
 
 ### Notes
 - 真实 machine-origin `owner_repair` 成功证据链现已补齐；对外仍只承诺当前 allowlist 内、具备 consent / rollback / evidence gate 的 Windows L2 自动修复能力。

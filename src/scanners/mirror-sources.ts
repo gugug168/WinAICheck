@@ -3,8 +3,8 @@ import { homedir } from 'os';
 import { join } from 'path';
 import type { Scanner, ScanResult } from './types';
 import { registerScanner } from './registry';
+import { THRESHOLDS } from './thresholds';
 
-/** 检测 pip/npm 镜像源配置 */
 const scanner: Scanner = {
   id: 'mirror-sources',
   name: '镜像源配置检测',
@@ -22,7 +22,7 @@ const scanner: Scanner = {
     const pipFile = pipPaths.find(p => existsSync(p));
     if (pipFile) {
       const content = readFileSync(pipFile, 'utf-8');
-      if (/tsinghua|aliyun|douban|tencent|index\.url\s*=/i.test(content)) {
+      if (THRESHOLDS.mirror_sources.pipMirrorPattern.test(content)) {
         mirrors.push('pip: 已配置镜像');
       } else {
         noMirror.push('pip: 未配置国内镜像');
@@ -35,7 +35,7 @@ const scanner: Scanner = {
     const npmrcPath = join(homedir(), '.npmrc');
     if (existsSync(npmrcPath)) {
       const content = readFileSync(npmrcPath, 'utf-8');
-      if (/registry/.test(content) && !/registry\.npmjs\.org/.test(content)) {
+      if (/registry/.test(content) && !THRESHOLDS.mirror_sources.npmDefaultPattern.test(content)) {
         mirrors.push('npm: 已配置镜像');
       } else {
         noMirror.push('npm: 使用默认源');

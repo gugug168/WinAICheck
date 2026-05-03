@@ -1,8 +1,8 @@
 import type { Scanner, ScanResult } from './types';
 import { runCommand } from '../executor/index';
 import { registerScanner } from './registry';
+import { THRESHOLDS } from './thresholds';
 
-/** 检测 NVIDIA GPU 驱动版本 */
 const scanner: Scanner = {
   id: 'gpu-driver',
   name: 'GPU 驱动检测',
@@ -30,11 +30,12 @@ const scanner: Scanner = {
       return { name, driver };
     });
 
-    // 检查驱动版本（建议 >= 525）
     let driverOk = true;
     for (const gpu of gpus) {
       const majorVer = parseInt(gpu.driver.split('.')[0], 10);
-      if (majorVer < 525) driverOk = false;
+      if (isNaN(majorVer) || majorVer < THRESHOLDS.gpu_driver.minDriverMajor) {
+        driverOk = false;
+      }
     }
 
     const detail = gpus.map(g => `${g.name} (驱动 ${g.driver})`).join('\n');
@@ -45,7 +46,7 @@ const scanner: Scanner = {
         name: this.name,
         category: this.category,
         status: 'warn',
-        message: 'NVIDIA 驱动版本较旧，建议更新到 525+',
+        message: `NVIDIA 驱动版本较旧，建议更新到 ${THRESHOLDS.gpu_driver.minDriverMajor}+`,
         detail,
         error_type: 'outdated',
       };

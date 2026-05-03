@@ -1,8 +1,8 @@
 import type { Scanner, ScanResult } from './types';
-import { runCommand, commandExists } from '../executor/index';
+import { runCommand } from '../executor/index';
 import { registerScanner } from './registry';
+import { THRESHOLDS, compareVersions } from './thresholds';
 
-/** 检测 Git 安装与版本 */
 const scanner: Scanner = {
   id: 'git',
   name: 'Git 检测',
@@ -24,15 +24,23 @@ const scanner: Scanner = {
     const versionMatch = stdout.match(/git version (\d+\.\d+\.\d+)/);
     const version = versionMatch?.[1] || 'unknown';
 
-    // 检查版本是否过旧（< 2.30）
-    const [major, minor] = version.split('.').map(Number);
-    if (major < 2 || (major === 2 && minor < 30)) {
+    if (version === 'unknown') {
       return {
         id: this.id,
         name: this.name,
         category: this.category,
         status: 'warn',
-        message: `Git 版本过旧 (${version})，建议升级到 2.30+`,
+        message: `Git 已安装但版本号无法解析 (${stdout})`,
+      };
+    }
+
+    if (compareVersions(version, THRESHOLDS.git.minVersion) < 0) {
+      return {
+        id: this.id,
+        name: this.name,
+        category: this.category,
+        status: 'warn',
+        message: `Git 版本过旧 (${version})，建议升级到 ${THRESHOLDS.git.minVersion}+`,
         error_type: 'outdated',
       };
     }

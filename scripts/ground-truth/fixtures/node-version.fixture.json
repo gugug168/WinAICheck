@@ -1,0 +1,9 @@
+{
+  "scannerId": "node-version",
+  "commands": {
+    "node --version": { "stdout": "v22.0.0", "exitCode": 0 },
+    "where node": { "stdout": "C:\\nvm4w\\nodejs\\node.exe", "exitCode": 0 },
+    "net session": { "exitCode": 0 },
+    "ver": { "stdout": "Microsoft Windows [Version 10.0.22631]", "exitCode": 0 }
+  }
+}
