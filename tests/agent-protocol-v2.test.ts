@@ -2146,6 +2146,8 @@ describe('worker-on (TASK-090)', () => {
     }, io.io);
 
     expect(code).toBe(0);
+    expect(io.output).toContain('浏览器将打开绑定确认页');
+    expect(io.output).toContain('网页中点一次确认即可完成绑定');
     expect(io.output).toContain('绑定成功');
     expect(requests.some(url => url.includes('/bind/request'))).toBe(true);
     expect(requests.some(url => url.includes('/bind/poll'))).toBe(true);

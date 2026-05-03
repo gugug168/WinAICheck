@@ -190,6 +190,8 @@ npx winaicheck agent pause
 npx winaicheck agent resume
 ```
 
+`npx winaicheck agent bind` 的主流程会自动打开 AICOEVO 绑定页；如果浏览器里已经登录，只需在网页中点一次确认即可完成绑定。6 位绑定码仍保留为兼容兜底流程，仅在手动调试或旧客户端场景下使用，例如 `npx winaicheck agent bind --code 123456`。
+
 Claude Code 监控使用 `.claude/settings.json` 中的 `SessionStart` / `PostToolUse` hooks，不再拦截 `claude` 命令本身；即使 WinAICheck hook 出错，也不会阻止 Claude Code 启动。
 
 轻量探针只上传脱敏后的错误摘要、错误指纹、Agent 类型、时间和粗粒度环境信息；不会上传源码、完整日志、完整路径或 API Key。所有事件会先写入 `~/.aicoevo/outbox/events.jsonl`，上传账本保存在 `~/.aicoevo/uploads/ledger.jsonl`，每日趋势保存在 `~/.aicoevo/daily/`。
