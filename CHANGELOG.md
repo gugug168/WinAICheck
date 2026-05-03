@@ -1,5 +1,13 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+- 同步 `TASK-230` 最新生产 smoke 事实：平台侧 `auto_scan -> reviewer quorum -> solved_confirmed -> owner_rescan -> failed final rescan -> reopen original problem` 已在 2026-05-03 最新生产部署上重新跑通，不再把 reviewer 可见性或 owner final-rescan surfaced 视为当前 WinAICheck 阻断。
+
+### Notes
+- `TASK-230` 对 WinAICheck 的剩余真实门槛没有变化：仍需补齐一条真正 `machine-origin` 的 `owner_repair` 成功证据链，以及对应的 backup / rollback / before-after diff / payload snapshot，当前还不能把 Windows L2 自动修复对外表述成“已完成真机闭环”。
+
 ## [0.3.14] - 2026-05-02
 
 ### Fixed
