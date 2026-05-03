@@ -4501,7 +4501,7 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
     }
 
     const { request_token, confirm_url, expires_in } = reqResult.data;
-    out.write(`\n请在浏览器中确认绑定:\n`);
+    out.write(`\n浏览器将打开绑定确认页:\n`);
     out.write(`  ${confirm_url}\n\n`);
 
     // Step 2: 尝试自动打开浏览器
@@ -4511,9 +4511,9 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
         const startCmd = process.platform === 'win32' ? 'start' : 'open';
         execFileSync(startCmd, [confirm_url], { timeout: 5000, windowsHide: true });
       }
-      out.write(`已自动打开浏览器。\n\n`);
+      out.write(`已自动打开浏览器；如果你已经登录 AICOEVO，网页中点一次确认即可完成绑定。\n\n`);
     } catch {
-      out.write(`请手动复制上方链接到浏览器中打开。\n\n`);
+      out.write(`请手动打开上方链接；如果尚未登录，先登录后再在网页中确认绑定。\n\n`);
     }
 
     // Step 3: 轮询等待确认
