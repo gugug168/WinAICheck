@@ -23,7 +23,7 @@ const scanner: Scanner = {
       };
     }
 
-    const sourceValue = stdout.match(/time\.windows\.com[^\r\n]*|VMIC Provider[^\r\n]*|Free-running System Clock[^\r\n]*|Local CMOS Clock[^\r\n]*/i)?.[0]?.trim() || 'unknown';
+    const sourceValue = stdout.match(/Source:[^\r\n]*|源:[^\r\n]*|time\.windows\.com[^\r\n]*|VMIC Provider[^\r\n]*|Free-running System Clock[^\r\n]*|Local CMOS Clock[^\r\n]*/i)?.[0]?.split(/[:：]/).pop()?.trim() || 'unknown';
     const syncValue = stdout.match(/\d{4}[\/-]\d{1,2}[\/-]\d{1,2}\s+\d{1,2}:\d{2}:\d{2}/)?.[0]?.trim() || 'unknown';
     const untrustedSource = /Free-running System Clock|Local CMOS Clock|unknown/i.test(sourceValue);
     const unsynced = syncValue === 'unknown';

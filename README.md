@@ -178,6 +178,24 @@ Claude Code 监控使用 `.claude/settings.json` 中的 `SessionStart` / `PostTo
 
 轻量探针只上传脱敏后的错误摘要、错误指纹、Agent 类型、时间和粗粒度环境信息；不会上传源码、完整日志、完整路径或 API Key。所有事件会先写入 `~/.aicoevo/outbox/events.jsonl`，上传账本保存在 `~/.aicoevo/uploads/ledger.jsonl`，每日趋势保存在 `~/.aicoevo/daily/`。
 
+### Owner safe auto-repair
+
+Phase 6 的 owner task 现已支持一个受限的 Windows 本地安全自动修复闭环，但只放行 3 个经过测试的 L2 修复类型：
+
+- `powershell-policy`
+- `long-paths`
+- `firewall-ports`
+
+自动修复必须同时满足这些门禁：
+
+- 当前机器就是平台路由到的 owner 目标机器
+- 平台任务 `risk_level` 为 `L2`
+- 用户已授权，或任务处于 `full_auto_limited`
+- 平台声明 `rollback_state=ready`
+- 本地执行后能够形成 before/after 证据并回传平台
+
+不在 allowlist 内的修复项、缺少 consent、缺少 rollback、或更高风险级别任务，都会被 worker 明确阻止，不会静默执行。
+
 ## 诊断覆盖范围
 
 | 类别 | 检查项 | 权重 |

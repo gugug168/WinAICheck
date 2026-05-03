@@ -1,4 +1,4 @@
-import type { Fixer, FixSuggestion, FixResult, ScanResult, BackupData, FixTier, PostFixGuidance } from '../scanners/types';
+﻿import type { Fixer, FixSuggestion, FixResult, ScanResult, BackupData, FixTier, PostFixGuidance } from '../scanners/types';
 import { runCommand, isAdmin, classifyCommandError, commandExists } from '../executor/index';
 import { getScannerById } from '../scanners/registry';
 import { registerFixer as _registerFixer, getFixers as _getFixers, getFixerByScannerId as _getFixerByScannerId } from './registry';
@@ -28,6 +28,45 @@ export type { VerificationStatus } from '../scanners/types';
 function registerFixerLocal(fixer: Fixer): void { _registerFixer(fixer); }
 function getFixersLocal(): Fixer[] { return _getFixers(); }
 function getFixerByScannerIdLocal(scannerId: string): Fixer | undefined { return _getFixerByScannerId(scannerId); }
+
+const OWNER_REPAIR_ALLOWLIST = Object.freeze([
+  'powershell-policy',
+  'long-paths',
+  'firewall-ports',
+]);
+
+function summarizeBackup(backup: BackupData | null | undefined) {
+  const data = backup?.data && typeof backup.data === 'object' ? backup.data : {};
+  return {
+    available: !!backup,
+    ...(backup ? { timestamp: backup.timestamp } : {}),
+    keys: Object.keys(data),
+  };
+}
+
+function withNormalizedRepairMetadata(
+  result: FixResult,
+  options: {
+    backup?: BackupData | null;
+    rollback?: FixResult['rollback'];
+    verification?: FixResult['verification'];
+  } = {},
+): FixResult {
+  return {
+    ...result,
+    backupSummary: result.backupSummary || summarizeBackup(options.backup),
+    rollback: result.rollback || options.rollback || {
+      available: false,
+      attempted: false,
+      result: 'unavailable',
+    },
+    verification: result.verification || options.verification || {
+      status: 'skipped',
+      verified: !!result.verified,
+      message: result.verified ? 'verification completed' : 'verification not run',
+    },
+  };
+}
 
 /** 获取所有需要修复的结果的建议 */
 export function getFixSuggestions(results: ScanResult[]): FixSuggestion[] {
@@ -333,13 +372,23 @@ function shouldDeferVerification(scannerId: string): boolean {
 export async function executeFix(fix: FixSuggestion): Promise<FixResult> {
   const fixer = getFixerByScannerIdLocal(fix.scannerId);
   if (!fixer) {
-    return { success: false, message: `未找到 scanner ${fix.scannerId} 对应的 fixer` };
+    return withNormalizedRepairMetadata(
+      { success: false, message: `未找到 scanner ${fix.scannerId} 对应的 fixer` },
+      {
+        rollback: { available: false, attempted: false, result: 'unavailable' },
+      },
+    );
   }
 
   // Phase 0: Preflight（预检）
   const preflightFail = runPreflight(fix.scannerId);
   if (preflightFail) {
-    return { success: false, message: `前置条件不满足: ${preflightFail}` };
+    return withNormalizedRepairMetadata(
+      { success: false, message: `前置条件不满足: ${preflightFail}` },
+      {
+        rollback: { available: !!fixer.rollback, attempted: false, result: fixer.rollback ? 'not_needed' : 'unavailable' },
+      },
+    );
   }
 
   // Phase 1: Backup
@@ -347,7 +396,12 @@ export async function executeFix(fix: FixSuggestion): Promise<FixResult> {
   try {
     backup = fixer.backup ? await fixer.backup({} as ScanResult) : emptyBackup(fix.scannerId);
   } catch (err) {
-    return { success: false, message: `备份失败: ${err instanceof Error ? err.message : String(err)}` };
+    return withNormalizedRepairMetadata(
+      { success: false, message: `备份失败: ${err instanceof Error ? err.message : String(err)}` },
+      {
+        rollback: { available: !!fixer.rollback, attempted: false, result: fixer.rollback ? 'not_needed' : 'unavailable' },
+      },
+    );
   }
 
   // Phase 2: Execute
@@ -359,20 +413,54 @@ export async function executeFix(fix: FixSuggestion): Promise<FixResult> {
     if (fixer.rollback) {
       try {
         await fixer.rollback(backup);
-        return {
+        return withNormalizedRepairMetadata({
           success: false,
           message: `修复失败，已自动回滚: ${err instanceof Error ? err.message : String(err)}`,
           rolledBack: true,
-        };
+          rollback: {
+            available: true,
+            attempted: true,
+            result: 'success',
+            message: 'rollback completed after execute failure',
+          },
+        }, {
+          backup,
+          rollback: {
+            available: true,
+            attempted: true,
+            result: 'success',
+            message: 'rollback completed after execute failure',
+          },
+        });
       } catch (rollbackErr) {
-        return {
+        return withNormalizedRepairMetadata({
           success: false,
           message: `修复失败，回滚也失败: ${rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr)}`,
           rolledBack: false,
-        };
+          rollback: {
+            available: true,
+            attempted: true,
+            result: 'failed',
+            message: rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr),
+          },
+        }, {
+          backup,
+          rollback: {
+            available: true,
+            attempted: true,
+            result: 'failed',
+            message: rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr),
+          },
+        });
       }
     }
-    return { success: false, message: `修复失败: ${err instanceof Error ? err.message : String(err)}` };
+    return withNormalizedRepairMetadata(
+      { success: false, message: `修复失败: ${err instanceof Error ? err.message : String(err)}` },
+      {
+        backup,
+        rollback: { available: false, attempted: false, result: 'unavailable' },
+      },
+    );
   }
 
   // Execute 失败：标记未验证 + 附加手动指导后返回
@@ -384,7 +472,19 @@ export async function executeFix(fix: FixSuggestion): Promise<FixResult> {
       result.postFixGuidance = guidance;
       result.message += `\n\n手动验证:\n${guidance.verifyCommands.map(c => `  > ${c}`).join('\n')}`;
     }
-    return result;
+    return withNormalizedRepairMetadata(result, {
+      backup,
+      rollback: {
+        available: !!fixer.rollback,
+        attempted: false,
+        result: fixer.rollback ? 'not_needed' : 'unavailable',
+      },
+      verification: {
+        status: 'skipped',
+        verified: false,
+        message: 'execution did not succeed, verification skipped',
+      },
+    });
   }
 
   if (shouldDeferVerification(fix.scannerId)) {
@@ -403,7 +503,20 @@ export async function executeFix(fix: FixSuggestion): Promise<FixResult> {
         result.message += `\n\n${guidanceText}`;
       }
     }
-    return result;
+    return withNormalizedRepairMetadata(result, {
+      backup,
+      rollback: {
+        available: !!fixer.rollback,
+        attempted: false,
+        result: fixer.rollback ? 'not_needed' : 'unavailable',
+      },
+      verification: {
+        status: 'skipped',
+        verified: false,
+        deferred: true,
+        message: 'verification deferred until new terminal or reboot',
+      },
+    });
   }
 
   // Phase 3: Verify（重扫对应 scanner，验证修复是否真正生效）
@@ -417,7 +530,19 @@ export async function executeFix(fix: FixSuggestion): Promise<FixResult> {
       const guidanceText = formatPostFixGuidance(guidance);
       if (guidanceText) result.message += `\n\n${guidanceText}`;
     }
-    return result;
+    return withNormalizedRepairMetadata(result, {
+      backup,
+      rollback: {
+        available: !!fixer.rollback,
+        attempted: false,
+        result: fixer.rollback ? 'not_needed' : 'unavailable',
+      },
+      verification: {
+        status: 'skipped',
+        verified: false,
+        message: 'verification scanner not found',
+      },
+    });
   }
 
   try {
@@ -427,23 +552,49 @@ export async function executeFix(fix: FixSuggestion): Promise<FixResult> {
     if (newScan.status === 'pass') {
       // 验证通过：修复真正生效
       result.verified = true;
+      result.verification = {
+        status: 'pass',
+        verified: true,
+        beforeStatus: 'fail',
+        afterStatus: newScan.status,
+        message: newScan.message,
+      };
     } else if (newScan.status === 'warn') {
       // 部分修复：执行成功但仍有警告
       result.verified = true;
       result.partial = true;
       result.nextSteps = generateNextSteps(fix.scannerId, newScan, fix.tier);
       result.message += `\n\n验证结果: ${newScan.message}${result.nextSteps.length > 0 ? '\n建议操作:\n' + result.nextSteps.map((s, i) => `${i + 1}. ${s}`).join('\n') : ''}`;
+      result.verification = {
+        status: 'warn',
+        verified: true,
+        beforeStatus: 'fail',
+        afterStatus: newScan.status,
+        message: newScan.message,
+      };
     } else {
       // 验证未通过：执行成功但问题仍然存在
       result.verified = true;
       result.success = false;
       result.nextSteps = generateNextSteps(fix.scannerId, newScan, fix.tier);
       result.message = `修复已执行，但验证未通过: ${newScan.message}\n\n可能原因和下一步:\n${result.nextSteps.map((s, i) => `${i + 1}. ${s}`).join('\n')}`;
+      result.verification = {
+        status: 'fail',
+        verified: true,
+        beforeStatus: 'fail',
+        afterStatus: newScan.status,
+        message: newScan.message,
+      };
     }
   } catch {
     // 重扫异常 → 标记为未验证，不覆盖执行结果
     result.verified = false;
     result.message += '\n\n(无法自动验证修复结果，请手动确认)';
+    result.verification = {
+      status: 'skipped',
+      verified: false,
+      message: 'verification scan failed unexpectedly',
+    };
   }
 
   // Phase 4: 修复后指导
@@ -457,7 +608,14 @@ export async function executeFix(fix: FixSuggestion): Promise<FixResult> {
     }
   }
 
-  return result;
+  return withNormalizedRepairMetadata(result, {
+    backup,
+    rollback: {
+      available: !!fixer.rollback,
+      attempted: false,
+      result: fixer.rollback ? 'not_needed' : 'unavailable',
+    },
+  });
 }
 
 /** 空 backup（无需备份的 fixer 使用） */
@@ -502,6 +660,7 @@ export const _testHelpers = {
   escapePowerShellSingleQuotedString,
   buildGitPathFixCommand,
   buildPythonLocatorMessage,
+  ownerRepairAllowlist: [...OWNER_REPAIR_ALLOWLIST],
 };
 
 /** 将失败的命令结果转为带分类的用户友好消息 */
@@ -709,12 +868,13 @@ registerFixerLocal({
     const scanner = getScannerById('env-path-length');
     if (!scanner) return { success: false, message: '未找到 PATH 检测器' };
     const result = await scanner.scan();
-    const hasIssues = result.status === 'fail' || result.status === 'warn';
+    // 只读诊断 fixer：success 表示"操作成功执行"（始终为 true）
+    // message 区分有无问题
     return {
-      success: hasIssues,
+      success: true,
       message: result.detail
         ? `${result.message}\n\n${result.detail}\n\n说明：当前不会自动改 PATH，请先确认哪些条目确实可以删除。`
-        : `${result.message}\n\n说明：当前没有可直接自动修复的 PATH 项。`,
+        : `${result.message}\n\n说明：PATH 无冗余条目，无需手动清理。`,
     };
   },
 });
@@ -864,24 +1024,33 @@ registerFixerLocal({
     };
   },
   async backup(): Promise<BackupData> {
-    // 将旧文件先移到备份目录
+    // backup 阶段只记录当前状态，不做实际文件操作（避免副作用）
     const backupDir = `${process.env.TEMP}\\aicoevo-backup-${Date.now()}`;
-    runCommand(`powershell -Command "New-Item -ItemType Directory -Force -Path '${backupDir}'; Get-ChildItem $env:TEMP | Where-Object {$_.LastWriteTime -lt (Get-Date).AddDays(-7)} | Move-Item -Destination '${backupDir}' -Force"`, 15000);
     return { scannerId: 'temp-space', timestamp: Date.now(), data: { backupDir } };
   },
   async execute(_fix: FixSuggestion, backup: BackupData): Promise<FixResult> {
-    // backup 阶段已移走文件，这里删除备份目录
     const dir = backup.data.backupDir;
-    if (dir) {
-      runCommand(`powershell -Command "Remove-Item -Path '${dir}' -Recurse -Force"`, 15000);
+    // 第一步：将旧文件移到备份目录（保留回滚能力）
+    const moveR = runCommand(
+      `powershell -Command "New-Item -ItemType Directory -Force -Path '${dir}' | Out-Null; Get-ChildItem $env:TEMP | Where-Object {$_.LastWriteTime -lt (Get-Date).AddDays(-7)} | ForEach-Object { try { Move-Item $_.FullName -Destination '${dir}' -Force } catch {} }"`,
+      15000,
+    );
+    if (moveR.exitCode !== 0) {
+      return { success: false, message: commandFailedMessage(moveR, '移动临时文件') };
+    }
+    // 第二步：删除备份目录（释放空间）
+    const delR = runCommand(`powershell -Command "Remove-Item -Path '${dir}' -Recurse -Force"`, 15000);
+    if (delR.exitCode !== 0) {
+      // 删除失败不算严重错误，文件已经移走了，不影响原 TEMP 目录
+      return { success: true, message: '旧临时文件已移出 TEMP 目录（备份目录待手动删除）' };
     }
     return { success: true, message: '旧临时文件已清理' };
   },
   async rollback(backup: BackupData): Promise<void> {
     const dir = backup.data.backupDir;
     if (dir) {
-      // 从备份目录移回 TEMP
-      runCommand(`powershell -Command "Get-ChildItem '${dir}' | Move-Item -Destination $env:TEMP -Force"`, 15000);
+      // 若 execute 失败，将备份目录中的文件移回 TEMP
+      runCommand(`powershell -Command "if (Test-Path '${dir}') { Get-ChildItem '${dir}' | Move-Item -Destination $env:TEMP -Force }"`, 15000);
     }
   },
 });
@@ -1093,7 +1262,7 @@ registerFixerLocal({
       {
         name: 'Bun',
         cmd: 'where.exe bun',
-        install: 'winget install Bun.HBun --accept-package-agreements --accept-source-agreements',
+        install: 'winget install Oven-sh.Bun --accept-package-agreements --accept-source-agreements',
       },
     ];
 
@@ -1423,3 +1592,23 @@ registerFixerLocal({
     }
   },
 });
+
+// 21. shell-encoding-health → chcp 65001
+registerFixerLocal({
+  scannerId: 'shell-encoding-health',
+  getFix(result: ScanResult): FixSuggestion {
+    return {
+      id: 'fix-shell-encoding-health',
+      scannerId: 'shell-encoding-health',
+      tier: 'green',
+      description: '将当前终端编码设置为 UTF-8 (chcp 65001)',
+      commands: ['chcp 65001'],
+      risk: '低风险：仅影响当前终端会话的显示编码',
+    };
+  },
+  async execute(fix: FixSuggestion, _backup: BackupData): Promise<FixResult> {
+    const r = runCommand(fix.commands![0], 5000);
+    return { success: r.exitCode === 0, message: r.exitCode === 0 ? '终端编码已切换为 UTF-8' : commandFailedMessage(r, '切换编码') };
+  },
+});
+

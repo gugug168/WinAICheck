@@ -123,6 +123,28 @@ export interface PreflightCheck {
 /** Verification result states (D-05, VRF-02) */
 export type VerificationStatus = 'pass' | 'warn' | 'fail';
 
+export interface FixBackupSummary {
+  available: boolean;
+  timestamp?: number;
+  keys?: string[];
+}
+
+export interface FixRollbackSummary {
+  available: boolean;
+  attempted: boolean;
+  result: 'not_needed' | 'success' | 'failed' | 'unavailable';
+  message?: string;
+}
+
+export interface FixVerificationSummary {
+  status: VerificationStatus | 'skipped';
+  verified: boolean;
+  deferred?: boolean;
+  beforeStatus?: ScanStatus;
+  afterStatus?: ScanStatus;
+  message?: string;
+}
+
 /** 修复执行结果 */
 export interface FixResult {
   success: boolean;
@@ -137,6 +159,12 @@ export interface FixResult {
   nextSteps?: string[];
   /** 修复后指导：需要用户做的后续操作（重启终端、验证命令等） */
   postFixGuidance?: PostFixGuidance;
+  /** 结构化备份摘要，供 agent / API 证据上报使用 */
+  backupSummary?: FixBackupSummary;
+  /** 结构化回滚结果，供 agent / API 证据上报使用 */
+  rollback?: FixRollbackSummary;
+  /** 结构化验证摘要，供 agent / API 证据上报使用 */
+  verification?: FixVerificationSummary;
 }
 
 /** 修复后指导 */

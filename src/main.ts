@@ -37,7 +37,7 @@ ${APP_NAME} - AI 环境诊断工具 v${VERSION}
 
 选项:
   --cli           纯终端模式（不启动浏览器）
-  --port=PORT     Web UI 端口（默认 3000）
+  --port=PORT     Web UI 端口（默认 16888）
   --json          输出 JSON 报告
   --html          生成 HTML 报告
   --report        同时生成 JSON + HTML 报告
@@ -53,7 +53,7 @@ async function main() {
   if (getConsent() === null) saveConsent(false);
 
   const useCli = args.includes('--cli');
-  const port = parseInt(args.find(a => a.startsWith('--port='))?.split('=')[1] || '3000', 10);
+  const port = parseInt(args.find(a => a.startsWith('--port='))?.split('=')[1] || '16888', 10);
   const wantJson = args.includes('--json') || args.includes('--report');
   const wantHtml = args.includes('--html') || args.includes('--report');
 
@@ -84,7 +84,11 @@ async function cliMode(wantJson: boolean, wantHtml: boolean) {
 
   for (const r of results) {
     console.log(`  ${color[r.status]}${icon[r.status]}\x1b[0m ${r.name}: ${r.message}`);
-    if (r.detail) console.log(`    \x1b[90m${r.detail.split('\n')[0]}\x1b[0m`);
+    if (r.detail) {
+      r.detail.split('\n').forEach(line => {
+        if (line.trim()) console.log(`    \x1b[90m${line}\x1b[0m`);
+      });
+    }
   }
 
   // 报告
@@ -107,7 +111,7 @@ async function cliMode(wantJson: boolean, wantHtml: boolean) {
 
   // 自动上传 stash 到 AICOEVO（失败不影响本地）
   const consent = getConsent();
-  if (consent) {
+  if (consent?.shareData) {
     try {
       const payload = createPayload(results, score);
       const apiBase = getCommunityApiBase();
@@ -145,7 +149,8 @@ async function webMode(port: number) {
             breakdown: [],
           };
           const prev = loadPreviousReport();
-          return new Response(generateWebUI([], initialScore, prev?.score ?? null, true, VERSION), {
+          const prevScoreVal = (prev !== null && prev.score !== undefined) ? prev.score : null;
+          return new Response(generateWebUI([], initialScore, prevScoreVal, true, VERSION), {
             headers: { 'Content-Type': 'text/html; charset=utf-8' },
           });
         }
@@ -282,7 +287,14 @@ async function webMode(port: number) {
       // Stash: 暂存扫描数据到远程 AIECCOEVO 平台，返回 token
       if (url.pathname === '/api/stash' && req.method === 'POST') {
         try {
-          const body = await req.json() as { data?: string; fingerprint?: string };
+          const body = await req.json() as { data?: string; fingerprint?: string; score?: number };
+          // 如果前端没传 top-level score，尝试从 data 中提取
+          if (body.score === undefined && body.data) {
+            try {
+              const d = JSON.parse(body.data);
+              if (d.score !== undefined) body.score = Number(d.score);
+            } catch {}
+          }
           const remote = await requestRemoteJson(`${communityApiBase}/problem-briefs/scan-intake`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
@@ -318,7 +330,7 @@ async function webMode(port: number) {
           const remote = await requestRemoteJson(`${communityApiBase}/feedback`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-            body: JSON.stringify(body),
+            body,
           });
           return Response.json(remote.data, { status: remote.status });
         } catch (e: any) {
@@ -434,6 +446,15 @@ async function webMode(port: number) {
   console.log(`  浏览器访问: \x1b[36mhttp://localhost:${port}\x1b[0m\n`);
 
   try { execSync(`start http://localhost:${port}`, { windowsHide: true, timeout: 3000 }); } catch {}
+
+  process.on('SIGINT', () => {
+    console.log('\n  正在关闭服务...');
+    process.exit(0);
+  });
+  process.on('SIGTERM', () => {
+    console.log('\n  服务已停止');
+    process.exit(0);
+  });
 
   await new Promise(() => {});
 }

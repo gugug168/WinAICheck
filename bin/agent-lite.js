@@ -40,10 +40,10 @@ const SENSITIVE_PATTERNS = [
   { regex: /npm_[A-Za-z0-9]{30,}/g, replacement: '<NPM_TOKEN>' },
   { regex: /AKIA[0-9A-Z]{16}/g, replacement: '<AWS_ACCESS_KEY>' },
   { regex: /-----BEGIN\s+(?:RSA\s+|EC\s+|DSA\s+|OPENSSH\s+)?PRIVATE\s+KEY-----[\s\S]*?-----END\s+(?:RSA\s+|EC\s+|DSA\s+|OPENSSH\s+)?PRIVATE\s+KEY-----/g, replacement: '<PRIVATE_KEY>' },
-  { regex: /https:\/\/[^@\s]+:[^@\s]+@/g, replacement: 'https://<BASIC_AUTH>@' },
-  { regex: /http:\/\/[^@\s]+:[^@\s]+@/g, replacement: 'http://<BASIC_AUTH>@' },
+  { regex: /https?:\/\/[^@\s]+:[^@\s]+@/g, replacement: 'http://<BASIC_AUTH>@' },
   { regex: /(?:mongodb|postgres|postgresql|mysql|redis|amqp):\/\/[^\s"',;)}\]]{10,}/gi, replacement: '<DATABASE_URL>' },
-  { regex: /C:\\Users\\([^\\\/\s]+)/gi, replacement: 'C:\\Users\\<USER>' },
+  { regex: /[a-zA-Z]:\\Users\\[^\\]+?(?=\\|[\r\n]|$)/gi, replacement: 'C:\\Users\\<USER>' },
+  { regex: /\/Users\/[^\/]+?(?=\/|[\r\n]|$)/gi, replacement: '/Users/<USER>' },
   { regex: /\b(\d{1,3}\.){3}\d{1,3}\b/g, replacement: '<IP>' },
   { regex: /[\w.-]+@[\w.-]+\.\w+/g, replacement: '<EMAIL>' },
   { regex: /(?:OPENAI|ANTHROPIC|OPENROUTER|OPENCLAW|DASHSCOPE|ZHIPU|MOONSHOT|GEMINI)[\w-]*(?:KEY|TOKEN)?\s*=\s*[^\s]+/gi, replacement: '<SECRET_ENV>' },
@@ -84,6 +84,7 @@ function paths(deps = {}) {
     postToolHookJs: path.join(base, 'agent', 'winaicheck-post-tool.cjs'),
     workerState: path.join(base, 'worker-state.json'),
     workerLock: path.join(base, 'worker.lock'),
+    draftOrganizerState: path.join(base, 'draft-organizer-state.json'),
   };
 }
 
@@ -555,12 +556,36 @@ function loadConfig(deps = {}) {
     try { const raw = JSON.parse(fs.readFileSync(p.config, 'utf8')); oldIds = { clientId: raw.clientId, deviceId: raw.deviceId }; } catch { /* corrupt */ }
   }
   const config = readJson(p.config, {});
+  config.profileId = String(config.profileId || config.profile_id || '').trim() || null;
   if (!config.clientId) config.clientId = `client_${crypto.randomUUID()}`;
   if (!config.deviceId) config.deviceId = `device_${crypto.randomUUID()}`;
   if (config.shareData === undefined) config.shareData = false;
   if (config.autoSync === undefined) config.autoSync = false;
   if (config.paused === undefined) config.paused = false;
   if (config.workerEnabled === undefined) config.workerEnabled = true;
+  if (config.draftOrganizerEnabled === undefined) config.draftOrganizerEnabled = true;
+  if (!['off', 'dry_run', 'apply'].includes(String(config.draftOrganizerMode || ''))) {
+    config.draftOrganizerMode = 'apply';
+  }
+  if (!['manual_only', 'scheduled_only', 'hybrid'].includes(String(config.draftOrganizerTriggerMode || ''))) {
+    config.draftOrganizerTriggerMode = 'hybrid';
+  }
+  const draftScheduleDays = Number(config.draftOrganizerScheduleDays);
+  config.draftOrganizerScheduleDays = [7, 14].includes(draftScheduleDays) ? draftScheduleDays : 7;
+  const draftDeleteAfterDays = Number(config.draftOrganizerDeleteAfterDays);
+  config.draftOrganizerDeleteAfterDays = Number.isFinite(draftDeleteAfterDays) && draftDeleteAfterDays > 0
+    ? draftDeleteAfterDays
+    : 7;
+  const draftSweepIntervalMs = Number(config.draftOrganizerSweepCheckIntervalMs);
+  config.draftOrganizerSweepCheckIntervalMs =
+    Number.isFinite(draftSweepIntervalMs) && draftSweepIntervalMs > 0
+      ? draftSweepIntervalMs
+      : 15 * 60 * 1000;
+  const draftMaxPerCycle = Number(config.draftOrganizerMaxPerCycle);
+  config.draftOrganizerMaxPerCycle =
+    Number.isFinite(draftMaxPerCycle) && draftMaxPerCycle > 0
+      ? Math.min(Math.max(1, Math.trunc(draftMaxPerCycle)), 50)
+      : 10;
   if (!config.strategy || !STRATEGY_PRESETS[config.strategy]) config.strategy = DEFAULT_STRATEGY;
   if (!config.analysis || typeof config.analysis !== 'object') config.analysis = {};
   if (config.analysis.layer3Enabled === undefined) config.analysis.layer3Enabled = false;
@@ -1128,9 +1153,6 @@ function serverExecutionDecision(item = {}, phase = 'owner_verification') {
   if (payload && typeof payload === 'object') {
     const decision = String(payload.decision || '').trim();
     if (decision) {
-      const targetRoute = payload.target_route && typeof payload.target_route === 'object'
-        ? payload.target_route
-        : {};
       return {
         phase: String(payload.phase || phase).trim() || phase,
         decision,
@@ -1138,7 +1160,9 @@ function serverExecutionDecision(item = {}, phase = 'owner_verification') {
           ? payload.reason_codes.map(value => String(value || '').trim()).filter(Boolean)
           : [],
         current_profile_is_target: normalizeExecutionTargetFlag(payload.current_profile_is_target),
-        target_route: targetRoute,
+        target_route: payload.target_route && typeof payload.target_route === 'object'
+          ? payload.target_route
+          : {},
       };
     }
   }
@@ -1155,18 +1179,45 @@ function serverAutomationReady(item = {}, phase = 'owner_verification') {
   return serverExecutionDecision(item, phase).decision === 'auto_validate';
 }
 
+async function prepareOwnerValidationTask(headers, answerId, deps = {}) {
+  return requestJson(`${agentApiBase('v2')}/owner-validation-tasks/prepare`, {
+    method: 'POST',
+    headers,
+    body: { answer_id: answerId },
+  }, deps);
+}
+
+function ownerValidationGateDetails(payload) {
+  const data = payload && typeof payload === 'object' ? payload : {};
+  const prepareState = data.prepare_state && typeof data.prepare_state === 'object'
+    ? data.prepare_state
+    : {};
+  const userAuthorizationGate = data.user_authorization_gate && typeof data.user_authorization_gate === 'object'
+    ? data.user_authorization_gate
+    : {};
+  const webConfirmation = data.web_confirmation && typeof data.web_confirmation === 'object'
+    ? data.web_confirmation
+    : {};
+  return {
+    prepared: data.prepared === true || prepareState.prepared === true,
+    prepared_action: String(data.prepared_action || prepareState.prepared_action || '').trim(),
+    prepare_state: prepareState,
+    user_authorization_gate: userAuthorizationGate,
+    web_confirmation: webConfirmation,
+  };
+}
+
 function shouldPromptCurrentMachine(decision) {
   return decision.phase === 'owner_verification' && decision.current_profile_is_target !== false;
 }
 
 function formatExecutionRoute(decision) {
   const route = decision.target_route || {};
-  const parts = [
+  return [
     route.profile_id ? `profile=${String(route.profile_id)}` : '',
     route.device_id ? `device=${String(route.device_id)}` : '',
     route.agent_type ? `agent=${String(route.agent_type)}` : '',
-  ].filter(Boolean);
-  return parts.join(' / ');
+  ].filter(Boolean).join(' / ');
 }
 
 function requiresStrictSubmissionAutoContract(item = {}) {
@@ -1252,7 +1303,7 @@ function resolveValidationProjectCandidate(toolContext = {}) {
 }
 
 function normalizeDeviceBaseId(value) {
-  return String(value || '').replace(/_(cc|oc)$/i, '');
+  return String(value || '').trim().replace(/_(?:cc|oc)$/i, '');
 }
 
 function resolveValidationWorkdir(item = {}, deps = {}) {
@@ -1482,6 +1533,219 @@ function runOwnerValidationCommand(command, deps = {}, cwd = '') {
   }
 }
 
+const OWNER_REPAIR_ALLOWLIST = new Set([
+  'powershell-policy',
+  'long-paths',
+  'firewall-ports',
+]);
+
+function ownerRepairExecutionTask(item = {}) {
+  const task = item.execution_task;
+  return task && typeof task === 'object' ? task : {};
+}
+
+function isOwnerRepairTask(item = {}) {
+  return String(ownerRepairExecutionTask(item).kind || '').trim() === 'owner_repair';
+}
+
+function ownerRepairScannerId(item = {}) {
+  return String(
+    ownerRepairExecutionTask(item).scanner_id
+    || item.scanner_id
+    || item.scannerId
+    || ''
+  ).trim();
+}
+
+function ownerRepairConsentGranted(item = {}) {
+  const consentState = String(item.consent_state || '').trim().toLowerCase();
+  const automationMode = String(item.automation_mode || '').trim();
+  return consentState === 'granted' || automationMode === 'full_auto_limited';
+}
+
+function ownerRepairRollbackReady(item = {}) {
+  return String(item.rollback_state || '').trim() === 'ready';
+}
+
+function ownerRepairRiskAllowed(item = {}) {
+  return String(item.risk_level || '').trim() === 'L2';
+}
+
+function ownerRepairGate(item = {}, decision = {}) {
+  const scannerId = ownerRepairScannerId(item);
+  if (!scannerId || !OWNER_REPAIR_ALLOWLIST.has(scannerId)) {
+    return { ok: false, reason: `owner repair blocked: scanner ${scannerId || 'unknown'} not allowlisted` };
+  }
+  if (!ownerRepairRiskAllowed(item)) {
+    return { ok: false, reason: `owner repair blocked: risk level ${String(item.risk_level || 'unknown')} is not L2` };
+  }
+  if (!ownerRepairConsentGranted(item)) {
+    return { ok: false, reason: 'owner repair blocked: consent required' };
+  }
+  if (!ownerRepairRollbackReady(item)) {
+    return { ok: false, reason: 'owner repair blocked: rollback unavailable' };
+  }
+  if (decision.current_profile_is_target === false) {
+    return { ok: false, reason: 'owner repair blocked: current machine is not target' };
+  }
+  return { ok: true, scannerId };
+}
+
+function runOwnerRepairCommand(command, deps = {}, cwd = '') {
+  return runOwnerValidationCommand(command, deps, cwd);
+}
+
+function ownerRepairDefinition(scannerId) {
+  if (scannerId === 'powershell-policy') {
+    return {
+      backupCommand: 'powershell -Command "Get-ExecutionPolicy -Scope CurrentUser"',
+      executeCommands: ['powershell -Command "Set-ExecutionPolicy RemoteSigned -Scope CurrentUser -Force"'],
+      rollbackCommand: backup => `powershell -Command "Set-ExecutionPolicy ${String(backup?.old_policy || 'Restricted')} -Scope CurrentUser -Force"`,
+      scan: deps => {
+        const res = runOwnerRepairCommand('powershell -Command "Get-ExecutionPolicy -Scope CurrentUser"', deps);
+        const policy = String(res.stdout || '').trim();
+        if (!res.ok || !policy) return { status: 'unknown', message: '无法获取 PowerShell 执行策略', detail: res.stderr || '' };
+        if (['Restricted', 'AllSigned'].includes(policy)) return { status: 'fail', message: `PowerShell 执行策略为 ${policy}`, detail: policy };
+        if (['RemoteSigned', 'Unrestricted', 'Bypass'].includes(policy)) return { status: 'pass', message: `PowerShell 执行策略正常 (${policy})`, detail: policy };
+        return { status: 'warn', message: `PowerShell 执行策略: ${policy}`, detail: policy };
+      },
+      backup: deps => {
+        const res = runOwnerRepairCommand('powershell -Command "Get-ExecutionPolicy -Scope CurrentUser"', deps);
+        return { old_policy: String(res.stdout || '').trim() || 'Restricted' };
+      },
+    };
+  }
+  if (scannerId === 'long-paths') {
+    return {
+      backupCommand: 'reg query "HKLM\\SYSTEM\\CurrentControlSet\\Control\\FileSystem" /v LongPathsEnabled',
+      executeCommands: ['reg add "HKLM\\SYSTEM\\CurrentControlSet\\Control\\FileSystem" /v LongPathsEnabled /t REG_DWORD /d 1 /f'],
+      rollbackCommand: backup => `reg add "HKLM\\SYSTEM\\CurrentControlSet\\Control\\FileSystem" /v LongPathsEnabled /t REG_DWORD /d ${String(backup?.long_paths_enabled || '0')} /f`,
+      scan: deps => {
+        const res = runOwnerRepairCommand('reg query "HKLM\\SYSTEM\\CurrentControlSet\\Control\\FileSystem" /v LongPathsEnabled', deps);
+        const output = `${res.stdout}\n${res.stderr}`;
+        if (!res.ok && !output.trim()) return { status: 'unknown', message: '无法读取长路径注册表', detail: '' };
+        if (/LongPathsEnabled\s+REG_DWORD\s+0x1/i.test(output)) return { status: 'pass', message: 'Windows 长路径支持已启用', detail: 'LongPathsEnabled=1' };
+        if (/LongPathsEnabled\s+REG_DWORD\s+0x0/i.test(output)) return { status: 'fail', message: 'Windows 长路径支持未启用', detail: 'LongPathsEnabled=0' };
+        return { status: 'warn', message: '无法确认长路径状态', detail: trimOwnerValidationDigest(output) };
+      },
+      backup: deps => {
+        const res = runOwnerRepairCommand('reg query "HKLM\\SYSTEM\\CurrentControlSet\\Control\\FileSystem" /v LongPathsEnabled', deps);
+        const output = `${res.stdout}\n${res.stderr}`;
+        return { long_paths_enabled: /LongPathsEnabled\s+REG_DWORD\s+0x1/i.test(output) ? '1' : '0' };
+      },
+    };
+  }
+  if (scannerId === 'firewall-ports') {
+    const ruleNames = ['Gradio', 'Jupyter', 'Ollama'];
+    return {
+      backupCommand: 'netsh advfirewall firewall show rule name=all verbose',
+      executeCommands: [
+        'netsh advfirewall firewall add rule name="Gradio" dir=in action=allow protocol=TCP localport=7860',
+        'netsh advfirewall firewall add rule name="Jupyter" dir=in action=allow protocol=TCP localport=8888',
+        'netsh advfirewall firewall add rule name="Ollama" dir=in action=allow protocol=TCP localport=11434',
+      ],
+      rollbackCommand: () => ruleNames.map(rule => `netsh advfirewall firewall delete rule name="${rule}"`).join(' && '),
+      scan: deps => {
+        const res = runOwnerRepairCommand('netsh advfirewall firewall show rule name=all verbose', deps);
+        const output = `${res.stdout}\n${res.stderr}`;
+        if (!res.ok && !output.trim()) return { status: 'unknown', message: '无法读取防火墙规则', detail: '' };
+        const present = ruleNames.filter(rule => output.includes(rule));
+        if (present.length === ruleNames.length) return { status: 'pass', message: 'AI 常用端口防火墙配置正常', detail: present.join(', ') };
+        if (present.length > 0) return { status: 'warn', message: '部分 AI 常用端口已放行', detail: present.join(', ') };
+        return { status: 'fail', message: '未发现 AI 常用端口放行规则', detail: '' };
+      },
+      backup: () => ({ rules: ruleNames.join(',') }),
+    };
+  }
+  return null;
+}
+
+async function executeOwnerRepair(params = {}, deps = {}) {
+  const scannerId = String(params.executionTask?.scanner_id || params.scannerId || '').trim();
+  const definition = ownerRepairDefinition(scannerId);
+  if (!definition) {
+    return {
+      ok: false,
+      result: 'failed',
+      scannerId,
+      summary: `owner repair not implemented for ${scannerId || 'unknown'}`,
+      commandsRun: [],
+      stdout: '',
+      stderr: '',
+      beforeScan: null,
+      afterScan: null,
+      diffSummary: '',
+      backup: null,
+      rollback: { attempted: false, result: 'unavailable' },
+    };
+  }
+
+  const beforeScan = definition.scan(deps);
+  const backupData = definition.backup(deps);
+  const backupTimestamp = nowIso(deps);
+  const backup = {
+    backup_id: shortHash(`${scannerId}:${backupTimestamp}:${JSON.stringify(backupData)}`),
+    timestamp: backupTimestamp,
+    data: backupData,
+  };
+
+  const executionLogs = [];
+  let stdout = '';
+  let stderr = '';
+  for (const command of definition.executeCommands) {
+    const result = runOwnerRepairCommand(command, deps, params.suggestedProjectDir || '');
+    executionLogs.push(command);
+    if (result.stdout) stdout += `${stdout ? '\n' : ''}${result.stdout}`;
+    if (result.stderr) stderr += `${stderr ? '\n' : ''}${result.stderr}`;
+    if (!result.ok) {
+      let rollback = { attempted: false, result: 'unavailable' };
+      const rollbackCommand = typeof definition.rollbackCommand === 'function' ? definition.rollbackCommand(backupData) : '';
+      if (rollbackCommand) {
+        const rollbackResult = runOwnerRepairCommand(rollbackCommand, deps, params.suggestedProjectDir || '');
+        rollback = {
+          attempted: true,
+          result: rollbackResult.ok ? 'success' : 'failed',
+          ...(rollbackResult.stderr ? { message: rollbackResult.stderr } : {}),
+        };
+        if (rollbackResult.stdout) stdout += `${stdout ? '\n' : ''}${rollbackResult.stdout}`;
+        if (rollbackResult.stderr) stderr += `${stderr ? '\n' : ''}${rollbackResult.stderr}`;
+      }
+      const afterFailureScan = definition.scan(deps);
+      return {
+        ok: false,
+        result: 'failed',
+        scannerId,
+        summary: `owner repair failed via ${command}`,
+        commandsRun: executionLogs,
+        stdout: trimOwnerValidationDigest(stdout),
+        stderr: trimOwnerValidationDigest(stderr || `command failed: ${command}`),
+        beforeScan,
+        afterScan: afterFailureScan,
+        diffSummary: `${beforeScan?.status || 'unknown'} -> ${afterFailureScan?.status || 'unknown'}`,
+        backup,
+        rollback,
+      };
+    }
+  }
+
+  const afterScan = definition.scan(deps);
+  const resultValue = afterScan.status === 'pass' ? 'success' : afterScan.status === 'warn' ? 'partial' : 'failed';
+  return {
+    ok: resultValue !== 'failed',
+    result: resultValue,
+    scannerId,
+    summary: `owner repair ${resultValue} for ${scannerId}`,
+    commandsRun: executionLogs,
+    stdout: trimOwnerValidationDigest(stdout),
+    stderr: trimOwnerValidationDigest(stderr),
+    beforeScan,
+    afterScan,
+    diffSummary: `${beforeScan?.status || 'unknown'} -> ${afterScan?.status || 'unknown'}`,
+    backup,
+    rollback: { attempted: false, result: 'not_needed' },
+  };
+}
+
 async function submitOwnerVerification(params, deps = {}) {
   const submittedAt = nowIso(deps);
   const suggestedProjectDir = String(params.guideRecord.snapshot?.suggestedProjectDir || '').trim();
@@ -1495,7 +1759,11 @@ async function submitOwnerVerification(params, deps = {}) {
       ...ownerVerifyLocalContext(params.config),
       ...(suggestedProjectDir ? { project_dir: suggestedProjectDir } : {}),
     },
+    ...(params.afterContext && typeof params.afterContext === 'object' ? params.afterContext : {}),
   };
+  const beforeContext = params.proofBeforeContext && typeof params.proofBeforeContext === 'object'
+    ? params.proofBeforeContext
+    : (params.guideRecord.snapshot || {});
   return requestJson(`${agentApiBase('v2')}/bounties/${params.bountyId}/owner-verify`, {
     method: 'POST',
     headers: params.headers,
@@ -1509,14 +1777,14 @@ async function submitOwnerVerification(params, deps = {}) {
         steps: [
           `读取本地指南: ${params.guideRecord.guideMd}`,
           params.commandsRun.length
-            ? `本地执行验证命令: ${params.commandsRun.join(' ; ')}`
+            ? `${params.ownerRepairMode ? '本地执行修复/验证命令' : '本地执行验证命令'}: ${params.commandsRun.join(' ; ')}`
             : '按本地指南手动确认问题是否消失。',
           `确认模式: ${params.confirmationMode}`,
           `用户确认结果: ${params.resultValue}`,
         ],
-        before_context: params.guideRecord.snapshot || {},
+        before_context: beforeContext,
         after_context: afterContext,
-        validation_cmd: params.commandsRun[0] || '',
+        validation_cmd: params.validationCmd || params.commandsRun[0] || '',
         expected_output:
           params.expectedOutput
           || (params.resultValue === 'success'
@@ -1531,6 +1799,7 @@ async function submitOwnerVerification(params, deps = {}) {
         owner_reproduction_guide_sha256: params.guideRecord.guideSha256,
         owner_reproduction_snapshot_generated_at: params.guideRecord.snapshot?.generatedAt || '',
         ...(suggestedProjectDir ? { owner_reproduction_project_dir: suggestedProjectDir } : {}),
+        ...(params.ownerRepairMode ? { owner_repair_mode: true } : {}),
         ...(params.artifacts || {}),
       },
       stdout_digest: params.stdoutDigest || '',
@@ -1634,23 +1903,99 @@ async function processPendingOwnerVerifications(headers, config, deps = {}, io =
     const answerId = String(item?.answer_id || '').trim();
     if (!bountyId || !answerId) { skipped++; continue; }
     const guideRecord = writeOwnerVerifyGuide(item, config, deps);
-    const localAutomation = buildValidationAutomationAssessment(item, deps);
     const serverDecision = serverExecutionDecision(item, 'owner_verification');
     const promptCurrentMachine = shouldPromptCurrentMachine(serverDecision);
     const routeLabel = formatExecutionRoute(serverDecision);
     if (serverDecision.decision === 'ask_user_run') {
       if (promptCurrentMachine) {
-        out.write(
-          `[Worker] owner-prompt 待人工确认 ${bountyId}/${answerId}: ${guideRecord.guideMd}\n`,
-        );
+        out.write(`[Worker] owner-prompt 待人工确认 ${bountyId}/${answerId}: ${guideRecord.guideMd}\n`);
       } else {
-        out.write(
-          `[Worker] owner-auto 跳过 ${bountyId}/${answerId}: 已路由回原机器${routeLabel ? ` (${routeLabel})` : ''}\n`,
-        );
+        out.write(`[Worker] owner-auto 跳过 ${bountyId}/${answerId}: 已路由回原机器${routeLabel ? ` (${routeLabel})` : ''}\n`);
       }
       skipped++;
       continue;
     }
+    if (isOwnerRepairTask(item)) {
+      const repairGate = ownerRepairGate(item, serverDecision);
+      if (!repairGate.ok) {
+        out.write(`[Worker] owner repair 跳过 ${bountyId}/${answerId}: ${repairGate.reason}\n`);
+        skipped++;
+        continue;
+      }
+      if (!serverAutomationReady(item, 'owner_verification')) {
+        out.write(`[Worker] owner repair 跳过 ${bountyId}/${answerId}: 平台已标记为 manual-only\n`);
+        skipped++;
+        continue;
+      }
+      const prepareResult = await prepareOwnerValidationTask(headers, answerId, deps);
+      if (prepareResult.status !== 200) {
+        out.write(`[Worker] owner repair 跳过 ${bountyId}/${answerId}: 平台 prepare 失败 (${prepareResult.status})\n`);
+        skipped++;
+        continue;
+      }
+      const prepareGate = ownerValidationGateDetails(prepareResult.data);
+      if (!prepareGate.prepared) {
+        out.write(`[Worker] owner repair 跳过 ${bountyId}/${answerId}: 平台未放行自动执行\n`);
+        skipped++;
+        continue;
+      }
+      const suggestedProjectDir = String(guideRecord.snapshot?.suggestedProjectDir || '').trim();
+      const executeOwnerRepairImpl = typeof deps.executeOwnerRepairImpl === 'function'
+        ? deps.executeOwnerRepairImpl
+        : executeOwnerRepair;
+      const repairResult = await executeOwnerRepairImpl({
+        item,
+        executionTask: ownerRepairExecutionTask(item),
+        scannerId: repairGate.scannerId,
+        suggestedProjectDir,
+      }, deps);
+      const submitResult = await submitOwnerVerification({
+        bountyId,
+        answerId,
+        resultValue: repairResult.result || (repairResult.ok ? 'success' : 'failed'),
+        notes: repairResult.summary || `owner repair ${repairResult.ok ? 'completed' : 'failed'}`,
+        commandsRun: Array.isArray(repairResult.commandsRun) ? repairResult.commandsRun : [],
+        guideRecord,
+        config,
+        headers,
+        confirmationMode: 'worker_owner_repair_auto',
+        expectedOutput: String(item?.expected_output || ''),
+        validationCmd: ownerRepairExecutionTask(item).scanner_id || '',
+        stdoutDigest: String(repairResult.stdout || ''),
+        stderrDigest: String(repairResult.stderr || ''),
+        ownerRepairMode: true,
+        proofBeforeContext: {
+          ...(guideRecord.snapshot || {}),
+          scanner_id: repairResult.scannerId || repairGate.scannerId,
+          before_scan: repairResult.beforeScan || null,
+        },
+        afterContext: {
+          owner_repair_mode: true,
+          owner_repair_scanner_id: repairResult.scannerId || repairGate.scannerId,
+          before_scan: repairResult.beforeScan || null,
+          after_scan: repairResult.afterScan || null,
+          diff_summary: repairResult.diffSummary || '',
+          backup: repairResult.backup || null,
+          rollback: repairResult.rollback || null,
+        },
+        artifacts: {
+          owner_auto_mode: true,
+          owner_repair_mode: true,
+          owner_repair_scanner_id: repairResult.scannerId || repairGate.scannerId,
+          owner_repair_backup_id: repairResult.backup?.backup_id || '',
+          owner_repair_rollback_result: repairResult.rollback?.result || '',
+        },
+      }, deps);
+      if (submitResult.status !== 200) {
+        out.write(`[Worker] owner repair 提交失败 ${bountyId}/${answerId}: ${submitResult.status}\n`);
+        skipped++;
+        continue;
+      }
+      out.write(`[Worker] owner repair 已提交 ${bountyId}/${answerId}: ${repairResult.result || (repairResult.ok ? 'success' : 'failed')}\n`);
+      verified++;
+      continue;
+    }
+    const localAutomation = buildValidationAutomationAssessment(item, deps);
     if (!localAutomation.selected_command) {
       const message = promptCurrentMachine
         ? `owner-prompt 待人工确认 ${bountyId}/${answerId}: 无可自动执行的验证命令，请查看 ${guideRecord.guideMd}`
@@ -1669,6 +2014,22 @@ async function processPendingOwnerVerifications(headers, config, deps = {}, io =
         ? `owner-prompt 待人工确认 ${bountyId}/${answerId}: 本地未匹配到可自动执行的项目目录，请查看 ${guideRecord.guideMd}`
         : `owner-auto 跳过 ${bountyId}/${answerId}: 本地未匹配到可自动执行的项目目录`;
       out.write(`[Worker] ${message}\n`);
+      skipped++;
+      continue;
+    }
+    const prepareResult = await prepareOwnerValidationTask(headers, answerId, deps);
+    if (prepareResult.status !== 200) {
+      out.write(`[Worker] owner-auto 跳过 ${bountyId}/${answerId}: 平台 prepare 失败 (${prepareResult.status})\n`);
+      skipped++;
+      continue;
+    }
+    const prepareGate = ownerValidationGateDetails(prepareResult.data);
+    if (!prepareGate.prepared) {
+      if (prepareGate.prepared_action === 'confirm_on_web_then_run') {
+        out.write(`[Worker] owner-auto 跳过 ${bountyId}/${answerId}: 需要先在网站确认后再运行，请先到 AICOEVO 网站确认并查看 ${guideRecord.guideMd}\n`);
+      } else {
+        out.write(`[Worker] owner-auto 跳过 ${bountyId}/${answerId}: 平台未放行自动执行，请按指南人工确认 ${guideRecord.guideMd}\n`);
+      }
       skipped++;
       continue;
     }
@@ -1791,6 +2152,7 @@ function printHelp(io = {}) {
     `  winaicheck agent disable                           — 彻底禁用 Worker 互助循环\n` +
     `  winaicheck agent worker-enable                    — 重新启用 Worker 互助循环\n` +
     `  winaicheck agent worker start|stop|status         — Worker 后台循环控制\n` +
+    `  winaicheck agent draft-organizer status|run-once|enable|disable\n` +
     `  winaicheck agent loop start|stop|status|run-once\n` +
     `  winaicheck agent strategy get|set <balanced|harden|repair-only|innovate>\n` +
     `  winaicheck agent summary --date today\n` +
@@ -3017,6 +3379,249 @@ function loopStatus(deps = {}) {
   };
 }
 
+function defaultDraftOrganizerState() {
+  return {
+    schemaVersion: 1,
+    lastDraftSweepAt: null,
+    lastRunAt: null,
+    lastRunTrigger: null,
+    lastBatchIds: [],
+    lastResult: null,
+    consecutiveErrors: 0,
+    lastError: null,
+  };
+}
+
+function loadDraftOrganizerState(deps = {}) {
+  return readJson(paths(deps).draftOrganizerState, defaultDraftOrganizerState());
+}
+
+function saveDraftOrganizerState(state, deps = {}) {
+  writeJson(paths(deps).draftOrganizerState, state);
+}
+
+function draftOrganizerOutboxEvents(draft, deps = {}) {
+  const source = draft?.source_data || {};
+  const wantedAgent = normalizeAgent(source.origin_agent_type || '');
+  const wantedDevice = normalizeDeviceBaseId(source.origin_device_id || '');
+  const rows = readJsonl(paths(deps).outbox, 200);
+  return rows.filter(event => {
+    const eventAgent = normalizeAgent(event?.agent || '');
+    const eventDevice = normalizeDeviceBaseId(event?.deviceId || '');
+    if (wantedAgent && wantedAgent !== 'custom' && eventAgent !== wantedAgent) return false;
+    if (wantedDevice && eventDevice !== wantedDevice) return false;
+    return true;
+  }).slice(-20);
+}
+
+function countMatchingOutboxFingerprints(draft, deps = {}) {
+  return draftOrganizerOutboxEvents(draft, deps).length;
+}
+
+function collectGroupedFingerprints(draft, deps = {}) {
+  const events = draftOrganizerOutboxEvents(draft, deps);
+  return unique(
+    events
+      .map(event => String(event?.fingerprint || '').trim())
+      .filter(Boolean)
+  ).slice(0, 20);
+}
+
+function collectRecentCommands(draft, deps = {}) {
+  const events = draftOrganizerOutboxEvents(draft, deps);
+  return unique(
+    events
+      .map(event => event?.toolContext?.command || event?.toolContext?.original || '')
+      .map(value => String(value || '').trim())
+      .filter(Boolean)
+  ).slice(0, 20);
+}
+
+function buildEnvironmentFingerprint(config, deps = {}) {
+  const ctx = localContext();
+  return {
+    os: ctx.os,
+    shell: ctx.shell || '',
+    node: ctx.node,
+    client_id: config.clientId || '',
+    device_id: config.deviceId || '',
+    profile_id: config.profileId || '',
+    captured_at: nowIso(deps),
+  };
+}
+
+function buildDraftOrganizerSummary(draft, deps = {}) {
+  const events = draftOrganizerOutboxEvents(draft, deps).slice(-3);
+  const snippets = events
+    .map(event => String(event?.sanitizedMessage || '').split(/\r?\n/)[0].trim())
+    .filter(Boolean)
+    .slice(-2);
+  const lines = [
+    `草稿标题: ${draft?.title || '未命名草稿'}`,
+    `来源 AI: ${draft?.source_data?.origin_agent_type || 'unknown'}`,
+    `本地关联事件数: ${events.length}`,
+  ];
+  if (snippets.length > 0) {
+    lines.push(`最近现象: ${snippets.join(' | ')}`);
+  }
+  let summary = lines.join('；');
+  if (summary.length < 20) summary = `${summary}；等待 AI 进一步整理补全。`;
+  if (summary.length > 3000) summary = `${summary.slice(0, 2997)}...`;
+  return summary;
+}
+
+function draftOrganizerFailure(reason, state, deps = {}, io = {}) {
+  const nextState = {
+    ...state,
+    lastRunAt: nowIso(deps),
+    lastResult: { ok: false, reason },
+    consecutiveErrors: (state.consecutiveErrors || 0) + 1,
+    lastError: reason,
+  };
+  saveDraftOrganizerState(nextState, deps);
+  const err = io.stderr || process.stderr;
+  err.write(`[DraftOrganizer] ${reason}\n`);
+  return { ok: false, reason, state: nextState };
+}
+
+function draftOrganizerTriggerAllowed(triggerMode, batchTrigger) {
+  const mode = String(triggerMode || 'hybrid');
+  const trigger = String(batchTrigger || 'manual') === 'scheduled' ? 'scheduled' : 'manual';
+  if (mode === 'manual_only') return trigger === 'manual';
+  if (mode === 'scheduled_only') return trigger === 'scheduled';
+  return true;
+}
+
+async function runDraftOrganizerOnce(deps = {}, io = {}) {
+  const config = loadConfig(deps);
+  const state = loadDraftOrganizerState(deps);
+  const out = io.stdout || process.stdout;
+
+  if (!config.draftOrganizerEnabled || config.draftOrganizerMode === 'off') {
+    const nextState = {
+      ...state,
+      lastRunAt: nowIso(deps),
+      lastResult: { ok: true, skipped: true, reason: 'draft organizer disabled' },
+      lastError: null,
+    };
+    saveDraftOrganizerState(nextState, deps);
+    out.write(`${JSON.stringify({ ok: true, skipped: true, reason: 'draft organizer disabled' }, null, 2)}\n`);
+    return { ok: true, skipped: true, reason: 'draft organizer disabled', state: nextState };
+  }
+
+  const headers = apiKeyHeaders(config);
+  if (!headers) return draftOrganizerFailure('missing agent api key', state, deps, io);
+  if (!config.profileId) return draftOrganizerFailure('missing bound profile id', state, deps, io);
+
+  const nowMs = Date.now();
+  const lastSweepMs = state.lastDraftSweepAt ? Date.parse(state.lastDraftSweepAt) : NaN;
+  const shouldSchedule = config.draftOrganizerTriggerMode !== 'manual_only' && (
+    !Number.isFinite(lastSweepMs) ||
+    nowMs - lastSweepMs >= Number(config.draftOrganizerScheduleDays) * 24 * 60 * 60 * 1000
+  );
+
+  try {
+    let runTrigger = 'manual';
+    if (shouldSchedule) {
+      const scheduled = await requestJson(`${agentApiBase('v2')}/draft-reconcile/request-scheduled`, {
+        method: 'POST',
+        headers,
+        body: { schedule_days: Number(config.draftOrganizerScheduleDays) },
+      }, { fetchImpl: deps.fetchImpl || fetch });
+      if (scheduled.status < 200 || scheduled.status >= 300) {
+        throw new Error(`request scheduled failed (${scheduled.status})`);
+      }
+      runTrigger = 'scheduled';
+    }
+
+    const status = await requestJson(`${agentApiBase('v2')}/status`, { headers }, { fetchImpl: deps.fetchImpl || fetch });
+    if (status.status < 200 || status.status >= 300) {
+      throw new Error(`load draft organizer status failed (${status.status})`);
+    }
+    const pending = Array.isArray(status.data?.pending_draft_reconcile_batches)
+      ? status.data.pending_draft_reconcile_batches
+      : [];
+    const batches = pending
+      .filter(batch =>
+        String(batch?.profile_id || '') === String(config.profileId || '')
+        && draftOrganizerTriggerAllowed(config.draftOrganizerTriggerMode, batch?.trigger),
+      )
+      .slice(0, Number(config.draftOrganizerMaxPerCycle || 10));
+    const acceptedBatchIds = [];
+    let submittedCount = 0;
+
+    for (const batch of batches) {
+      const detail = await requestJson(
+        `${agentApiBase('v2')}/draft-reconcile-batches/${batch.id}`,
+        { headers },
+        { fetchImpl: deps.fetchImpl || fetch },
+      );
+      if (detail.status < 200 || detail.status >= 300) {
+        throw new Error(`load draft reconcile batch failed (${detail.status})`);
+      }
+
+      const drafts = Array.isArray(detail.data?.drafts) ? detail.data.drafts : [];
+      const items = drafts.map(draft => ({
+        draft_id: draft.id,
+        local_repeat_count: countMatchingOutboxFingerprints(draft, deps),
+        grouped_fingerprints: collectGroupedFingerprints(draft, deps),
+        supplement_summary: buildDraftOrganizerSummary(draft, deps),
+        commands_run: collectRecentCommands(draft, deps),
+        environment_fingerprint: buildEnvironmentFingerprint(config, deps),
+        proof_payload: {
+          organizer_mode: config.draftOrganizerMode,
+          profile_id: config.profileId,
+        },
+      }));
+
+      if (items.length > 0 && config.draftOrganizerMode === 'apply') {
+        const submit = await requestJson(
+          `${agentApiBase('v2')}/draft-reconcile-batches/${batch.id}/submit`,
+          {
+            method: 'POST',
+            headers,
+            body: { items },
+          },
+          { fetchImpl: deps.fetchImpl || fetch },
+        );
+        if (submit.status < 200 || submit.status >= 300) {
+          throw new Error(`submit draft reconcile batch failed (${submit.status})`);
+        }
+        submittedCount += items.length;
+      }
+
+      acceptedBatchIds.push(batch.id);
+    }
+
+    const finishedAt = nowIso(deps);
+    const nextState = {
+      ...state,
+      lastDraftSweepAt: shouldSchedule ? finishedAt : state.lastDraftSweepAt,
+      lastRunAt: finishedAt,
+      lastRunTrigger: runTrigger,
+      lastBatchIds: acceptedBatchIds,
+      lastResult: {
+        ok: true,
+        mode: config.draftOrganizerMode,
+        batchCount: acceptedBatchIds.length,
+        submittedCount,
+      },
+      consecutiveErrors: 0,
+      lastError: null,
+    };
+    saveDraftOrganizerState(nextState, deps);
+    out.write(`${JSON.stringify({
+      ok: true,
+      mode: config.draftOrganizerMode,
+      batches: acceptedBatchIds,
+      submittedCount,
+    }, null, 2)}\n`);
+    return { ok: true, batches: acceptedBatchIds, submittedCount, state: nextState };
+  } catch (error) {
+    return draftOrganizerFailure(error instanceof Error ? error.message : String(error), state, deps, io);
+  }
+}
+
 // ── Worker state management ──
 
 function defaultWorkerState() {
@@ -3242,9 +3847,11 @@ async function runWorkerDaemon(args, deps = {}, io = {}) {
   const rawInterval = Number(args.workerInterval || args.interval || WORKER_DEFAULT_INTERVAL_MS);
   const interval = (isNaN(rawInterval) || rawInterval <= 0) ? WORKER_DEFAULT_INTERVAL_MS : rawInterval;
   const maxPerCycle = Number(args.maxParallelTasks || args.limit || WORKER_MAX_PARALLEL);
+  const runOnce = !!args.runOnce;
   const _fetch = deps.fetchImpl || fetch;
   const headers = { ...apiKey, 'Content-Type': 'application/json' };
   const out = io.stdout || process.stdout;
+  let exitCode = 0;
 
   const state = loadWorkerState(deps);
   state.enabled = true;
@@ -3337,6 +3944,13 @@ async function runWorkerDaemon(args, deps = {}, io = {}) {
         ownerVerified = ownerResult.verified;
         ownerSkipped = ownerResult.skipped;
 
+        if (currentConfig.draftOrganizerEnabled && currentConfig.profileId) {
+          const draftResult = await runDraftOrganizerOnce(deps, io);
+          if (!draftResult.ok) {
+            throw new Error(draftResult.reason || 'draft organizer failed');
+          }
+        }
+
         const updatedState = loadWorkerState(deps);
         updatedState.lastCycleAt = nowIso(deps);
         updatedState.lastCycleResult = { solved, skipped, total: items.length, reviewsSubmitted, reviewSkipped, ownerVerified, ownerSkipped };
@@ -3360,7 +3974,10 @@ async function runWorkerDaemon(args, deps = {}, io = {}) {
         failed.nextCycleAt = new Date(Date.now() + backoff).toISOString();
         saveWorkerState(failed, deps);
         out.write(`[Worker] 循环错误: ${failed.lastError}\n`);
+        if (runOnce) exitCode = 1;
       }
+
+      if (runOnce) break;
 
       const st = loadWorkerState(deps);
       const sleepMs = st.consecutiveErrors > 0
@@ -3376,7 +3993,7 @@ async function runWorkerDaemon(args, deps = {}, io = {}) {
     saveWorkerState(finalState, deps);
     releaseWorkerLock(deps);
   }
-  return 0;
+  return exitCode;
 }
 
 async function authStart(args, deps = {}, io = {}) {
@@ -3842,8 +4459,9 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
         return 1;
       }
 
-      const { api_key } = result.data;
+      const { api_key, profile_id } = result.data;
       config.authToken = api_key;
+      if (profile_id) config.profileId = String(profile_id).trim();
       config.shareData = true;
       config.autoSync = true;
       config.paused = false;
@@ -3888,8 +4506,11 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
 
     // Step 2: 尝试自动打开浏览器
     try {
-      const startCmd = process.platform === 'win32' ? 'start' : 'open';
-      execFileSync(startCmd, [confirm_url], { timeout: 5000, windowsHide: true });
+      if (typeof deps.openBrowser === 'function') deps.openBrowser(confirm_url);
+      else {
+        const startCmd = process.platform === 'win32' ? 'start' : 'open';
+        execFileSync(startCmd, [confirm_url], { timeout: 5000, windowsHide: true });
+      }
       out.write(`已自动打开浏览器。\n\n`);
     } catch {
       out.write(`请手动复制上方链接到浏览器中打开。\n\n`);
@@ -3914,11 +4535,12 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
         return 1;
       }
 
-      const { status, api_key } = pollResult.data;
+      const { status, api_key, profile_id } = pollResult.data;
 
       if (status === 'confirmed' && api_key) {
         out.write(`\n\n`);
         config.authToken = api_key;
+        if (profile_id) config.profileId = String(profile_id).trim();
         config.shareData = true;
         config.autoSync = true;
         config.paused = false;
@@ -3969,6 +4591,41 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
       out.write(`${JSON.stringify(data, null, 2)}\n`);
     } catch (e) { out.write(`获取悬赏列表失败: ${e.message}\n`); return 1; }
     return 0;
+  }
+
+  if (command === 'draft-organizer') {
+    const [subcommand] = rest;
+    const config = loadConfig(deps);
+    if (!subcommand || subcommand === 'status') {
+      out.write(`${JSON.stringify({
+        ok: true,
+        enabled: config.draftOrganizerEnabled,
+        mode: config.draftOrganizerMode,
+        triggerMode: config.draftOrganizerTriggerMode,
+        scheduleDays: config.draftOrganizerScheduleDays,
+        profileId: config.profileId || null,
+        worker: loadDraftOrganizerState(deps),
+      }, null, 2)}\n`);
+      return 0;
+    }
+    if (subcommand === 'enable') {
+      config.draftOrganizerEnabled = true;
+      saveConfig(config, deps);
+      out.write('draft organizer enabled\n');
+      return 0;
+    }
+    if (subcommand === 'disable') {
+      config.draftOrganizerEnabled = false;
+      saveConfig(config, deps);
+      out.write('draft organizer disabled\n');
+      return 0;
+    }
+    if (subcommand === 'run-once') {
+      const result = await runDraftOrganizerOnce(deps, io);
+      return result.ok ? 0 : 1;
+    }
+    out.write('用法: draft-organizer status|run-once|enable|disable\n');
+    return 1;
   }
 
   // ── Worker commands ──
@@ -4257,6 +4914,7 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
         const automation = buildValidationAutomationAssessment(item, deps);
         const decision = serverExecutionDecision(item, 'owner_verification');
         const routeLabel = formatExecutionRoute(decision);
+        const gate = ownerValidationGateDetails(item);
         out.write(`## ${item.title || '(无标题)'}\n`);
         out.write(`  Bounty:   ${item.bounty_id}\n`);
         out.write(`  Answer:   ${item.answer_id}\n`);
@@ -4270,6 +4928,16 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
         if (decision.current_profile_is_target === true) out.write('  当前机器: 目标机器\n');
         if (decision.current_profile_is_target === false) out.write('  当前机器: 非目标机器\n');
         out.write(`  自动验证: ${automation.status}\n`);
+        if (gate.prepared_action) out.write(`  平台放行: ${gate.prepared_action}\n`);
+        if (Object.prototype.hasOwnProperty.call(gate.user_authorization_gate, 'allow_safe_validation_autorun')) {
+          out.write(`  自动运行授权: ${gate.user_authorization_gate.allow_safe_validation_autorun === true ? '已开启' : '未开启'}\n`);
+        }
+        if (
+          Object.prototype.hasOwnProperty.call(gate.user_authorization_gate, 'require_web_confirmation_for_validation')
+          || Object.keys(gate.web_confirmation).length > 0
+        ) {
+          out.write(`  网站确认: ${gate.web_confirmation.confirmed === true ? '已确认' : '待确认'}\n`);
+        }
         if (automation.selected_command) out.write(`  自动命令: ${automation.selected_command}\n`);
         if (automation.suggested_project_dir) out.write(`  自动目录: ${automation.suggested_project_dir}\n`);
         if (automation.blocking_reasons.length > 0) out.write(`  阻塞原因: ${automation.blocking_reasons.join(', ')}\n`);
@@ -4441,9 +5109,13 @@ export const _testHelpers = {
   loadWorkerState,
   saveWorkerState,
   defaultWorkerState,
+  loadDraftOrganizerState,
+  saveDraftOrganizerState,
+  defaultDraftOrganizerState,
   loadConfig,
   saveConfig,
   heartbeatAgentV2,
+  runDraftOrganizerOnce,
 };
 
 let isDirectExecution = false;

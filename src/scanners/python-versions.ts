@@ -101,6 +101,20 @@ const scanner: Scanner = {
       };
     }
 
+    // 检查是否为 Microsoft Store 的空壳版本 (App Execution Aliases)
+    const isStore = (versionsFound[0].path || '').toLowerCase().includes('microsoft\\windowsapps');
+    if (isStore) {
+      return {
+        id: this.id,
+        name: this.name,
+        category: this.category,
+        status: 'warn',
+        message: '检测到 Microsoft Store 的 Python 别名',
+        detail: '当前的 python 命令指向 Windows 应用商店别名，建议从 python.org 下载官方安装包以避免环境冲突。',
+        error_type: 'misconfigured',
+      };
+    }
+
     return {
       id: this.id,
       name: this.name,

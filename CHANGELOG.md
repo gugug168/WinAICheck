@@ -1,19 +1,68 @@
 # Changelog
 
-## [0.3.14] - 2026-04-28
+## [Unreleased]
 
 ### Added
-- 集中式扫描器阈值配置 (`src/scanners/thresholds.ts`)：Git 最低版本、GPU 驱动最低主版本号、Node.js 最低主版本号、镜像源正则模式，统一管理不再各文件硬编码
-- 语义化版本比较函数 `compareVersions()`，支持不等长版本号、"unknown" 边界、非数字段
-- 执行器诊断钩子 (`_diag`)：`onCommand`/`onReg`/`onPS` 观察者回调，不干扰执行，与 `_test` mock 共存
-- 扫描决策链类型 `ScanDiagnostic`/`DecisionStep`，以及 `scanWithDiagnostic()` 包装器，可捕获完整扫描决策过程
-- 114 行阈值配置测试 + 91 行诊断钩子测试 + 7 个扫描器边界测试用例
+- 新增 ground-truth 审计基础设施：8 个验证器、统一 `scripts/audit.ts` CLI、CI fixture，以及 `scanWithDiagnostic()` 决策链采集。
+- 新增集中式扫描器阈值配置（Git / GPU / Node / 镜像源）和 `compareVersions()`，统一扫描器门槛管理。
 
 ### Changed
-- `git.ts` 使用 `compareVersions` + `THRESHOLDS.git.minVersion` 替代硬编码的 `major < 2 || (major === 2 && minor < 30)` 逻辑，并新增 unknown 版本保护
-- `gpu-driver.ts` 使用 `THRESHOLDS.gpu_driver.minDriverMajor` 替代硬编码 `525`，新增 `isNaN` 保护
-- `node-version.ts` 使用 `THRESHOLDS.node.minMajor` 替代硬编码 `18`，新增 `isNaN` 保护
-- `mirror-sources.ts` 使用 `THRESHOLDS.mirror_sources` 集中正则模式替代内联正则
+- 同步 `TASK-230` 最新生产 smoke 事实：平台侧 `auto_scan -> reviewer quorum -> solved_confirmed -> owner_rescan -> failed final rescan -> reopen original problem` 已在 2026-05-03 最新生产部署上重新跑通，不再把 reviewer 可见性或 owner final-rescan surfaced 视为当前 WinAICheck 阻断。
+- 同步 `TASK-230` 最新真实 Windows 结论：WinAICheck 已在 production 上完成 machine-origin `owner_repair` 成功链路验证，并与平台当前嵌套 `execution_task` / `prepare_state` payload 对齐。
+- `git.ts`、`gpu-driver.ts`、`node-version.ts`、`mirror-sources.ts` 现在统一复用阈值配置，不再各自硬编码。
+
+### Notes
+- 真实 machine-origin `owner_repair` 成功证据链现已补齐；对外仍只承诺当前 allowlist 内、具备 consent / rollback / evidence gate 的 Windows L2 自动修复能力。
+
+## [0.3.14] - 2026-05-02
+
+### Fixed
+- **社区上传**: 修复了社区数据上传时 `score` 字段类型不一致导致的校验失败问题，确保 `score` 始终为数字。
+- **运行时稳定性**: 优化了 `agent-lite` 中的敏感信息脱敏正则表达式，修复了导致 Bun 在 Windows 环境下偶发 `Segmentation fault` 的 JIT 兼容性问题。
+- **脱敏逻辑**: 增强了对带空格的 Windows 用户名路径的脱敏识别能力。
+- **CLI 输出**: 修复了 CLI 模式下扫描详情多行输出被截断的问题。
+
+## [0.3.13] - 2026-05-02
+
+### Fixed
+- 生产稳定性加固：实现 Web 服务优雅退出，彻底解决端口占用导致的服务闪退问题。
+- UI 运行时修复：优化脚本加载顺序，修复 `switchTab is not defined` 及旧环境下的 JS 语法兼容性错误。
+- 隐私安全增强：完善 `sanitizer` 正则，支持带空格的 Windows 用户路径脱敏。
+
+### Changed
+- CLI 体验优化：扫描详情现支持完整多行输出，解决长内容被截断的问题。
+- 引导优化：识别 Microsoft Store 版 Python 别名，引导用户使用标准安装以避免环境污染。
+
+## [0.3.12] - 2026-05-01
+
+### Added
+- 代理检测升级：支持从 Windows 注册表读取系统全局代理配置，提升网络环境诊断准确率。
+- 时间同步优化：增加对中文 Windows `w32tm` 命令输出的正则解析支持。
+
+## [0.3.8] - 2026-05-02
+
+### Added
+- WinAICheck worker 现在支持 `execution_task.kind=owner_repair` 的 Windows L2 安全自动修复闭环。
+- 新增 owner repair allowlist，首批仅放行 `powershell-policy`、`long-paths`、`firewall-ports` 三个修复类型。
+- owner repair 成功或失败后，会向平台提交结构化证据，包括 before/after scan、backup、rollback 和 diff summary。
+
+### Changed
+- `FixResult` 扩展为可携带结构化 `backupSummary`、`rollback`、`verification` 元数据，便于 Agent 与平台统一消费。
+
+### Fixed
+- worker 对 owner repair 任务现在会正确执行 consent、L2、target machine、rollback readiness 等门禁，不再误落入普通 validation 命令路径。
+
+## [0.3.7] - 2026-05-02
+
+### Added
+- 支持平台下发 Owner Auto Validation 的拦截与放行网关（`prepare_action`），阻止未授权或未人工确认的高危自动执行任务。
+
+### Fixed
+- 修复 Bun 安装失败问题（将 winget 包名由 `Bun.HBun` 更正为 `Oven-sh.Bun`）。
+- 修复 `temp-space` 修复器在 backup 阶段副作用导致的潜在文件丢失风险。
+- 修复 CLI 模式下拒绝隐私上传后仍然可能上传数据的逻辑错误。
+- 修正 `env-path-length` 诊断工具的成功语义。
+- 修复扫描过程中 SSE 解析异常导致页面假死卡住的问题，并移除了生成 HTML 中的 TypeScript 语法残留（`?.`）。
 
 ## [0.3.6] - 2026-04-18
 

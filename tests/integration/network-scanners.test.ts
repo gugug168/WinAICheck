@@ -13,6 +13,12 @@ describe('proxy-config scanner', () => {
   afterEach(teardownMock);
 
   test('无代理 → pass', async () => {
+    setupMock(new Map([
+      ['reg query "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings"', {
+        stdout: '',
+        exitCode: 1,
+      }],
+    ]));
     // 清除代理环境变量（Windows 不区分大小写）
     await withEnv({
       HTTP_PROXY: '',
