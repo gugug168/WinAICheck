@@ -2125,6 +2125,8 @@ describe('worker-on (TASK-090)', () => {
       homeDir: root,
       openBrowser: () => {},
       sleep: async () => {},
+      platform: 'win32',
+      osRelease: '10.0.22631',
       fetchImpl: async (url) => {
         requests.push(String(url));
         if (String(url).includes('/bind/request')) {
@@ -2150,6 +2152,7 @@ describe('worker-on (TASK-090)', () => {
     expect(io.output).toContain('网页中点一次确认即可完成绑定');
     expect(io.output).toContain('绑定成功');
     expect(requests.some(url => url.includes('/bind/request'))).toBe(true);
+    expect(requests[0]).toContain('device_info=Windows%2011');
     expect(requests.some(url => url.includes('/bind/poll'))).toBe(true);
     expect(_testHelpers.loadConfig({ baseDir: root }).profileId).toBe('prof_device_flow');
   });
@@ -2190,4 +2193,5 @@ describe('worker-on (TASK-090)', () => {
     expect(io.output).toContain('已自动打开浏览器');
     expect(_testHelpers.loadConfig({ baseDir: root }).profileId).toBe('prof_device_flow_open');
   });
+
 });
