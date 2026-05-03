@@ -1815,6 +1815,103 @@ describe('worker-on (TASK-090)', () => {
     expect(body.proof_payload.after_context.rollback).toBeDefined();
   });
 
+  test('worker daemon accepts nested owner repair metadata from platform status payloads', async () => {
+    const root = createTempRoot();
+    roots.push(root);
+    setupWorkerConfig(root, { profileId: 'prof-owner' });
+
+    const requests: Array<{ url: string; body?: string }> = [];
+    let fetchCount = 0;
+    const io = createIo();
+    const code = await agentMain(['worker', 'daemon', '--worker-interval', '10'], {
+      baseDir: root,
+      executeOwnerRepairImpl: async ({ scannerId, executionTask }) => ({
+        ok: true,
+        result: 'success',
+        scannerId: scannerId || executionTask?.repair_capability?.scanner_id,
+        summary: 'owner repair passed',
+        commandsRun: ['netsh advfirewall firewall add rule name="Gradio" dir=in action=allow protocol=TCP localport=7860'],
+        stdout: 'OK',
+        stderr: '',
+        beforeScan: { status: 'fail', message: 'missing inbound rules' },
+        afterScan: { status: 'pass', message: 'all inbound rules present' },
+        diffSummary: 'firewall rules missing -> present',
+        backup: { backup_id: 'backup-fw-1', timestamp: '2026-05-03T00:00:00Z' },
+        rollback: { attempted: false, result: 'not_needed' },
+      }),
+      fetchImpl: async (url, init) => {
+        requests.push({ url, body: init?.body ? String(init.body) : undefined });
+        fetchCount++;
+        if (fetchCount >= 3) {
+          const config = _testHelpers.loadConfig({ baseDir: root });
+          config.workerEnabled = false;
+          _testHelpers.saveConfig(config, { baseDir: root });
+        }
+        if (url.includes('/heartbeat')) return mockResponse({ recommended_bounties: [] });
+        if (url.includes('/status')) {
+          return mockResponse({
+            pending_owner_verifications: [{
+              bounty_id: 'b_owner_repair_nested',
+              answer_id: 'a_owner_repair_nested',
+              title: 'repair firewall ports',
+              solution_summary: 'Auto repair firewall ports',
+              submitted_at: '2026-05-03T00:00:00Z',
+              deadline_at: '2026-05-04T00:00:00Z',
+              execution_task: {
+                kind: 'owner_repair',
+                risk_level: 'L2',
+                repair_capability: {
+                  requested: true,
+                  scanner_id: 'firewall-ports',
+                  fixer_id: 'firewall-ports-fixer',
+                },
+                rollback_state: {
+                  available: true,
+                  status: 'available',
+                },
+              },
+              prepare_state: {
+                prepared: true,
+                prepared_action: 'run_repair_now',
+                consent_state: 'granted',
+                rollback_ready: true,
+              },
+              execution_decision: {
+                decision: 'auto_validate',
+                phase: 'owner_verification',
+                current_profile_is_target: true,
+                target_route: {
+                  profile_id: 'prof-owner',
+                  device_id: 'device-test',
+                  agent_type: 'custom',
+                },
+              },
+            }],
+          });
+        }
+        if (url.includes('/owner-validation-tasks/prepare')) {
+          return mockResponse({
+            prepared: true,
+            prepared_action: 'run_repair_now',
+            prepare_state: { prepared: true, prepared_action: 'run_repair_now', consent_state: 'granted' },
+          });
+        }
+        if (url.includes('/owner-verify')) {
+          return mockResponse({ review_status: 'pending_review', owner_score: 60, total_score: 60, threshold: 70 });
+        }
+        return mockResponse({});
+      },
+    }, io.io);
+
+    expect(code).toBe(0);
+    const ownerVerifyRequest = requests.find(entry => entry.url.includes('/owner-verify'));
+    expect(ownerVerifyRequest).toBeDefined();
+    const body = JSON.parse(ownerVerifyRequest?.body || '{}');
+    expect(body.artifacts.owner_repair_mode).toBe(true);
+    expect(body.artifacts.owner_repair_scanner_id).toBe('firewall-ports');
+    expect(body.proof_payload.after_context.owner_repair_scanner_id).toBe('firewall-ports');
+  });
+
   test('worker daemon skips reviewer verification when command is safe but not a real validation', async () => {
     const root = createTempRoot();
     roots.push(root);

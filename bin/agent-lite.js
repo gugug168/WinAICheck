@@ -1549,8 +1549,13 @@ function isOwnerRepairTask(item = {}) {
 }
 
 function ownerRepairScannerId(item = {}) {
+  const task = ownerRepairExecutionTask(item);
+  const repairCapability = task.repair_capability && typeof task.repair_capability === 'object'
+    ? task.repair_capability
+    : {};
   return String(
-    ownerRepairExecutionTask(item).scanner_id
+    task.scanner_id
+    || repairCapability.scanner_id
     || item.scanner_id
     || item.scannerId
     || ''
@@ -1558,17 +1563,45 @@ function ownerRepairScannerId(item = {}) {
 }
 
 function ownerRepairConsentGranted(item = {}) {
-  const consentState = String(item.consent_state || '').trim().toLowerCase();
-  const automationMode = String(item.automation_mode || '').trim();
+  const task = ownerRepairExecutionTask(item);
+  const prepareState = item.prepare_state && typeof item.prepare_state === 'object'
+    ? item.prepare_state
+    : {};
+  const consentState = String(
+    item.consent_state
+    || prepareState.consent_state
+    || task.consent_state
+    || ''
+  ).trim().toLowerCase();
+  const automationMode = String(
+    item.automation_mode
+    || prepareState.automation_mode
+    || task.automation_mode
+    || ''
+  ).trim();
   return consentState === 'granted' || automationMode === 'full_auto_limited';
 }
 
 function ownerRepairRollbackReady(item = {}) {
+  const task = ownerRepairExecutionTask(item);
+  const prepareState = item.prepare_state && typeof item.prepare_state === 'object'
+    ? item.prepare_state
+    : {};
+  const rollbackState = (
+    task.rollback_state && typeof task.rollback_state === 'object'
+      ? task.rollback_state
+      : item.rollback_state && typeof item.rollback_state === 'object'
+        ? item.rollback_state
+        : {}
+  );
+  if (prepareState.rollback_ready === true) return true;
+  if (rollbackState.available === true) return true;
   return String(item.rollback_state || '').trim() === 'ready';
 }
 
 function ownerRepairRiskAllowed(item = {}) {
-  return String(item.risk_level || '').trim() === 'L2';
+  const task = ownerRepairExecutionTask(item);
+  return String(item.risk_level || task.risk_level || '').trim() === 'L2';
 }
 
 function ownerRepairGate(item = {}, decision = {}) {
