@@ -2153,4 +2153,41 @@ describe('worker-on (TASK-090)', () => {
     expect(requests.some(url => url.includes('/bind/poll'))).toBe(true);
     expect(_testHelpers.loadConfig({ baseDir: root }).profileId).toBe('prof_device_flow');
   });
+
+  test('device-flow bind reports browser auto-open when helper succeeds', async () => {
+    const root = createTempRoot();
+    roots.push(root);
+    setupWorkerConfig(root, { authToken: undefined, workerEnabled: false });
+
+    const io = createIo();
+    const opened: string[] = [];
+    const code = await agentMain(['bind', '--agent', 'claude-code'], {
+      baseDir: root,
+      homeDir: root,
+      openBrowser: (url: string) => { opened.push(url); },
+      sleep: async () => {},
+      fetchImpl: async (url) => {
+        if (String(url).includes('/bind/request')) {
+          return mockResponse({
+            request_token: 'br_test_open_001',
+            confirm_url: 'https://aicoevo.net/bind?t=br_test_open_001',
+            expires_in: 6,
+          });
+        }
+        if (String(url).includes('/bind/poll')) {
+          return mockResponse({
+            status: 'confirmed',
+            api_key: 'ak_device_flow_open_123',
+            profile_id: 'prof_device_flow_open',
+          });
+        }
+        throw new Error(`unexpected url: ${String(url)}`);
+      },
+    }, io.io);
+
+    expect(code).toBe(0);
+    expect(opened).toEqual(['https://aicoevo.net/bind?t=br_test_open_001']);
+    expect(io.output).toContain('已自动打开浏览器');
+    expect(_testHelpers.loadConfig({ baseDir: root }).profileId).toBe('prof_device_flow_open');
+  });
 });
