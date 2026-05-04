@@ -5,6 +5,7 @@
 ### Added
 - 新增 ground-truth 审计基础设施：8 个验证器、统一 `scripts/audit.ts` CLI、CI fixture，以及 `scanWithDiagnostic()` 决策链采集。
 - 新增集中式扫描器阈值配置（Git / GPU / Node / 镜像源）和 `compareVersions()`，统一扫描器门槛管理。
+- 新增 Claude Code Hook Windows 兼容性检测，识别 `powershell -Command "$env:..."` 这类会触发 `:AUTO_LOOP_URL` / `CommandNotFoundException` 的 hook 配置，并提示改用 `-File` 加显式参数。
 
 ### Changed
 - Agent 启用和自更新现在会自动迁移 Claude Code 到 settings hook，并清理旧 PowerShell `function claude` wrapper，避免交互启动被误判为 `--print` 模式。

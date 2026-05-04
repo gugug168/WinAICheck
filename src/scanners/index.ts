@@ -42,6 +42,7 @@ import './claude-cli.js';
 import './openclaw.js';
 import './ccswitch.js';
 import './claude-config-health.js';
+import './claude-hook-compatibility.js';
 import './openclaw-config-health.js';
 import './mcp-config-health.js';
 import './mcp-command-availability.js';

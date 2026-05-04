@@ -234,11 +234,11 @@ Phase 6 的 owner task 现已支持一个受限的 Windows 本地安全自动修
 |:-----|:-------|:-----|
 | 路径与环境 | 中文路径、空格路径、长路径、PATH长度、临时空间 | x1.5 |
 | 权限与安全 | 管理员权限、PowerShell策略、防火墙、时间同步 | x1.2 |
-| 核心工具链 | Git、Node.js、Python、C++编译器、包管理器、Unix命令 | x1.0 |
+| 核心工具链 | Git、Node.js、Python、C++编译器、包管理器、Unix命令、Claude Code Hook 兼容性 | x1.0 |
 | 网络与镜像 | 镜像源、代理、SSL证书、AI站点可达性、DNS | x1.0 |
 | 显卡与子系统 | GPU驱动、虚拟化、WSL、CUDA、显存 | x0.8 |
 
-共 **25 个检查项**，全部配备修复建议。
+共 **38 个检查项**，全部配备修复建议。
 
 ## 修复系统
 
@@ -266,8 +266,8 @@ bun run build
 src/
 ├── main.ts           # 入口
 ├── constants.ts      # 版本号与全局常量
-├── scanners/         # 25 个扫描器
-├── fixers/           # 25 个修复器（backup → execute → rollback）
+├── scanners/         # 38 个扫描器
+├── fixers/           # 修复器（backup → execute → rollback）
 ├── scoring/          # 加权评分
 ├── installers/      # AI 工具安装器（Claude Code、OpenClaw、CCSwitch、汉化）
 ├── web/              # Web UI（诊断 + 安装 + 资源导航）
