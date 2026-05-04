@@ -2757,11 +2757,14 @@ function verifyAgentIntegrity(deps = {}) {
 async function runOriginalAgent(args, deps = {}) {
   const original = args.original;
   if (!original) throw new Error('缺少 --original');
-  const stdoutStream = deps.processStdout || process.stdout;
-  const stderrStream = deps.processStderr || process.stderr;
+  const stdoutStream = deps.processStdout || deps.stdout || process.stdout;
+  const stderrStream = deps.processStderr || deps.stderr || process.stderr;
   const spawnImpl = deps.spawnImpl || spawn;
   const normalizedAgent = normalizeAgent(args.agent);
   const isClaudeCodeWrapper = normalizedAgent === 'claude-code';
+  const shouldPassthroughStdio = isClaudeCodeWrapper
+    && stdoutStream === process.stdout
+    && stderrStream === process.stderr;
   markHookSeen(normalizedAgent, 'powershell-wrapper', deps);
   if (!verifyAgentIntegrity(deps)) {
     stderrStream.write('WinAICheck: Agent runner 完整性校验失败，正在重新安装...\n');
@@ -2774,7 +2777,7 @@ async function runOriginalAgent(args, deps = {}) {
   const stderrChunks = [];
   const stdoutChunks = [];
   const child = spawnImpl(original, passthrough, {
-    stdio: isClaudeCodeWrapper ? 'inherit' : ['inherit', 'pipe', 'pipe'],
+    stdio: shouldPassthroughStdio ? 'inherit' : ['inherit', 'pipe', 'pipe'],
     shell: process.platform === 'win32' && (!/[\\/]/.test(original) || /\.(cmd|bat)$/i.test(original)),
     windowsHide: false,
   });
@@ -4426,7 +4429,11 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
   }
 
   if (command === 'run') {
-    return runOriginalAgent(args, deps);
+    return runOriginalAgent(args, {
+      ...deps,
+      stdout: io.stdout || process.stdout,
+      stderr: io.stderr || process.stderr,
+    });
   }
 
   if (command === 'check-update') {
