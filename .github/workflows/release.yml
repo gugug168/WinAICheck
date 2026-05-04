@@ -30,15 +30,17 @@ jobs:
       - name: Run ground truth audit
         run: bun run scripts/audit.ts --ci
 
-      - name: Build exe
-        run: |
-          bun run scripts/prebuild.ts
-          bun build --compile --minify src/main.ts --outfile dist/WinAICheck.exe
-
       - name: Get version
         id: version
         shell: bash
         run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+
+      - name: Build exe
+        run: bun run build
+
+      - name: Package as ZIP
+        shell: pwsh
+        run: Compress-Archive -Path dist/WinAICheck.exe -DestinationPath dist/WinAICheck-${{ steps.version.outputs.VERSION }}.zip
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -60,8 +62,11 @@ jobs:
             ```
 
             ### 手动下载
-            下载下方 `WinAICheck.exe`，双击运行即可。
+            下载下方 `WinAICheck-x.x.x.zip`（解压后双击运行），或直接下载 `WinAICheck.exe`。
+
+            > **杀毒软件误报说明**：WinAICheck 可能被 360、Defender 等误报为病毒，这是误报。请将 exe 添加到杀毒软件的信任区/白名单后再运行。
           files: |
             dist/WinAICheck.exe
+            dist/WinAICheck-${{ steps.version.outputs.VERSION }}.zip
           draft: false
           prerelease: false
