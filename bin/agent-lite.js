@@ -2488,6 +2488,10 @@ function uninstallHook(args, deps = {}) {
   return { profiles };
 }
 
+function cleanupLegacyClaudePowerShellHook(deps = {}) {
+  return uninstallHook({ target: 'claude-code' }, deps);
+}
+
 function settingsFilePath(deps = {}) {
   return path.join(getHomeForDeps(deps), '.claude', 'settings.json');
 }
@@ -2753,28 +2757,36 @@ function verifyAgentIntegrity(deps = {}) {
 async function runOriginalAgent(args, deps = {}) {
   const original = args.original;
   if (!original) throw new Error('缺少 --original');
-  const stdoutStream = deps.processStdout || process.stdout;
-  const stderrStream = deps.processStderr || process.stderr;
+  const stdoutStream = deps.processStdout || deps.stdout || process.stdout;
+  const stderrStream = deps.processStderr || deps.stderr || process.stderr;
   const spawnImpl = deps.spawnImpl || spawn;
-  markHookSeen(normalizeAgent(args.agent), 'powershell-wrapper', deps);
+  const normalizedAgent = normalizeAgent(args.agent);
+  const isClaudeCodeWrapper = normalizedAgent === 'claude-code';
+  const shouldPassthroughStdio = isClaudeCodeWrapper
+    && stdoutStream === process.stdout
+    && stderrStream === process.stderr;
+  markHookSeen(normalizedAgent, 'powershell-wrapper', deps);
   if (!verifyAgentIntegrity(deps)) {
     stderrStream.write('WinAICheck: Agent runner 完整性校验失败，正在重新安装...\n');
     installLocalAgent(deps);
+  }
+  if (isClaudeCodeWrapper) {
+    cleanupLegacyClaudePowerShellHook(deps);
   }
   const passthrough = args._ || [];
   const stderrChunks = [];
   const stdoutChunks = [];
   const child = spawnImpl(original, passthrough, {
-    stdio: ['inherit', 'pipe', 'pipe'],
+    stdio: shouldPassthroughStdio ? 'inherit' : ['inherit', 'pipe', 'pipe'],
     shell: process.platform === 'win32' && (!/[\\/]/.test(original) || /\.(cmd|bat)$/i.test(original)),
     windowsHide: false,
   });
-  child.stdout.on('data', chunk => {
+  child.stdout?.on?.('data', chunk => {
     const buf = Buffer.from(chunk);
     stdoutChunks.push(buf);
     stdoutStream.write(buf);
   });
-  child.stderr.on('data', chunk => {
+  child.stderr?.on?.('data', chunk => {
     const buf = Buffer.from(chunk);
     stderrChunks.push(buf);
     stderrStream.write(buf);
@@ -2819,7 +2831,7 @@ async function runOriginalAgent(args, deps = {}) {
       severity: exitCode === 0 && (stderrText.trim() || extractedError) ? 'warn' : 'error',
       captureSource: 'wrapper',
       hookType: 'powershell-wrapper',
-      toolName: normalizeAgent(args.agent),
+      toolName: normalizedAgent,
       toolExitCode: exitCode,
       commandHash: commandHash(original),
       toolContext: {
@@ -4270,6 +4282,7 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
     const installed = [];
 
     if (targetIncludesClaude(target)) {
+      cleanupLegacyClaudePowerShellHook(deps);
       const settingsHook = installSettingsHook(args, deps);
       installed.push(settingsHook.hooks.join(', '));
     }
@@ -4362,6 +4375,7 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
     const localAgent = installLocalAgent(deps);
     const refreshed = [];
     if (targetIncludesClaude(target)) {
+      cleanupLegacyClaudePowerShellHook(deps);
       const settingsHook = installSettingsHook({ target: 'claude-code' }, deps);
       refreshed.push(settingsHook.hooks.join(', '));
     }
@@ -4415,7 +4429,11 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
   }
 
   if (command === 'run') {
-    return runOriginalAgent(args, deps);
+    return runOriginalAgent(args, {
+      ...deps,
+      stdout: io.stdout || process.stdout,
+      stderr: io.stderr || process.stderr,
+    });
   }
 
   if (command === 'check-update') {
@@ -4522,7 +4540,7 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
     }
 
     // 新流程：OAuth 设备流（自动打开浏览器）
-    const agentName = String(args.agent || 'unknown').trim();
+    const agentName = String(args.agent || 'win-aicheck').trim();
     const deviceInfo = detectWindowsDeviceInfo(deps);
 
     out.write(`正在发起设备绑定...\n`);
@@ -4540,15 +4558,15 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
     }
 
     const { request_token, confirm_url, expires_in } = reqResult.data;
-    out.write(`\n浏览器将打开绑定确认页:\n`);
+      out.write(`\n浏览器将打开绑定确认页（新流程）:\n`);
     out.write(`  ${confirm_url}\n\n`);
 
     // Step 2: 尝试自动打开浏览器
     try {
       openExternalUrl(confirm_url, deps);
-      out.write(`已自动打开浏览器；如果你已经登录 AICOEVO，网页中点一次确认即可完成绑定。\n\n`);
+      out.write(`已自动打开浏览器；如果你已经登录 AICOEVO，网页中点一次确认即可完成绑定，并进入新绑定流程。\n\n`);
     } catch {
-      out.write(`请手动打开上方链接；如果尚未登录，先登录后再在网页中确认绑定。\n\n`);
+      out.write(`请手动打开上方链接；如果尚未登录，先登录后再在网页中确认绑定。6 位码仅保留给旧版兼容场景。\n\n`);
     }
 
     // Step 3: 轮询等待确认
