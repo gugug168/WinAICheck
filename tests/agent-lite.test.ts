@@ -263,10 +263,14 @@ describe('agent-lite', () => {
     const root = createTempRoot();
     roots.push(root);
     const home = join(root, 'home');
+    const profile = join(root, 'profile.ps1');
+
+    _testHelpers.installHook({ target: 'claude-code' }, { baseDir: root, profilePaths: [profile] });
 
     await agentMain(['enable', '--target', 'claude-code'], {
       baseDir: root,
       homeDir: home,
+      profilePaths: [profile],
       now: () => new Date('2026-04-12T11:30:00.000Z'),
     }, createIo().io as any);
 
@@ -276,6 +280,8 @@ describe('agent-lite', () => {
     expect(config.autoSync).toBe(true);
     expect(config.paused).toBe(false);
     expect(readFileSync(join(home, '.claude', 'settings.json'), 'utf-8')).toContain('winaicheck-post-tool.cjs');
+    expect(readFileSync(profile, 'utf-8')).not.toContain('function claude');
+    expect(readFileSync(profile, 'utf-8')).not.toContain('WinAICheck Agent Hook');
   });
 
   test('run 会捕获 stdout 中的 Error 块', async () => {
@@ -286,7 +292,7 @@ describe('agent-lite', () => {
 
     const code = await agentMain([
       'run',
-      '--agent', 'claude-code',
+      '--agent', 'openclaw',
       '--original', script,
     ], {
       baseDir: root,

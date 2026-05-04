@@ -7,9 +7,13 @@
 - 新增集中式扫描器阈值配置（Git / GPU / Node / 镜像源）和 `compareVersions()`，统一扫描器门槛管理。
 
 ### Changed
+- Agent 启用和自更新现在会自动迁移 Claude Code 到 settings hook，并清理旧 PowerShell `function claude` wrapper，避免交互启动被误判为 `--print` 模式。
 - 同步 `TASK-230` 最新生产 smoke 事实：平台侧 `auto_scan -> reviewer quorum -> solved_confirmed -> owner_rescan -> failed final rescan -> reopen original problem` 已在 2026-05-03 最新生产部署上重新跑通，不再把 reviewer 可见性或 owner final-rescan surfaced 视为当前 WinAICheck 阻断。
 - 同步 `TASK-230` 最新真实 Windows 结论：WinAICheck 已在 production 上完成 machine-origin `owner_repair` 成功链路验证，并与平台当前嵌套 `execution_task` / `prepare_state` payload 对齐。
 - `git.ts`、`gpu-driver.ts`、`node-version.ts`、`mirror-sources.ts` 现在统一复用阈值配置，不再各自硬编码。
+
+### Fixed
+- 修复旧版 WinAICheck PowerShell wrapper 包裹 Claude Code 时破坏交互式 stdio，导致启动时报 `Input must be provided either through stdin or as a prompt argument when using --print` 的问题。
 
 ### Notes
 - 真实 machine-origin `owner_repair` 成功证据链现已补齐；对外仍只承诺当前 allowlist 内、具备 consent / rollback / evidence gate 的 Windows L2 自动修复能力。
