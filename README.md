@@ -281,6 +281,14 @@ src/
 
 Bun + TypeScript | 108 个测试全通过 | MIT License
 
+## 微信交流群
+
+扫描二维码加入 WinAICheck 交流群，获取使用帮助和最新动态：
+
+<p align="center">
+  <img src=".github/assets/wechat-qr.png" alt="微信群二维码" width="200">
+</p>
+
 ## 反馈与贡献
 
 发现问题？有建议？欢迎提 [Issue](https://github.com/gugug168/WinAICheck/issues) 或 PR。
