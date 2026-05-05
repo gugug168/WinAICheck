@@ -8,6 +8,8 @@
 - 新增 Claude Code Hook Windows 兼容性检测，识别 `powershell -Command "$env:..."` 这类会触发 `:AUTO_LOOP_URL` / `CommandNotFoundException` 的 hook 配置，并提示改用 `-File` 加显式参数。
 
 ### Changed
+- AI 环境诊断页新增吸顶页内导航、卡片定位跳转和“后续路线”区块，减少长页滚动并明确“先修复、再安装、再接入 aicoevo”的顺序。
+- 修复动作文案与真实行为对齐：`立即执行 / 确认执行` 调整为 `查看并执行 / 查看后确认`，点击后会先给出确认提示，不再像“没反应”。
 - Agent 启用和自更新现在会自动迁移 Claude Code 到 settings hook，并清理旧 PowerShell `function claude` wrapper，避免交互启动被误判为 `--print` 模式。
 - 同步 `TASK-230` 最新生产 smoke 事实：平台侧 `auto_scan -> reviewer quorum -> solved_confirmed -> owner_rescan -> failed final rescan -> reopen original problem` 已在 2026-05-03 最新生产部署上重新跑通，不再把 reviewer 可见性或 owner final-rescan surfaced 视为当前 WinAICheck 阻断。
 - 同步 `TASK-230` 最新真实 Windows 结论：WinAICheck 已在 production 上完成 machine-origin `owner_repair` 成功链路验证，并与平台当前嵌套 `execution_task` / `prepare_state` payload 对齐。
