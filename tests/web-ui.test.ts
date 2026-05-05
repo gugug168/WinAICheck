@@ -37,6 +37,9 @@ describe('web ui html generation', () => {
     expect(html).toContain('setScanRunning');
     expect(html).toContain('scanEndedWithDone');
     expect(html).toContain('data.success && data.verified !== false && fix.scannerId');
+    expect(html).toContain('function scrollToDiagSection(sectionId)');
+    expect(html).toContain('function focusScanner(scannerId)');
+    expect(html).toContain('已打开执行确认，请先看说明再继续。');
     expect(html).not.toContain("card.scrollIntoView({behavior:'smooth',block:'end'});");
   }, 10_000);
 });

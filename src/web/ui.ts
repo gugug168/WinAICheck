@@ -28,8 +28,8 @@ const TIER_CONFIG: Record<string, { label: string; color: string; bg: string; ic
 };
 
 const FIX_ACTION_SECTIONS = [
-  { tier: 'green', title: '立即处理', buttonLabel: '立即执行', desc: '风险低、收益高，优先消除直接阻塞。' },
-  { tier: 'yellow', title: '建议处理', buttonLabel: '确认执行', desc: '建议尽快处理，避免后续工具链漂移。' },
+  { tier: 'green', title: '立即处理', buttonLabel: '查看并执行', desc: '风险低、收益高。点击后会先弹出确认框，再执行。' },
+  { tier: 'yellow', title: '建议处理', buttonLabel: '查看后确认', desc: '建议尽快处理。先看说明，再勾选确认执行。' },
   { tier: 'red', title: '手动处理', buttonLabel: '查看指引', desc: '需要你手动确认环境或系统设置。' },
   { tier: 'black', title: '可选优化', buttonLabel: '查看建议', desc: '不会立刻阻塞，但能提升稳定性。' },
 ] as const;
@@ -295,10 +295,13 @@ h1{font-family:var(--display);font-size:1.5rem;font-weight:700;letter-spacing:3p
 .summary-badge strong{color:var(--text)}
 .priority-list{display:grid;gap:10px}
 .priority-item{padding:12px;border-radius:12px;border:1px solid var(--border);background:rgba(7,11,24,.55)}
+.priority-jump{width:100%;text-align:left;cursor:pointer;color:inherit;font:inherit}
+.priority-jump:hover{border-color:rgba(0,240,255,.2);background:rgba(0,240,255,.05)}
 .priority-item-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:6px}
 .priority-item-title{font-size:.84rem;font-weight:600}
 .priority-item-copy{font-size:.76rem;color:var(--text-mid);line-height:1.6}
 .priority-index{font-family:var(--display);font-size:.82rem;color:var(--cyan)}
+.priority-jump-hint{display:inline-flex;align-items:center;gap:6px;margin-top:8px;font-size:.7rem;color:var(--cyan);font-family:var(--mono)}
 .toolbar-card{margin-bottom:16px}
 .toolbar-row{display:flex;flex-wrap:wrap;gap:10px;justify-content:space-between;align-items:center}
 .filter-group{display:flex;flex-wrap:wrap;gap:8px}
@@ -317,6 +320,18 @@ h1{font-family:var(--display);font-size:1.5rem;font-weight:700;letter-spacing:3p
 .flow-card.active{border-color:rgba(0,240,255,.24);background:linear-gradient(135deg,rgba(0,240,255,.08),rgba(124,58,237,.05))}
 .flow-title{font-size:.8rem;font-weight:700;color:var(--text);margin-bottom:4px}
 .flow-copy{font-size:.74rem;color:var(--text-dim);line-height:1.55}
+.diag-quicknav{position:sticky;top:84px;z-index:25;padding:12px 14px}
+.diag-quicknav-row{display:flex;flex-wrap:wrap;gap:8px}
+.diag-quicknav-btn{padding:8px 12px;border-radius:999px;border:1px solid var(--border);background:rgba(0,240,255,.05);color:var(--text-mid);font-size:.74rem;font-family:var(--mono);cursor:pointer;transition:all .18s}
+.diag-quicknav-btn:hover{border-color:var(--border-hover);color:var(--text);background:rgba(0,240,255,.1)}
+.route-shell{margin-bottom:16px}
+.route-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+.route-card{width:100%;text-align:left;padding:16px;border-radius:14px;border:1px solid var(--border);background:linear-gradient(135deg,rgba(7,11,24,.7),rgba(0,240,255,.03));color:var(--text);cursor:pointer;transition:all .18s}
+.route-card:hover{border-color:var(--border-hover);transform:translateY(-1px);box-shadow:0 0 24px rgba(0,240,255,.08)}
+.route-title{font-size:.82rem;font-weight:700;margin-bottom:8px}
+.route-copy{font-size:.74rem;color:var(--text-dim);line-height:1.6}
+.route-kicker{display:inline-flex;align-items:center;gap:6px;margin-bottom:8px;font-size:.68rem;color:var(--cyan);font-family:var(--mono);letter-spacing:1px;text-transform:uppercase}
+.result-item.is-target{border:1px solid rgba(0,240,255,.28);background:rgba(0,240,255,.08);box-shadow:0 0 0 1px rgba(0,240,255,.08),0 0 24px rgba(0,240,255,.08)}
 .support-hub{margin-top:18px;border-color:rgba(255,255,255,.06)}
 .support-hub .section-title{color:#7dd3fc}
 .support-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
@@ -365,7 +380,7 @@ h1{font-family:var(--display);font-size:1.5rem;font-weight:700;letter-spacing:3p
 .scan-progress-text{color:#94a3b8;font-size:14px;margin:0}
 @keyframes spin{to{transform:rotate(360deg)}}
 /* ====== Tab 导航 - 赛博朋克风格 ====== */
-.tab-nav{display:flex;gap:16px;margin-bottom:32px;padding:8px;align-items:flex-end;flex-wrap:wrap}
+.tab-nav{display:flex;gap:16px;margin-bottom:32px;padding:10px 12px;align-items:flex-end;flex-wrap:wrap;position:sticky;top:12px;z-index:30;background:rgba(5,8,16,.72);border:1px solid rgba(0,240,255,.08);border-radius:18px;backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px)}
 .tab-btn{font-family:var(--display);font-size:1.15rem;font-weight:700;padding:14px 40px;border:1px solid var(--border);border-radius:12px;cursor:pointer;transition:all .35s cubic-bezier(.4,0,.2,1);position:relative;letter-spacing:2px;text-transform:uppercase;
   background:rgba(8,12,24,.6);color:var(--text-dim);backdrop-filter:blur(8px);overflow:hidden}
 .tab-btn::after{content:'';position:absolute;bottom:0;left:50%;width:0;height:2px;background:var(--cyan);transition:all .35s;transform:translateX(-50%);border-radius:1px}
@@ -429,6 +444,7 @@ h1{font-family:var(--display);font-size:1.5rem;font-weight:700;letter-spacing:3p
 .learn-link-desc{font-size:.78rem;color:var(--text-dim)}
 .tab-content{display:none}
 .tab-content.active{display:block}
+[id^="diag-"],#feedback-section{scroll-margin-top:150px}
 /* ====== 安装卡片 ====== */
 .install-card{background:var(--bg-card);border:1px solid var(--border);border-radius:14px;padding:20px;margin-bottom:16px;transition:border-color .25s,box-shadow .25s;backdrop-filter:blur(12px)}
 .install-card:hover{border-color:var(--border-hover);box-shadow:0 0 30px rgba(0,240,255,.04)}
@@ -622,13 +638,15 @@ h1{font-family:var(--display);font-size:1.5rem;font-weight:700;letter-spacing:3p
   .hud-corner{width:20px;height:20px}
   .container{padding:20px 14px}
   .diag-grid,.two-col,.flow-strip,.support-grid,.agent-grid{grid-template-columns:1fr}
-  .tab-nav{gap:10px;padding:0;flex-wrap:wrap}
+  .tab-nav{gap:10px;padding:10px;flex-wrap:wrap;top:8px}
   .tab-btn{flex:1 1 calc(50% - 8px);padding:12px 16px;font-size:.92rem}
   .tab-btn.secondary-tab{flex:1 1 calc(50% - 8px);border-radius:12px}
   .tab-note{width:100%;margin-left:0}
   .toolbar-row{align-items:stretch}
   .search-wrap,.search-input{width:100%}
   .search-input{min-width:0}
+  .diag-quicknav{top:84px}
+  .route-grid{grid-template-columns:1fr}
   .fix-item{flex-direction:column;align-items:flex-start}
   .fix-btn{width:100%}
   .result-head,.fix-section-head{flex-direction:column;align-items:flex-start}
@@ -656,15 +674,7 @@ function setResultFilter(filter, el) {
   window.__resultFilter = filter;
   document.querySelectorAll('.filter-chip-btn').forEach(b => b.classList.remove('active'));
   if (el) el.classList.add('active');
-  document.querySelectorAll('.result-item').forEach(item => {
-    if (filter === 'all') {
-      item.classList.remove('is-hidden');
-    } else if (filter === 'fixable') {
-      item.classList.toggle('is-hidden', item.getAttribute('data-fixable') !== 'yes');
-    } else {
-      item.classList.toggle('is-hidden', item.getAttribute('data-status') !== filter);
-    }
-  });
+  applyResultFilters();
 }
 </script>
 </head>
@@ -1053,6 +1063,46 @@ function applyResultFilters() {
   if (empty) empty.style.display = visibleCount === 0 ? 'block' : 'none';
 }
 
+function scrollToDiagSection(sectionId) {
+  const el = document.getElementById(sectionId);
+  if (el && typeof el.scrollIntoView === 'function') {
+    el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+}
+
+function highlightDiagTarget(el) {
+  if (!el) return;
+  document.querySelectorAll('.result-item.is-target').forEach(function(node) {
+    node.classList.remove('is-target');
+  });
+  el.classList.add('is-target');
+  if (typeof el.scrollIntoView === 'function') {
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+  setTimeout(function() {
+    el.classList.remove('is-target');
+  }, 2200);
+}
+
+function focusScanner(scannerId) {
+  const searchInput = document.getElementById('result-search');
+  if (searchInput && 'value' in searchInput) searchInput.value = '';
+  window.__resultFilter = 'all';
+  document.querySelectorAll('.filter-chip-btn').forEach(function(btn) {
+    btn.classList.remove('active');
+    if ((btn.textContent || '').trim().indexOf('全部 ') === 0) {
+      btn.classList.add('active');
+    }
+  });
+  applyResultFilters();
+  const target = document.querySelector('[data-scanner-id="' + scannerId + '"]');
+  if (target) {
+    highlightDiagTarget(target);
+    return;
+  }
+  scrollToDiagSection('diag-details');
+}
+
 // --- 安装器数据 ---
 const installers = ${JSON.stringify(getInstallers().map(i => ({
   id: i.id, name: i.name, description: i.description,
@@ -1212,6 +1262,7 @@ function openModal(idx) {
   }
 
   document.getElementById('modal-overlay').classList.add('active');
+  showToast('已打开执行确认，请先看说明再继续。', 'info', 1800);
 }
 
 function closeModal() {
@@ -2015,13 +2066,14 @@ export function renderDiagPanel(
   return `
   <div id="results" class="diag-panel">
     ${renderWorkflowStrip(results)}
+    ${renderDiagQuickNav()}
     <div class="diag-actions">
       <button class="scan-btn" onclick="rescan()">重新扫描</button>
       <button class="scan-btn secondary" onclick="openCommunity()">查看社区方案</button>
       <button class="scan-btn secondary" onclick="scrollToFeedback()">反馈问题</button>
     </div>
 
-    <div class="diag-grid">
+    <div id="diag-summary" class="diag-grid">
       ${renderOutcomeCard(score, results)}
       <div class="card">
         <div class="section-title">当前最该处理 <span class="badge">${topIssues.length} 项</span></div>
@@ -2029,7 +2081,7 @@ export function renderDiagPanel(
           ${topIssues.length > 0 ? topIssues.map((issue, idx) => {
             const sc = STATUS_CONFIG[issue.status];
             return `
-            <div class="priority-item">
+            <button class="priority-item priority-jump" onclick="focusScanner('${esc(issue.id)}')">
               <div class="priority-item-head">
                 <div class="priority-item-title">${esc(issue.name)}</div>
                 <div class="priority-index">${idx + 1}</div>
@@ -2040,12 +2092,14 @@ export function renderDiagPanel(
                 ${fixableIds.has(issue.id) ? '<span class="result-chip fixable">可修复</span>' : ''}
               </div>
               <div class="priority-item-copy">${esc(issue.message)}</div>
-            </div>`;
+              <div class="priority-jump-hint">点击定位到对应检测项</div>
+            </button>`;
           }).join('') : '<div class="priority-item"><div class="priority-item-copy">当前没有失败或警告项，可以直接开始使用。</div></div>'}
         </div>
       </div>
     </div>
 
+    ${renderRouteSection(results, fixes)}
     ${renderFeedbackForm(score, results)}
     <div class="card toolbar-card">
       <div class="toolbar-row">
@@ -2063,12 +2117,14 @@ export function renderDiagPanel(
       </div>
     </div>
 
-    ${renderFixSection(fixesByTier)}
-    ${renderCategoryResults(grouped, score, fixableIds)}
+    <div id="diag-fixes">${renderFixSection(fixesByTier)}</div>
+    <div id="diag-details">${renderCategoryResults(grouped, score, fixableIds)}</div>
     <div id="result-empty" class="card result-empty">当前筛选条件下没有检测项。</div>
-    <div id="solutions-panel" class="solutions-panel">
+    <div id="diag-community">
+      <div id="solutions-panel" class="solutions-panel">
       <div class="section-title" style="margin-top:20px">社区方案 <span class="badge">来自 aicoevo.net</span></div>
       <div id="solutions-list"></div>
+      </div>
     </div>
     ${renderSupportHub()}
   </div>`;
@@ -2121,6 +2177,39 @@ function renderOutcomeCard(score: ScoreResult, results: ScanResult[]): string {
   </div>`;
 }
 
+function renderRouteSection(results: ScanResult[], fixes: FixSuggestion[]): string {
+  const failCount = results.filter(r => r.status === 'fail').length;
+  const warnCount = results.filter(r => r.status === 'warn').length;
+  const immediateCount = fixes.filter(f => f.tier === 'green' || f.tier === 'yellow').length;
+
+  return `
+  <div class="card route-shell" id="diag-route">
+    <div class="section-title">后续路线 <span class="badge">一步一步来</span></div>
+    <div class="route-grid">
+      <button class="route-card" onclick="scrollToDiagSection('diag-fixes')">
+        <div class="route-kicker">Step 1</div>
+        <div class="route-title">先处理可执行项</div>
+        <div class="route-copy">当前有 ${immediateCount} 项可以直接处理。优先把失败项和高收益警告项清掉，再继续后面的安装和接入。</div>
+      </button>
+      <button class="route-card" onclick="switchTab('install')">
+        <div class="route-kicker">Step 2</div>
+        <div class="route-title">再决定装哪些工具</div>
+        <div class="route-copy">诊断明确后再去安装，避免一边装一边猜。特别是编译器、CLI、包管理器这类基础依赖。</div>
+      </button>
+      <button class="route-card" onclick="switchTab('agent')">
+        <div class="route-kicker">Step 3</div>
+        <div class="route-title">接入 aicoevo 持续优化</div>
+        <div class="route-copy">环境基本稳定后，再启用持续优化模块，把运行时问题、退化信号和社区建议接进来，后续维护会更省事。</div>
+      </button>
+      <button class="route-card" onclick="scrollToDiagSection('feedback-section')">
+        <div class="route-kicker">Need Help</div>
+        <div class="route-title">卡住就直接反馈</div>
+        <div class="route-copy">现在还有 ${failCount} 个失败、${warnCount} 个警告。如果你不确定先改哪一个，直接把现象发出来，我们按你的机器情况继续收敛。</div>
+      </button>
+    </div>
+  </div>`;
+}
+
 function renderWorkflowStrip(results: ScanResult[]): string {
   const state = getWorkflowState(results);
   const activeIndex = state.stage === 'diagnose' ? 0 : state.stage === 'fix' ? 1 : 2;
@@ -2138,6 +2227,20 @@ function renderWorkflowStrip(results: ScanResult[]): string {
         <div class="flow-copy">${step.copy}</div>
       </div>
     `).join('')}
+  </div>`;
+}
+
+function renderDiagQuickNav(): string {
+  return `
+  <div class="card diag-quicknav">
+    <div class="diag-quicknav-row">
+      <button class="diag-quicknav-btn" onclick="scrollToDiagSection('diag-summary')">结论</button>
+      <button class="diag-quicknav-btn" onclick="scrollToDiagSection('diag-route')">路线</button>
+      <button class="diag-quicknav-btn" onclick="scrollToDiagSection('diag-fixes')">修复</button>
+      <button class="diag-quicknav-btn" onclick="scrollToDiagSection('diag-details')">检测明细</button>
+      <button class="diag-quicknav-btn" onclick="scrollToDiagSection('diag-community')">社区</button>
+      <button class="diag-quicknav-btn" onclick="scrollToDiagSection('feedback-section')">反馈</button>
+    </div>
   </div>`;
 }
 
