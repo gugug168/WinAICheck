@@ -2,32 +2,32 @@ import { describe, expect, test } from 'bun:test';
 import { _testHelpers, requestRemoteJson } from '../src/web/remote-json';
 
 describe('remote-json helper', () => {
-  test('HTTPS 超时后会回退到 HTTP fetch', async () => {
+  test('HTTPS 超时后会直接回退到 PowerShell，不再降级到 HTTP fetch', async () => {
     const calls: string[] = [];
     const fetchImpl = async (input: string) => {
       calls.push(input);
-      if (input.startsWith('https://')) {
-        throw new Error('socket disconnected before TLS connection was established');
-      }
-      return {
-        status: 200,
-        text: async () => '{"items":[{"title":"HTTP fallback ok"}]}',
-      };
+      throw new Error('socket disconnected before TLS connection was established');
     };
 
+    const powershellCalls: string[] = [];
     const result = await requestRemoteJson('https://aicoevo.net/api/v1/solutions?page_size=1', {
       method: 'GET',
       headers: { Accept: 'application/json' },
     }, {
       fetchImpl,
+      runPowerShellImpl: (url) => {
+        powershellCalls.push(url);
+        return {
+          status: 200,
+          body: '{"items":[{"title":"PowerShell fallback ok"}]}',
+        };
+      },
     });
 
-    expect(calls).toEqual([
-      'https://aicoevo.net/api/v1/solutions?page_size=1',
-      'http://aicoevo.net/api/v1/solutions?page_size=1',
-    ]);
+    expect(calls).toEqual(['https://aicoevo.net/api/v1/solutions?page_size=1']);
+    expect(powershellCalls).toEqual(['https://aicoevo.net/api/v1/solutions?page_size=1']);
     expect(result.status).toBe(200);
-    expect(result.data.items[0].title).toBe('HTTP fallback ok');
+    expect(result.data.items[0].title).toBe('PowerShell fallback ok');
   });
 
   test('fetch 全部失败后会回退到 PowerShell', async () => {
@@ -71,10 +71,9 @@ describe('remote-json helper', () => {
     })).rejects.toThrow();
   });
 
-  test('只对 https 地址增加 http 候选', () => {
+  test('候选地址保持原协议，不再为 https 追加 http 降级候选', () => {
     expect(_testHelpers.buildCandidateUrls('https://aicoevo.net/api/v1/stash')).toEqual([
       'https://aicoevo.net/api/v1/stash',
-      'http://aicoevo.net/api/v1/stash',
     ]);
     expect(_testHelpers.buildCandidateUrls('http://aicoevo.net/api/v1/stash')).toEqual([
       'http://aicoevo.net/api/v1/stash',
