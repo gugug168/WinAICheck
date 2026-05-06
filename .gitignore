@@ -14,3 +14,17 @@ reports/
 .gstack/
 *.tsbuildinfo
 bun.lock
+
+# Live test temp files (contain system fingerprints and credentials)
+tmp-live-*
+.tmp-live-*
+scratch/
+test.html
+test-*.html
+
+# Sub-directory env files
+**/.env
+**/.env.local
+
+# Git worktrees
+.worktrees/

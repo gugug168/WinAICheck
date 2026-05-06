@@ -50,7 +50,6 @@ export function runPowerShellHttpJson(
   const script = `
 $ProgressPreference = 'SilentlyContinue'
 [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
-[System.Net.ServicePointManager]::ServerCertificateValidationCallback = { $true }
 $headers = @{}
 ${headersLiteral ? `$headers = @{ ${headersLiteral} }` : ''}
 $uri = '${url.replace(/'/g, "''")}'
@@ -108,8 +107,9 @@ function isRetryableNetworkError(error: unknown): boolean {
 }
 
 function buildCandidateUrls(url: string): string[] {
+  // Only try HTTPS; never downgrade to HTTP for security
   if (!url.startsWith('https://')) return [url];
-  return [url, url.replace(/^https:\/\//i, 'http://')];
+  return [url];
 }
 
 async function attemptFetch(

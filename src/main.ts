@@ -15,6 +15,7 @@ import {
   enableAgentExperience,
   getAgentLocalStatus,
   pauseAgentUploads,
+  reportAgentToolEvent,
   runAgentLoopOnce,
   setAgentStrategy,
   startAgentLoop,
@@ -168,8 +169,34 @@ async function webMode(port: number) {
 
       if (url.pathname === '/api/fix' && req.method === 'POST') {
         const fix = await req.json();
-        const result = await executeFix(fix);
-        return Response.json(result);
+        try {
+          const result = await executeFix(fix);
+          if (result && result.success === false) {
+            reportAgentToolEvent({
+              step: 'launch',
+              status: 'error',
+              eventType: 'ui_action_failed',
+              failedItems: [String(fix?.scannerId || 'unknown-scanner')],
+              message: String(result.message || 'fix execution failed'),
+              content: `ui fix action failed for ${String(fix?.scannerId || 'unknown-scanner')}`,
+              commandSummary: ['POST /api/fix'],
+              requiresUserConfirmation: false,
+            });
+          }
+          return Response.json(result);
+        } catch (error: any) {
+          reportAgentToolEvent({
+            step: 'launch',
+            status: 'error',
+            eventType: 'ui_action_failed',
+            failedItems: [String(fix?.scannerId || 'unknown-scanner')],
+            message: String(error?.message || 'fix execution failed'),
+            content: `ui fix action failed for ${String(fix?.scannerId || 'unknown-scanner')}`,
+            commandSummary: ['POST /api/fix'],
+            requiresUserConfirmation: false,
+          });
+          return Response.json({ success: false, message: error?.message || '修复失败' }, { status: 500 });
+        }
       }
 
       // SSE 重新扫描端点：逐个推送进度和结果
@@ -201,6 +228,15 @@ async function webMode(port: number) {
                 controller.close();
               })
               .catch(err => {
+                reportAgentToolEvent({
+                  step: 'scan',
+                  status: 'error',
+                  eventType: 'step_failed',
+                  failedItems: ['run-all-scanners'],
+                  message: String(err?.message || 'scan failed'),
+                  content: 'scan failed while streaming scanner results',
+                  commandSummary: ['POST /api/scan'],
+                });
                 send('done', { ok: false, error: err.message });
                 controller.close();
               });
@@ -217,17 +253,30 @@ async function webMode(port: number) {
       }
 
       if (url.pathname === '/api/scan-full' && req.method === 'POST') {
-        const results = await runAllScanners(5);
-        cached = results;
-        const score = calculateScore(cached);
-        saveLocal(createPayload(cached, score));
-        const prev = loadPreviousReport();
-        return Response.json({
-          ok: true,
-          results: cached,
-          score,
-          html: renderDiagPanel(cached, score, prev?.score ?? null),
-        });
+        try {
+          const results = await runAllScanners(5);
+          cached = results;
+          const score = calculateScore(cached);
+          saveLocal(createPayload(cached, score));
+          const prev = loadPreviousReport();
+          return Response.json({
+            ok: true,
+            results: cached,
+            score,
+            html: renderDiagPanel(cached, score, prev?.score ?? null),
+          });
+        } catch (error: any) {
+          reportAgentToolEvent({
+            step: 'scan',
+            status: 'error',
+            eventType: 'step_failed',
+            failedItems: ['run-all-scanners'],
+            message: String(error?.message || 'scan failed'),
+            content: 'scan failed in full fallback mode',
+            commandSummary: ['POST /api/scan-full'],
+          });
+          return Response.json({ ok: false, error: error?.message || '扫描失败' }, { status: 500 });
+        }
       }
 
       if (url.pathname === '/api/scan-one' && req.method === 'POST') {

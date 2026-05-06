@@ -6,6 +6,8 @@ import { AGENT_LITE_SOURCE, AGENT_LITE_HASH } from './embedded-agent-lite-source
 import { VERSION } from '../constants';
 
 function getBaseDir(): string {
+  const override = process.env.WINAICHECK_AGENT_BASE_DIR;
+  if (override && override.trim()) return override.trim();
   return join(homedir(), '.aicoevo');
 }
 
@@ -63,15 +65,10 @@ function today(): string {
   return `${y}-${m}-${d}`;
 }
 
-function quoteCmdArg(value: string): string {
-  return `"${value.replace(/"/g, '\\"')}"`;
-}
-
 function runAgentCommand(args: string[]): string {
   const paths = getPaths();
   if (existsSync(paths.agentCmd)) {
-    const command = [quoteCmdArg(paths.agentCmd), ...args.map(quoteCmdArg)].join(' ');
-    return execFileSync(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', command], {
+    return execFileSync(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', paths.agentCmd, ...args], {
       encoding: 'utf-8',
       windowsHide: true,
       timeout: 30000,
@@ -110,6 +107,8 @@ function installEmbeddedLocalAgent() {
     ['@echo off', 'setlocal', 'node "%~dp0agent-lite.js" %*', 'exit /b %ERRORLEVEL%', ''].join('\r\n'),
     'utf-8',
   );
+  writeFileSync(join(paths.base, 'VERSION'), VERSION + '\n', 'utf-8');
+  writeFileSync(join(paths.agentDir, 'VERSION'), VERSION + '\n', 'utf-8');
 
   // Write WinAICheck version to version-cache.json so check-update knows local version
   const cacheFile = join(paths.base, 'version-cache.json');
@@ -259,6 +258,58 @@ export function syncAgentEvents() {
     return {
       ok: false,
       output: '',
+      status: getAgentLocalStatus(),
+    };
+  }
+}
+
+type ReportToolEventInput = {
+  step: string;
+  failedItems: string[];
+  status?: string;
+  eventType?: string;
+  message?: string;
+  content?: string;
+  failureSignature?: string;
+  statusCode?: number;
+  claimId?: string;
+  sessionId?: string;
+  commandSummary?: string[];
+  rollbackStatus?: string;
+  requiresUserConfirmation?: boolean;
+};
+
+export function reportAgentToolEvent(input: ReportToolEventInput) {
+  installEmbeddedLocalAgent();
+  const args = [
+    'report-tool-event',
+    '--step', input.step,
+    '--failed-items', input.failedItems.join(','),
+  ];
+  if (input.status) args.push('--status', input.status);
+  if (input.eventType) args.push('--event-type', input.eventType);
+  if (input.message) args.push('--message', input.message);
+  if (input.content) args.push('--content', input.content);
+  if (input.failureSignature) args.push('--failure-signature', input.failureSignature);
+  if (Number.isFinite(input.statusCode)) args.push('--status-code', String(input.statusCode));
+  if (input.claimId) args.push('--claim-id', input.claimId);
+  if (input.sessionId) args.push('--session-id', input.sessionId);
+  if (input.commandSummary?.length) args.push('--command-summary', input.commandSummary.join('|||'));
+  if (input.rollbackStatus) args.push('--rollback-status', input.rollbackStatus);
+  if (input.requiresUserConfirmation) args.push('--requires-user-confirmation', 'true');
+
+  try {
+    const output = runAgentCommand(args);
+    const parsed = JSON.parse(output);
+    return {
+      ok: parsed.ok !== false,
+      output,
+      status: getAgentLocalStatus(),
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      output: error instanceof Error ? error.message : String(error),
       status: getAgentLocalStatus(),
     };
   }
