@@ -29,9 +29,11 @@ const WORKER_START_TIMEOUT_MS = 5 * 1000;
 const WORKER_START_POLL_MS = 100;
 const UPDATE_CHECK_TTL_MS = 60 * 60 * 1000;
 const UPDATE_AVAILABLE_TTL_MS = 12 * 60 * 60 * 1000;
+const TOOL_REPORT_RETRY_BASE_MS = 30 * 1000;
+const TOOL_REPORT_RETRY_MAX_MS = 30 * 60 * 1000;
 
 const SENSITIVE_PATTERNS = [
-  { regex: /(?:sk-|api[_-]?key[_-]?)([a-zA-Z0-9_-]{20,})/gi, replacement: '<API_KEY>' },
+  { regex: /(?:sk-|api[_-]?key[_-]?)([a-zA-Z0-9_-]{8,})/gi, replacement: '<API_KEY>' },
   { regex: /sk-proj-[A-Za-z0-9\-_]{20,}/g, replacement: '<API_KEY>' },
   { regex: /sk-ant-[A-Za-z0-9\-_]{20,}/g, replacement: '<API_KEY>' },
   { regex: /Bearer\s+[a-zA-Z0-9._-]+/gi, replacement: 'Bearer <TOKEN>' },
@@ -85,6 +87,7 @@ function paths(deps = {}) {
     workerState: path.join(base, 'worker-state.json'),
     workerLock: path.join(base, 'worker.lock'),
     draftOrganizerState: path.join(base, 'draft-organizer-state.json'),
+    toolFeedbackQueue: path.join(base, 'uploads', 'tool-feedback-queue.json'),
   };
 }
 
@@ -900,10 +903,210 @@ function apiKeyHeaders(config) {
   return { 'X-API-Key': config.authToken };
 }
 
+function buildToolAutoReport(input = {}, deps = {}) {
+  const config = loadConfig(deps);
+  const product = 'win-aicheck';
+  const step = String(input.step || '').trim() || 'manual_handoff';
+  const status = String(input.status || '').trim() || 'error';
+  const eventType = String(input.eventType || '').trim() || 'step_failed';
+  const failedItems = unique((input.failedItems || []).map(item => String(item || '').trim()).filter(Boolean));
+  const statusCode = Number.isFinite(input.statusCode) ? Number(input.statusCode) : null;
+  const failureSignature = String(input.failureSignature || '').trim()
+    || `${product}:${step}:${failedItems[0] || 'unknown'}:${statusCode ?? input.resultCode ?? 'failed'}`;
+  const message = trimForCapture(input.message || '');
+  const toolVersion = localWinAICheckVersion(deps);
+  const createdAt = nowIso(deps);
+  const commandSummary = unique((input.commandSummary || []).map(value => trimOwnerValidationDigest(String(value || ''), 300)).filter(Boolean));
+  const platformOs = detectWindowsDeviceInfo(deps);
+  const rollbackStatus = input.rollbackStatus ? String(input.rollbackStatus).trim() : undefined;
+  const requiresUserConfirmation = Boolean(input.requiresUserConfirmation);
+  const envSummary = {
+    product,
+    source: 'tool_auto_report',
+    step,
+    status,
+    event_type: eventType,
+    failure_signature: failureSignature,
+    failed_items: failedItems.length ? failedItems : ['unknown'],
+    tool_version: toolVersion,
+    platform_os: platformOs,
+    device_id: String(config.deviceId || '').trim() || undefined,
+    session_id: input.sessionId ? String(input.sessionId).trim() : undefined,
+    claim_id: input.claimId ? String(input.claimId).trim() : undefined,
+    message: message || undefined,
+    command_summary: commandSummary.length ? commandSummary : undefined,
+    requires_user_confirmation: requiresUserConfirmation,
+    rollback_status: rollbackStatus,
+    created_at: createdAt,
+  };
+  return {
+    content: trimForCapture(input.content || message || `${step} failed`),
+    category: 'repair_loop',
+    env_summary: Object.fromEntries(Object.entries(envSummary).filter(([, value]) => value !== undefined && value !== null && value !== '')),
+  };
+}
+
+async function reportToolAutoEvent(input = {}, deps = {}) {
+  const payload = buildToolAutoReport(input, deps);
+  try {
+    const response = await requestJson(`${apiBase()}/feedback`, {
+      method: 'POST',
+      body: payload,
+    }, deps);
+    if (response.status >= 200 && response.status < 300) {
+      return {
+        ok: true,
+        status: response.status,
+        data: response.data,
+        payload,
+      };
+    }
+    const mode = response.status >= 400 && response.status < 500 && response.status !== 429 ? 'failed' : 'queued';
+    queueToolAutoReport(payload, {
+      status: response.status,
+      error: String(response.data?.detail || response.data?._raw || `status ${response.status}`),
+      mode,
+    }, deps);
+    return {
+      ok: false,
+      status: response.status,
+      data: response.data,
+      payload,
+    };
+  } catch (error) {
+    queueToolAutoReport(payload, {
+      status: 0,
+      error: String(error?.message || error || 'tool auto report failed'),
+      mode: 'queued',
+    }, deps);
+    return {
+      ok: false,
+      status: 0,
+      data: { detail: String(error?.message || error || 'tool auto report failed') },
+      payload,
+    };
+  }
+}
+
+function loadToolFeedbackQueue(deps = {}) {
+  return readJson(paths(deps).toolFeedbackQueue, []);
+}
+
+function saveToolFeedbackQueue(rows, deps = {}) {
+  writeJson(paths(deps).toolFeedbackQueue, rows);
+}
+
+function toolReportBackoffMs(attemptCount) {
+  const attempts = Math.max(1, Number(attemptCount) || 1);
+  return Math.min(TOOL_REPORT_RETRY_BASE_MS * (2 ** (attempts - 1)), TOOL_REPORT_RETRY_MAX_MS);
+}
+
+function queueToolAutoReport(payload, meta = {}, deps = {}) {
+  const queue = loadToolFeedbackQueue(deps);
+  const now = nowIso(deps);
+  const fingerprint = shortHash(JSON.stringify(payload));
+  const existingIndex = queue.findIndex(item => item.fingerprint === fingerprint && item.state !== 'flushed');
+  const previous = existingIndex >= 0 ? queue[existingIndex] : null;
+  const attemptCount = (previous?.attemptCount || 0) + 1;
+  const nextAttemptAt = new Date(Date.parse(now) + toolReportBackoffMs(attemptCount)).toISOString();
+  const next = {
+    id: previous?.id || `toolfb_${crypto.randomUUID()}`,
+    fingerprint,
+    payload,
+    state: meta.mode === 'failed' ? 'failed' : 'queued',
+    attemptCount,
+    firstQueuedAt: previous?.firstQueuedAt || now,
+    lastAttemptAt: now,
+    nextAttemptAt: meta.mode === 'failed' ? null : nextAttemptAt,
+    lastStatus: Number.isFinite(meta.status) ? Number(meta.status) : 0,
+    lastError: meta.error || '',
+    flushedAt: previous?.flushedAt || null,
+  };
+  if (existingIndex >= 0) queue[existingIndex] = next;
+  else queue.push(next);
+  saveToolFeedbackQueue(queue, deps);
+  return next;
+}
+
+async function flushToolAutoReports(deps = {}) {
+  const queue = loadToolFeedbackQueue(deps);
+  if (!queue.length) return { flushed: 0, remaining: 0 };
+  const nowMs = Date.parse(nowIso(deps));
+  const MAX_QUEUE_SIZE = 200;
+  const FLUSHED_EXPIRY_MS = 7 * 24 * 60 * 60 * 1000;
+  const FAILED_EXPIRY_MS = 30 * 24 * 60 * 60 * 1000;
+  let flushed = 0;
+  const updated = [];
+  for (const item of queue) {
+    if (item.state === 'flushed') {
+      if (item.flushedAt && (nowMs - Date.parse(item.flushedAt)) > FLUSHED_EXPIRY_MS) continue;
+      updated.push(item);
+      continue;
+    }
+    if (item.state === 'failed') {
+      if (item.lastAttemptAt && (nowMs - Date.parse(item.lastAttemptAt)) > FAILED_EXPIRY_MS) continue;
+      updated.push(item);
+      continue;
+    }
+    if (item.nextAttemptAt && Date.parse(item.nextAttemptAt) > nowMs) {
+      updated.push(item);
+      continue;
+    }
+    try {
+      const response = await requestJson(`${apiBase()}/feedback`, {
+        method: 'POST',
+        body: item.payload,
+      }, deps);
+      if (response.status >= 200 && response.status < 300) {
+        updated.push({
+          ...item,
+          state: 'flushed',
+          flushedAt: nowIso(deps),
+          lastAttemptAt: nowIso(deps),
+          lastStatus: response.status,
+          lastError: '',
+          nextAttemptAt: null,
+        });
+        flushed += 1;
+        continue;
+      }
+      const terminal = response.status >= 400 && response.status < 500 && response.status !== 429;
+      const attemptCount = (item.attemptCount || 0) + 1;
+      updated.push({
+        ...item,
+        state: terminal ? 'failed' : 'queued',
+        attemptCount,
+        lastAttemptAt: nowIso(deps),
+        lastStatus: response.status,
+        lastError: String(response.data?.detail || response.data?._raw || `status ${response.status}`),
+        nextAttemptAt: terminal ? null : new Date(Date.parse(nowIso(deps)) + toolReportBackoffMs(attemptCount)).toISOString(),
+      });
+    } catch (error) {
+      const attemptCount = (item.attemptCount || 0) + 1;
+      updated.push({
+        ...item,
+        state: 'queued',
+        attemptCount,
+        lastAttemptAt: nowIso(deps),
+        lastStatus: 0,
+        lastError: String(error?.message || error || 'tool auto report failed'),
+        nextAttemptAt: new Date(Date.parse(nowIso(deps)) + toolReportBackoffMs(attemptCount)).toISOString(),
+      });
+    }
+  }
+  const pruned = updated.length > MAX_QUEUE_SIZE ? updated.slice(-MAX_QUEUE_SIZE) : updated;
+  saveToolFeedbackQueue(pruned, deps);
+  return {
+    flushed,
+    remaining: pruned.filter(item => item.state === 'queued').length,
+  };
+}
+
 async function syncEvents(deps = {}) {
   return withMutex(async () => {
     const p = paths(deps);
     const config = loadConfig(deps);
+    await flushToolAutoReports(deps);
     if (config.paused) return { ok: false, skipped: true, reason: 'paused' };
     if (!config.shareData) return { ok: false, skipped: true, reason: 'not_authorized' };
 
@@ -922,6 +1125,15 @@ async function syncEvents(deps = {}) {
     }, deps);
 
     if (remote.status < 200 || remote.status >= 300) {
+      await reportToolAutoEvent({
+        step: 'sync',
+        status: 'error',
+        eventType: 'step_failed',
+        failedItems: ['agent-events-batch'],
+        statusCode: remote.status,
+        message: `sync failed: ${remote.data?.detail || remote.data?._raw || `status ${remote.status}`}`,
+        content: `sync failed while uploading agent events (${remote.status})`,
+      }, deps);
       for (const event of pending) {
         appendJsonlWithRotation(p.ledger, {
           uploadedAt: nowIso(deps),
@@ -1694,7 +1906,7 @@ async function executeOwnerRepair(params = {}, deps = {}) {
   const scannerId = String(params.executionTask?.scanner_id || params.scannerId || '').trim();
   const definition = ownerRepairDefinition(scannerId);
   if (!definition) {
-    return {
+    const unsupported = {
       ok: false,
       result: 'failed',
       scannerId,
@@ -1708,6 +1920,17 @@ async function executeOwnerRepair(params = {}, deps = {}) {
       backup: null,
       rollback: { attempted: false, result: 'unavailable' },
     };
+    await reportToolAutoEvent({
+      step: 'repair_execute',
+      status: 'error',
+      eventType: 'repair_failed',
+      failedItems: [scannerId || 'unknown-scanner'],
+      failureSignature: `win-aicheck:repair_execute:${scannerId || 'unknown-scanner'}:unsupported`,
+      message: unsupported.summary,
+      content: unsupported.summary,
+      rollbackStatus: unsupported.rollback.result,
+    }, deps);
+    return unsupported;
   }
 
   const beforeScan = definition.scan(deps);
@@ -1741,7 +1964,7 @@ async function executeOwnerRepair(params = {}, deps = {}) {
         if (rollbackResult.stderr) stderr += `${stderr ? '\n' : ''}${rollbackResult.stderr}`;
       }
       const afterFailureScan = definition.scan(deps);
-      return {
+      const failureResult = {
         ok: false,
         result: 'failed',
         scannerId,
@@ -1755,6 +1978,18 @@ async function executeOwnerRepair(params = {}, deps = {}) {
         backup,
         rollback,
       };
+      await reportToolAutoEvent({
+        step: 'repair_execute',
+        status: 'error',
+        eventType: 'repair_failed',
+        failedItems: [scannerId || 'unknown-scanner'],
+        failureSignature: `win-aicheck:repair_execute:${scannerId || 'unknown-scanner'}:failed`,
+        message: failureResult.stderr || failureResult.summary,
+        content: failureResult.summary,
+        commandSummary: executionLogs,
+        rollbackStatus: rollback.result,
+      }, deps);
+      return failureResult;
     }
   }
 
@@ -4132,6 +4367,53 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
     return result.ok || result.skipped ? 0 : 1;
   }
 
+  if (command === 'report-tool-event') {
+    const step = String(args.step || '').trim();
+    const status = String(args.status || 'error').trim();
+    const eventType = String(args.eventType || args['event-type'] || 'step_failed').trim();
+    const message = String(args.message || '').trim();
+    const content = String(args.content || message || `${step || 'manual_handoff'} failed`).trim();
+    const failureSignature = String(args.failureSignature || args['failure-signature'] || '').trim();
+    const rollbackStatus = String(args.rollbackStatus || args['rollback-status'] || '').trim();
+    const claimId = String(args.claimId || args['claim-id'] || '').trim();
+    const sessionId = String(args.sessionId || args['session-id'] || '').trim();
+    const failedItems = String(args.failedItems || args['failed-items'] || '')
+      .split(',')
+      .map(value => value.trim())
+      .filter(Boolean);
+    const commandSummary = String(args.commandSummary || args['command-summary'] || '')
+      .split('|||')
+      .map(value => value.trim())
+      .filter(Boolean);
+    const statusCodeRaw = String(args.statusCode || args['status-code'] || '').trim();
+    const statusCode = statusCodeRaw ? Number(statusCodeRaw) : undefined;
+    if (!step) {
+      out.write('用法: winaicheck agent report-tool-event --step <step> --failed-items <a,b> [--status error] [--event-type step_failed] [--message "..."] [--content "..."]\n');
+      return 1;
+    }
+    if (!failedItems.length) {
+      out.write('report-tool-event 需要至少一个 failed item\n');
+      return 1;
+    }
+    const result = await reportToolAutoEvent({
+      step,
+      status,
+      eventType,
+      failedItems,
+      failureSignature: failureSignature || undefined,
+      statusCode: Number.isFinite(statusCode) ? statusCode : undefined,
+      message,
+      content,
+      claimId: claimId || undefined,
+      sessionId: sessionId || undefined,
+      commandSummary,
+      rollbackStatus: rollbackStatus || undefined,
+      requiresUserConfirmation: String(args.requiresUserConfirmation || args['requires-user-confirmation'] || '').trim() === 'true',
+    }, deps);
+    out.write(`${JSON.stringify(result, null, 2)}\n`);
+    return result.ok ? 0 : 1;
+  }
+
   if (command === 'uploads') {
     await showUploads(args, deps, io);
     return 0;
@@ -4318,11 +4600,27 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
         } else if (workerStart.reason === 'missing auth token') {
           out.write(`  Worker 互助循环: 等待绑定完成后自动启动\n`);
         } else if (workerStart.error) {
+          await reportToolAutoEvent({
+            step: 'enable',
+            status: 'error',
+            eventType: 'step_failed',
+            failedItems: ['worker-start'],
+            message: `enable worker start failed: ${workerStart.error}`,
+            content: 'enable failed while starting worker',
+          }, deps);
           out.write(`  Worker 互助循环: 启动失败 (${workerStart.error})\n`);
         } else {
           out.write(`  Worker 互助循环: 已禁用\n`);
         }
       } catch (e) {
+        await reportToolAutoEvent({
+          step: 'enable',
+          status: 'error',
+          eventType: 'step_failed',
+          failedItems: ['worker-start'],
+          message: `enable worker start failed: ${e.message}`,
+          content: 'enable failed while starting worker',
+        }, deps);
         out.write(`  Worker 互助循环: 启动失败 (${e.message})\n`);
       }
     } else {
@@ -4512,6 +4810,15 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
       }, deps);
 
       if (result.status !== 200) {
+        await reportToolAutoEvent({
+          step: 'bind',
+          status: 'error',
+          eventType: 'step_failed',
+          failedItems: ['bind-code'],
+          statusCode: result.status,
+          message: `bind code exchange failed: ${(result.data || {}).detail || '验证码无效或已过期'}`,
+          content: `bind code exchange failed (${result.status})`,
+        }, deps);
         errOut.write(`绑定失败 (${result.status}): ${(result.data || {}).detail || '验证码无效或已过期'}\n`);
         return 1;
       }
@@ -4553,6 +4860,15 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
     );
 
     if (reqResult.status !== 200) {
+      await reportToolAutoEvent({
+        step: 'bind',
+        status: 'error',
+        eventType: 'step_failed',
+        failedItems: ['bind-request'],
+        statusCode: reqResult.status,
+        message: `bind request failed: ${(reqResult.data || {}).detail || '未知错误'}`,
+        content: `bind request failed (${reqResult.status})`,
+      }, deps);
       errOut.write(`绑定请求失败 (${reqResult.status}): ${(reqResult.data || {}).detail || '未知错误'}\n`);
       return 1;
     }
@@ -4584,6 +4900,15 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
 
       if (pollResult.status !== 200) {
         // 可能已过期
+        await reportToolAutoEvent({
+          step: 'bind',
+          status: 'error',
+          eventType: 'step_failed',
+          failedItems: ['bind-poll'],
+          statusCode: pollResult.status,
+          message: 'bind poll failed or expired',
+          content: `bind poll failed (${pollResult.status})`,
+        }, deps);
         errOut.write(`\n绑定请求已过期，请重新运行 bind 命令。\n`);
         return 1;
       }
@@ -4618,12 +4943,30 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
 
       if (status === 'expired') {
         out.write(`\n\n`);
+        await reportToolAutoEvent({
+          step: 'bind',
+          status: 'error',
+          eventType: 'step_failed',
+          failedItems: ['bind-expired'],
+          failureSignature: 'win-aicheck:bind:bind-expired:expired',
+          message: 'bind request expired',
+          content: 'bind request expired',
+        }, deps);
         errOut.write(`绑定请求已过期，请重新运行 bind 命令。\n`);
         return 1;
       }
     }
 
     out.write(`\n\n绑定超时，请重新运行 bind 命令。\n`);
+    await reportToolAutoEvent({
+      step: 'bind',
+      status: 'error',
+      eventType: 'step_failed',
+      failedItems: ['bind-timeout'],
+      failureSignature: 'win-aicheck:bind:bind-timeout:timeout',
+      message: 'bind request timed out',
+      content: 'bind request timed out',
+    }, deps);
     return 1;
   }
 
@@ -4795,11 +5138,38 @@ export async function main(argv = process.argv.slice(2), deps = {}, io = {}) {
         body: JSON.stringify(envId ? { env_id: envId } : {}),
       });
       const data = await res.json();
-      if (!res.ok) { out.write(`认领失败: ${data.detail || JSON.stringify(data)}\n`); return 1; }
+      if (!res.ok) {
+        await reportToolAutoEvent({
+          step: 'claim',
+          status: 'error',
+          eventType: 'step_failed',
+          failedItems: ['bounty-claim'],
+          statusCode: Number(res.status) || undefined,
+          claimId: id,
+          message: `claim failed: ${data.detail || JSON.stringify(data)}`,
+          content: `claim failed for bounty ${id}`,
+          commandSummary: [`winaicheck agent bounty-claim ${id}`],
+        }, deps);
+        out.write(`认领失败: ${data.detail || JSON.stringify(data)}\n`);
+        return 1;
+      }
       out.write(`✓ 认领成功 ${data.bounty_id} (lease ${data.lease_id})\n`);
       out.write(`  截止: ${data.claimed_until}\n`);
       if (data.slot_limit) out.write(`  并行槽位: ${data.slot_limit}\n`);
-    } catch (e) { out.write(`认领失败: ${e.message}\n`); return 1; }
+    } catch (e) {
+      await reportToolAutoEvent({
+        step: 'claim',
+        status: 'error',
+        eventType: 'step_failed',
+        failedItems: ['bounty-claim'],
+        claimId: id,
+        message: `claim failed: ${e.message}`,
+        content: `claim failed for bounty ${id}`,
+        commandSummary: [`winaicheck agent bounty-claim ${id}`],
+      }, deps);
+      out.write(`认领失败: ${e.message}\n`);
+      return 1;
+    }
     return 0;
   }
 
@@ -5170,6 +5540,15 @@ export const _testHelpers = {
   heartbeatAgentV2,
   runDraftOrganizerOnce,
   detectWindowsDeviceInfo,
+  buildToolAutoReport,
+  reportToolAutoEvent,
+  syncEvents,
+  executeOwnerRepair,
+  createEvent,
+  writeJsonl,
+  loadToolFeedbackQueue,
+  saveToolFeedbackQueue,
+  flushToolAutoReports,
 };
 
 let isDirectExecution = false;

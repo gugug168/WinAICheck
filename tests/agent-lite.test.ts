@@ -4,6 +4,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { main as agentMain, _testHelpers, sanitizeText } from '../bin/agent-lite.js';
+import { reportAgentToolEvent } from '../src/agent/local-state';
 
 function createTempRoot(): string {
   return mkdtempSync(join(tmpdir(), 'winaicheck-agent-'));
@@ -185,6 +186,166 @@ describe('agent-lite', () => {
     expect(_testHelpers.apiKeyHeaders({})).toBeNull();
   });
 
+  test('bind request 失败会自动上报 repair_loop tool event', async () => {
+    const root = createTempRoot();
+    roots.push(root);
+    const p = _testHelpers.paths({ baseDir: root });
+    _testHelpers.writeJson(p.config, {
+      clientId: 'client-test',
+      deviceId: 'device-test',
+      shareData: false,
+      autoSync: false,
+      paused: false,
+    });
+    const io = createIo();
+    const calls: Array<{ url: string; body: any }> = [];
+
+    const code = await agentMain(['bind'], {
+      baseDir: root,
+      now: () => new Date('2026-04-12T12:10:00.000Z'),
+      currentVersion: '0.3.18',
+      openBrowser: () => {},
+      fetchImpl: async (url: string, init: RequestInit) => {
+        const body = init.body ? JSON.parse(String(init.body)) : null;
+        calls.push({ url, body });
+        if (url.includes('/api/v1/bind/request?') && url.includes('device_id=device-test')) {
+          return {
+            status: 500,
+            text: async () => JSON.stringify({ detail: 'bind service down' }),
+          } as any;
+        }
+        if (url.endsWith('/api/v1/feedback')) {
+          expect(body.category).toBe('repair_loop');
+          expect(body.content).toContain('bind request failed');
+          expect(body.env_summary.product).toBe('win-aicheck');
+          expect(body.env_summary.source).toBe('tool_auto_report');
+          expect(body.env_summary.step).toBe('bind');
+          expect(body.env_summary.status).toBe('error');
+          expect(body.env_summary.event_type).toBe('step_failed');
+          expect(body.env_summary.failed_items).toEqual(['bind-request']);
+          expect(body.env_summary.failure_signature).toBe('win-aicheck:bind:bind-request:500');
+          expect(body.env_summary.tool_version).toBe('0.3.18');
+          expect(body.env_summary.device_id).toBe('device-test');
+          return {
+            status: 200,
+            text: async () => JSON.stringify({ status: 'received' }),
+          } as any;
+        }
+        throw new Error(`unexpected url: ${url}`);
+      },
+    }, io.io as any);
+
+    expect(code).toBe(1);
+    expect(io.output).toContain('绑定请求失败 (500)');
+    expect(calls.some(call => call.url.endsWith('/api/v1/feedback'))).toBe(true);
+  });
+
+  test('syncEvents 失败会自动上报 repair_loop tool event', async () => {
+    const root = createTempRoot();
+    roots.push(root);
+    const p = _testHelpers.paths({ baseDir: root });
+    _testHelpers.writeJson(p.config, {
+      clientId: 'client-test',
+      deviceId: 'device-test',
+      shareData: true,
+      autoSync: true,
+      paused: false,
+      authToken: 'ak_test_123',
+    });
+    _testHelpers.writeJsonl(p.outbox, [
+      _testHelpers.createEvent({
+        agent: 'claude-code',
+        message: 'MCP server timeout',
+      }, {
+        baseDir: root,
+        now: () => new Date('2026-04-12T12:20:00.000Z'),
+      }),
+    ]);
+
+    const calls: Array<{ url: string; body: any }> = [];
+    const result = await _testHelpers.syncEvents({
+      baseDir: root,
+      currentVersion: '0.3.18',
+      now: () => new Date('2026-04-12T12:20:00.000Z'),
+      fetchImpl: async (url: string, init: RequestInit) => {
+        const body = init.body ? JSON.parse(String(init.body)) : null;
+        calls.push({ url, body });
+        if (url.endsWith('/api/v1/agent-events/batch')) {
+          return {
+            status: 503,
+            text: async () => JSON.stringify({ detail: 'service unavailable' }),
+          } as any;
+        }
+        if (url.endsWith('/api/v1/feedback')) {
+          expect(body.env_summary.step).toBe('sync');
+          expect(body.env_summary.event_type).toBe('step_failed');
+          expect(body.env_summary.failed_items).toEqual(['agent-events-batch']);
+          expect(body.env_summary.failure_signature).toBe('win-aicheck:sync:agent-events-batch:503');
+          expect(body.env_summary.message).toContain('service unavailable');
+          return {
+            status: 200,
+            text: async () => JSON.stringify({ status: 'received' }),
+          } as any;
+        }
+        throw new Error(`unexpected url: ${url}`);
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.status).toBe(503);
+    expect(calls.some(call => call.url.endsWith('/api/v1/feedback'))).toBe(true);
+  });
+
+  test('executeOwnerRepair 失败会自动上报 repair_loop tool event', async () => {
+    const root = createTempRoot();
+    roots.push(root);
+    const calls: Array<{ url: string; body: any }> = [];
+
+    const result = await _testHelpers.executeOwnerRepair({
+      scannerId: 'powershell-policy',
+      suggestedProjectDir: 'C:\\repo',
+    }, {
+      baseDir: root,
+      currentVersion: '0.3.18',
+      now: () => new Date('2026-04-12T12:30:00.000Z'),
+      execImpl: (command: string) => {
+        if (command.includes('Get-ExecutionPolicy')) {
+          return { exitCode: 0, stdout: 'Restricted', stderr: '' };
+        }
+        if (command.includes('Set-ExecutionPolicy RemoteSigned')) {
+          return { exitCode: 1, stdout: '', stderr: 'Access is denied' };
+        }
+        if (command.includes('Set-ExecutionPolicy Restricted')) {
+          return { exitCode: 0, stdout: '', stderr: '' };
+        }
+        return { exitCode: 0, stdout: '', stderr: '' };
+      },
+      fetchImpl: async (url: string, init: RequestInit) => {
+        const body = init.body ? JSON.parse(String(init.body)) : null;
+        calls.push({ url, body });
+        if (url.endsWith('/api/v1/feedback')) {
+          expect(body.env_summary.step).toBe('repair_execute');
+          expect(body.env_summary.status).toBe('error');
+          expect(body.env_summary.event_type).toBe('repair_failed');
+          expect(body.env_summary.failed_items).toEqual(['powershell-policy']);
+          expect(body.env_summary.failure_signature).toBe('win-aicheck:repair_execute:powershell-policy:failed');
+          expect(body.env_summary.rollback_status).toBe('success');
+          expect(body.env_summary.requires_user_confirmation).toBe(false);
+          expect(body.content).toContain('owner repair failed');
+          return {
+            status: 200,
+            text: async () => JSON.stringify({ status: 'received' }),
+          } as any;
+        }
+        throw new Error(`unexpected url: ${url}`);
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.rollback.result).toBe('success');
+    expect(calls.some(call => call.url.endsWith('/api/v1/feedback'))).toBe(true);
+  });
+
   test('bounty-list 在 JWT 授权态下提示先 bind，不发送请求', async () => {
     const root = createTempRoot();
     roots.push(root);
@@ -248,6 +409,22 @@ describe('agent-lite', () => {
     expect(existsSync(result.agentJs)).toBe(true);
     expect(existsSync(result.agentCmd)).toBe(true);
     expect(readFileSync(result.agentCmd, 'utf-8')).toContain('agent-lite.js');
+  });
+
+  test('local-state 嵌入安装器会把 VERSION 写到 base dir 供 tool auto report 读取', () => {
+    const root = createTempRoot();
+    roots.push(root);
+    const prevBaseDir = process.env.WINAICHECK_AGENT_BASE_DIR;
+    process.env.WINAICHECK_AGENT_BASE_DIR = root;
+    reportAgentToolEvent({
+      step: 'launch',
+      failedItems: ['version-test'],
+      message: 'version test',
+      content: 'version test',
+    });
+    if (prevBaseDir === undefined) delete process.env.WINAICHECK_AGENT_BASE_DIR;
+    else process.env.WINAICHECK_AGENT_BASE_DIR = prevBaseDir;
+    expect(readFileSync(join(root, 'VERSION'), 'utf-8').trim()).toBe('0.3.18');
   });
 
   test('resolveCommand 在 Windows 优先选择 .cmd shim', () => {
