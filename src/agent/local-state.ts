@@ -281,21 +281,22 @@ type ReportToolEventInput = {
 
 export function reportAgentToolEvent(input: ReportToolEventInput) {
   installEmbeddedLocalAgent();
+  const safeArg = (v: string) => v.replace(/[\r\n&|<>^]/g, ' ');
   const args = [
     'report-tool-event',
-    '--step', input.step,
-    '--failed-items', input.failedItems.join(','),
+    '--step', safeArg(input.step),
+    '--failed-items', input.failedItems.map(s => safeArg(s)).join(','),
   ];
-  if (input.status) args.push('--status', input.status);
-  if (input.eventType) args.push('--event-type', input.eventType);
-  if (input.message) args.push('--message', input.message);
-  if (input.content) args.push('--content', input.content);
-  if (input.failureSignature) args.push('--failure-signature', input.failureSignature);
+  if (input.status) args.push('--status', safeArg(input.status));
+  if (input.eventType) args.push('--event-type', safeArg(input.eventType));
+  if (input.message) args.push('--message', safeArg(input.message));
+  if (input.content) args.push('--content', safeArg(input.content));
+  if (input.failureSignature) args.push('--failure-signature', safeArg(input.failureSignature));
   if (Number.isFinite(input.statusCode)) args.push('--status-code', String(input.statusCode));
-  if (input.claimId) args.push('--claim-id', input.claimId);
-  if (input.sessionId) args.push('--session-id', input.sessionId);
-  if (input.commandSummary?.length) args.push('--command-summary', input.commandSummary.join('|||'));
-  if (input.rollbackStatus) args.push('--rollback-status', input.rollbackStatus);
+  if (input.claimId) args.push('--claim-id', safeArg(input.claimId));
+  if (input.sessionId) args.push('--session-id', safeArg(input.sessionId));
+  if (input.commandSummary?.length) args.push('--command-summary', input.commandSummary.map(s => safeArg(s)).join('|||'));
+  if (input.rollbackStatus) args.push('--rollback-status', safeArg(input.rollbackStatus));
   if (input.requiresUserConfirmation) args.push('--requires-user-confirmation', 'true');
 
   try {
