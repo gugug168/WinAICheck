@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.3.19] - 2026-05-14
+
 ### Added
 - 新增 ground-truth 审计基础设施：8 个验证器、统一 `scripts/audit.ts` CLI、CI fixture，以及 `scanWithDiagnostic()` 决策链采集。
 - 新增集中式扫描器阈值配置（Git / GPU / Node / 镜像源）和 `compareVersions()`，统一扫描器门槛管理。

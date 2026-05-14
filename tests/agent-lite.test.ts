@@ -203,7 +203,7 @@ describe('agent-lite', () => {
     const code = await agentMain(['bind'], {
       baseDir: root,
       now: () => new Date('2026-04-12T12:10:00.000Z'),
-      currentVersion: '0.3.18',
+      currentVersion: '0.3.19',
       openBrowser: () => {},
       fetchImpl: async (url: string, init: RequestInit) => {
         const body = init.body ? JSON.parse(String(init.body)) : null;
@@ -224,7 +224,7 @@ describe('agent-lite', () => {
           expect(body.env_summary.event_type).toBe('step_failed');
           expect(body.env_summary.failed_items).toEqual(['bind-request']);
           expect(body.env_summary.failure_signature).toBe('win-aicheck:bind:bind-request:500');
-          expect(body.env_summary.tool_version).toBe('0.3.18');
+          expect(body.env_summary.tool_version).toBe('0.3.19');
           expect(body.env_summary.device_id).toBe('device-test');
           return {
             status: 200,
@@ -265,7 +265,7 @@ describe('agent-lite', () => {
     const calls: Array<{ url: string; body: any }> = [];
     const result = await _testHelpers.syncEvents({
       baseDir: root,
-      currentVersion: '0.3.18',
+      currentVersion: '0.3.19',
       now: () => new Date('2026-04-12T12:20:00.000Z'),
       fetchImpl: async (url: string, init: RequestInit) => {
         const body = init.body ? JSON.parse(String(init.body)) : null;
@@ -306,7 +306,7 @@ describe('agent-lite', () => {
       suggestedProjectDir: 'C:\\repo',
     }, {
       baseDir: root,
-      currentVersion: '0.3.18',
+      currentVersion: '0.3.19',
       now: () => new Date('2026-04-12T12:30:00.000Z'),
       execImpl: (command: string) => {
         if (command.includes('Get-ExecutionPolicy')) {
@@ -424,7 +424,7 @@ describe('agent-lite', () => {
     });
     if (prevBaseDir === undefined) delete process.env.WINAICHECK_AGENT_BASE_DIR;
     else process.env.WINAICHECK_AGENT_BASE_DIR = prevBaseDir;
-    expect(readFileSync(join(root, 'VERSION'), 'utf-8').trim()).toBe('0.3.18');
+    expect(readFileSync(join(root, 'VERSION'), 'utf-8').trim()).toBe('0.3.19');
   });
 
   test('resolveCommand 在 Windows 优先选择 .cmd shim', () => {
