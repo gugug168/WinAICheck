@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="360" viewBox="0 0 1200 360" role="img" aria-labelledby="title desc">
+  <title id="title">WinAICheck</title>
+  <desc id="desc">诊断 Windows AI 开发环境，并提供安装与资源导航入口。；环境诊断、安装入口、Windows 优先</desc>
+  <rect width="1200" height="360" rx="28" fill="#061b36"/>
+  <path d="M48 74H1152M48 302H1152" stroke="#f5faff" stroke-opacity=".13"/>
+  <rect x="58" y="58" width="176" height="30" rx="15" fill="#4ec2ff" fill-opacity=".18" stroke="#4ec2ff" stroke-opacity=".65"/>
+  <text x="76" y="79" fill="#4ec2ff" font-size="15" font-weight="700" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, PingFang SC, monospace">WINDOWS AI TOOLING</text>
+  <text x="58" y="147" fill="#f5faff" font-size="50" font-weight="760" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, PingFang SC, sans-serif">WinAICheck</text>
+  <text x="58" y="193" fill="#f5faff" font-size="25" font-weight="430" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, PingFang SC, sans-serif">诊断 Windows AI 开发环境，并提供安装与资源导航入口。</text>
+  <path d="M58 230H660" stroke="#f5faff" stroke-opacity=".2"/>
+  <g transform="translate(58 257)"><circle cx="8" cy="0" r="7" fill="#74d99f"/><text x="26" y="7" fill="#f5faff" font-size="19" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, PingFang SC, sans-serif">环境诊断</text></g><g transform="translate(250 257)"><circle cx="8" cy="0" r="7" fill="#74d99f"/><text x="26" y="7" fill="#f5faff" font-size="19" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, PingFang SC, sans-serif">安装入口</text></g><g transform="translate(442 257)"><circle cx="8" cy="0" r="7" fill="#74d99f"/><text x="26" y="7" fill="#f5faff" font-size="19" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, PingFang SC, sans-serif">Windows 优先</text></g>
+  <rect x="750" y="108" width="390" height="160" rx="18" fill="#05070a" fill-opacity=".42" stroke="#ffffff" stroke-opacity=".16"/><circle cx="782" cy="134" r="7" fill="#74d99f"/><circle cx="806" cy="134" r="7" fill="#4ec2ff"/><circle cx="830" cy="134" r="7" fill="#f5faff"/><text x="782" y="178" fill="#ffffff" font-size="21" font-weight="500" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, PingFang SC, monospace">&gt; scan environment</text><text x="782" y="209" fill="#ffffff" font-size="21" font-weight="500" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, PingFang SC, monospace">&gt; report findings</text><text x="782" y="240" fill="#ffffff" font-size="21" font-weight="500" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, PingFang SC, monospace">&gt; choose action</text>
+</svg>

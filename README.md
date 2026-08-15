@@ -1,3 +1,23 @@
+<p align="center">
+  <img src="./assets/readme/hero.svg" width="100%" alt="WinAICheck：诊断 Windows AI 开发环境，并提供安装与资源导航入口。">
+</p>
+
+Windows AI 开发环境工具：README 已列出一键安装、npm/npx、源码运行与安全提示。先理解每种方式，再选择执行路径。
+
+## 一眼看懂
+
+| 价值 | 真实证据 |
+| --- | --- |
+| 诊断 Windows AI 开发环境，并提供安装与资源导航入口。 | 环境诊断 · 安装入口 · Windows 优先 |
+
+## 从这里开始
+
+```text
+Read README installation options
+```
+
+## 完整说明
+
 <h1 align="center">WinAICheck</h1>
 <p align="center"><strong>Windows AI 开发环境一键诊断与修复 + AI 工具一键安装 + Coding Plan 导航</strong></p>
 <p align="center">
